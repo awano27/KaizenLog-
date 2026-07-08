@@ -1,0 +1,151 @@
+from datetime import date, datetime, timedelta, timezone
+
+from kaizenlog.classifier import Classifier
+from kaizenlog.collector import ActivityEvent
+from kaizenlog.config import DEFAULT_RULES
+from kaizenlog.patterns import (
+    detect_ai_friction,
+    detect_routines,
+    detect_time_sinks,
+    render_patterns_markdown,
+)
+from kaizenlog.report import summarize
+from kaizenlog.stats import build_stats, load_stats, write_stats
+
+TZ = timezone.utc
+BASE = date(2026, 7, 1)
+
+
+def _day_stats(day, apps=None, blocks=None, ai_projects=None):
+    return {
+        "version": 1,
+        "day": day.isoformat(),
+        "total_minutes": 300.0,
+        "context_switches": 10,
+        "by_category": {},
+        "by_app": apps or {},
+        "blocks": blocks or [],
+        "ai": {"sessions": 0, "fragmented": 0, "tool_errors": 0,
+               "interruptions": 0, "projects": ai_projects or {}},
+    }
+
+
+def _block(day, hour, app, minutes=30.0, title=""):
+    start = datetime(day.year, day.month, day.day, hour, tzinfo=TZ)
+    return {
+        "start": start.isoformat(),
+        "end": (start + timedelta(minutes=minutes)).isoformat(),
+        "category": "ブラウジング", "app": app, "minutes": minutes, "title": title,
+    }
+
+
+def _days(n):
+    return [BASE + timedelta(days=i) for i in range(n)]
+
+
+def test_time_sink_detected_when_recurring():
+    stats = [_day_stats(d, apps={"chrome.exe": 45.0}) for d in _days(6)]
+    out = detect_time_sinks(stats)
+    assert len(out) == 1
+    assert "chrome.exe" in out[0].title
+    assert "6日中6日" in out[0].evidence
+
+
+def test_time_sink_not_detected_when_sporadic():
+    stats = [_day_stats(d, apps={"chrome.exe": 45.0 if i < 2 else 5.0})
+             for i, d in enumerate(_days(6))]
+    assert detect_time_sinks(stats) == []
+
+
+def test_routine_detected_same_hour():
+    stats = [
+        _day_stats(d, blocks=[_block(d, 9, "chrome.exe", 25.0, "AIニュースまとめ")])
+        for d in _days(5)
+    ]
+    out = detect_routines(stats)
+    assert len(out) == 1
+    assert "9時台" in out[0].title
+    assert "AIニュースまとめ" in out[0].title
+
+
+def test_routine_not_detected_different_hours():
+    stats = [
+        _day_stats(d, blocks=[_block(d, 9 + i, "chrome.exe", 25.0)])
+        for i, d in enumerate(_days(5))
+    ]
+    assert detect_routines(stats) == []
+
+
+def test_ai_friction_by_fragmentation():
+    stats = [
+        _day_stats(d, ai_projects={"ai-news": {"sessions": 3, "turns": 4,
+                                               "errors": 0, "fragmented": 2}})
+        for d in _days(4)
+    ]
+    out = detect_ai_friction(stats)
+    assert len(out) == 1
+    assert "ai-news" in out[0].title
+
+
+def test_ai_friction_by_errors():
+    stats = [
+        _day_stats(d, ai_projects={"vault": {"sessions": 1, "turns": 5,
+                                             "errors": 3, "fragmented": 0}})
+        for d in _days(3)
+    ]
+    out = detect_ai_friction(stats)
+    assert len(out) == 1
+    assert "エラー計9回" in out[0].evidence
+
+
+def test_render_insufficient_data():
+    md = render_patterns_markdown([_day_stats(BASE)])
+    assert "データが不足" in md
+
+
+def test_render_with_candidates():
+    stats = [_day_stats(d, apps={"YouTube.exe": 60.0},
+                        blocks=[_block(d, 20, "YouTube.exe", 60.0)])
+             for d in _days(5)]
+    md = render_patterns_markdown(stats)
+    assert "時間泥棒" in md
+    assert "定時ルーチン" in md
+    assert "YouTube.exe" in md
+
+
+def test_stats_roundtrip(tmp_path):
+    start = datetime(2026, 7, 5, 9, tzinfo=TZ)
+    events = [ActivityEvent(start=start, end=start + timedelta(minutes=30),
+                            app="Code.exe", title="main.py")]
+    classified = Classifier(DEFAULT_RULES).classify_all(events)
+    summary = summarize(date(2026, 7, 5), classified)
+
+    write_stats(tmp_path, date(2026, 7, 5), summary, [])
+    loaded = load_stats(tmp_path, days=7, end_day=date(2026, 7, 8))
+    assert len(loaded) == 1
+    s = loaded[0]
+    assert s["day"] == "2026-07-05"
+    assert s["by_app"]["Code.exe"] == 30.0
+    assert s["blocks"][0]["title"] == "main.py"
+    assert s["ai"]["sessions"] == 0
+
+
+def test_load_stats_skips_missing_and_broken(tmp_path):
+    (tmp_path / "2026-07-05.json").write_text("{broken", encoding="utf-8")
+    assert load_stats(tmp_path, days=7, end_day=date(2026, 7, 8)) == []
+
+
+def test_build_stats_aggregates_ai_projects():
+    from kaizenlog.aiwork import AISession
+    start = datetime(2026, 7, 5, 9, tzinfo=TZ)
+    sessions = [
+        AISession(session_id="a", project="ai-news", start=start, end=start,
+                  user_turns=1, tool_errors=2),
+        AISession(session_id="b", project="ai-news", start=start, end=start,
+                  user_turns=5),
+    ]
+    classified = Classifier(DEFAULT_RULES).classify_all([])
+    summary = summarize(date(2026, 7, 5), classified)
+    s = build_stats(date(2026, 7, 5), summary, sessions)
+    assert s["ai"]["projects"]["ai-news"] == {
+        "sessions": 2, "turns": 6, "errors": 2, "fragmented": 1}

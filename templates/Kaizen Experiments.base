@@ -1,0 +1,61 @@
+filters:
+  and:
+    - file.hasTag("type/kaizen-experiment")
+
+formulas:
+  status_icon: 'if(status == "running", "🏃", if(status == "adopted", "✅", if(status == "rejected", "🗑️", "⏰")))'
+  days_left: 'if(deadline, (date(deadline) - today()).days, "")'
+  target_label: 'if(target, metric + " " + target, metric)'
+
+properties:
+  formula.status_icon:
+    displayName: ""
+  status:
+    displayName: "状態"
+  formula.target_label:
+    displayName: "指標と目標"
+  baseline:
+    displayName: "開始時"
+  deadline:
+    displayName: "期限"
+  formula.days_left:
+    displayName: "残り日数"
+
+views:
+  - type: table
+    name: "実行中の実験"
+    filters:
+      and:
+        - 'status == "running"'
+    order:
+      - formula.status_icon
+      - file.name
+      - formula.target_label
+      - baseline
+      - deadline
+      - formula.days_left
+    summaries:
+      formula.days_left: Average
+
+  - type: table
+    name: "判定待ち（期限切れ）"
+    filters:
+      and:
+        - 'status == "expired"'
+    order:
+      - file.name
+      - formula.target_label
+      - baseline
+      - deadline
+
+  - type: table
+    name: "すべての実験"
+    order:
+      - formula.status_icon
+      - file.name
+      - status
+      - formula.target_label
+      - deadline
+    groupBy:
+      property: status
+      direction: ASC
