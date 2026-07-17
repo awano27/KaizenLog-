@@ -125,6 +125,24 @@ def test_broken_lines_ignored(tmp_path):
     assert sessions[0].user_turns == 1
 
 
+def test_malformed_records_do_not_crash(tmp_path):
+    records = [
+        _user_text("正常な依頼です", _ts(9)),
+        {"type": "user", "sessionId": "s1", "timestamp": _ts(9, 1),
+         "message": "not-a-dict"},  # messageがdictでない
+        {"type": "assistant", "sessionId": "s1", "timestamp": _ts(9, 2),
+         "message": {"role": "assistant", "content": [],
+                     "usage": {"output_tokens": "broken"}}},  # トークンが数値でない
+        _assistant(_ts(9, 3)),
+    ]
+    _write_jsonl(tmp_path / "-home-user-myproj" / "s7.jsonl", records)
+
+    sessions = scan_sessions(tmp_path, DAY_START, DAY_END)
+    assert len(sessions) == 1
+    assert sessions[0].user_turns == 1
+    assert sessions[0].output_tokens == 100  # 不正なusageは無視、正常分のみ集計
+
+
 def test_render_markdown(tmp_path):
     records = [
         _user_text("依頼", _ts(9)),

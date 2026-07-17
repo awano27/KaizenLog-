@@ -29,8 +29,8 @@ class PromptCluster:
 def normalize(text: str) -> str:
     """比較用に依頼文を正規化する。数値・パス・空白の違いを吸収する。"""
     t = text.lower()
+    t = re.sub(r"https?://\S+", "<url>", t)  # パス置換より先（URL内の/をパス扱いしない）
     t = re.sub(r"[a-z]:[\\/][^\s]+|/[^\s]+/[^\s]+", "<path>", t)  # ファイルパス
-    t = re.sub(r"https?://\S+", "<url>", t)
     t = re.sub(r"\d+", "#", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t[:200]
@@ -39,10 +39,17 @@ def normalize(text: str) -> str:
 def cluster_prompts(
     prompts: list[UserPrompt], similarity: float = DEFAULT_SIMILARITY
 ) -> list[PromptCluster]:
-    """貪欲法で類似プロンプトをクラスタにまとめる。"""
+    """貪欲法で類似プロンプトをクラスタにまとめる。
+
+    貪欲法は処理順に結果が左右されるため、正規化文でソートしてから
+    処理し、同じ入力集合なら並び順によらず同じクラスタを返す。
+    """
     clusters: list[PromptCluster] = []
-    for p in prompts:
-        norm = normalize(p.text)
+    ordered = sorted(
+        ((normalize(p.text), p) for p in prompts),
+        key=lambda x: (x[0], x[1].timestamp.isoformat(), x[1].text),
+    )
+    for norm, p in ordered:
         if not norm:
             continue
         best: PromptCluster | None = None

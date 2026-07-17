@@ -117,6 +117,15 @@ def test_next_id_no_collision():
     assert next_id(existing, TODAY, offset=1) == "KZN-20260707-003"
 
 
+def test_four_digit_ids_matched_fully():
+    # 1000件目以降のIDが3桁に切り詰めてマッチしないこと
+    entries = [MemoryEntry(id="KZN-20260707-1000", date="2026-07-07", action="a")]
+    note = "- [x] KZN-20260707-1000: a"
+    updated = update_statuses_from_note(note, entries, date(2026, 7, 8))
+    assert [e.id for e in updated] == ["KZN-20260707-1000"]
+    assert updated[0].status == "done"
+
+
 # ---- プライバシーレダクション ----
 
 def test_redactor_masks_patterns():

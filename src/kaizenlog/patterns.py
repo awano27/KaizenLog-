@@ -27,10 +27,19 @@ def _threshold(days_with_data: int) -> int:
     return max(MIN_DAYS_WITH_DATA, (days_with_data + 1) // 2)
 
 
+def _dedupe_by_day(stats: list[dict]) -> list[dict]:
+    """同一日のstatsを1件に統合する（後勝ち）。件数＝日数の前提を守る。"""
+    by_day: dict[str, dict] = {}
+    for i, entry in enumerate(stats):
+        by_day[str(entry.get("day") or f"__no_day_{i}")] = entry
+    return list(by_day.values())
+
+
 def detect_time_sinks(
     stats: list[dict], min_minutes: float = 30.0
 ) -> list[PatternCandidate]:
     """毎日min_minutes以上使っているアプリ（時間泥棒/主要作業の候補）。"""
+    stats = _dedupe_by_day(stats)
     days_over: dict[str, list[float]] = defaultdict(list)
     app_category: dict[str, str] = {}
     for day in stats:
@@ -65,6 +74,7 @@ def detect_routines(
     stats: list[dict], min_block_minutes: float = 15.0
 ) -> list[PatternCandidate]:
     """ほぼ毎日、同じ時間帯に発生する同一アプリの作業ブロック（定時ルーチン）。"""
+    stats = _dedupe_by_day(stats)
     occurrences: dict[tuple[str, int], list[tuple[str, float, str]]] = defaultdict(list)
     for day in stats:
         seen_keys = set()
@@ -107,6 +117,7 @@ def detect_routines(
 
 def detect_ai_friction(stats: list[dict]) -> list[PatternCandidate]:
     """特定プロジェクトでAI作業の摩擦（細切れ・エラー）が慢性化していないか。"""
+    stats = _dedupe_by_day(stats)
     fragmented_days: dict[str, int] = defaultdict(int)
     error_total: dict[str, int] = defaultdict(int)
     session_total: dict[str, int] = defaultdict(int)
@@ -146,6 +157,7 @@ def detect_all(stats: list[dict]) -> list[PatternCandidate]:
 
 
 def render_patterns_markdown(stats: list[dict]) -> str:
+    stats = _dedupe_by_day(stats)
     header = f"# 🔁 繰り返しパターン検出レポート（{len(stats)}日分のデータ）\n"
     if len(stats) < MIN_DAYS_WITH_DATA:
         return (

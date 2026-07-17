@@ -56,7 +56,10 @@ def _parse_ts(record: dict) -> datetime | None:
 
 
 def _content_items(record: dict) -> list:
-    content = record.get("message", {}).get("content")
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return []
+    content = message.get("content")
     if isinstance(content, list):
         return content
     if isinstance(content, str):
@@ -105,13 +108,17 @@ def _update_session(session: AISession, record: dict, ts: datetime) -> None:
 
     elif rtype == "assistant":
         session.api_calls += 1
-        msg = record.get("message", {})
+        msg = record.get("message")
+        if not isinstance(msg, dict):
+            msg = {}
         model = msg.get("model")
         if isinstance(model, str) and model and model != "<synthetic>":
             session.models.add(model)
         usage = msg.get("usage", {})
         if isinstance(usage, dict):
-            session.output_tokens += int(usage.get("output_tokens") or 0)
+            tokens = usage.get("output_tokens")
+            if isinstance(tokens, (int, float)):
+                session.output_tokens += int(tokens)
         for item in _content_items(record):
             if isinstance(item, dict) and item.get("type") == "tool_use":
                 session.tool_counts[str(item.get("name", "unknown"))] += 1

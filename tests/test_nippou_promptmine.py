@@ -89,6 +89,25 @@ def test_cluster_similar_prompts():
     assert top.days == {"2020-01-01", "2020-01-02", "2020-01-03"}
 
 
+def test_normalize_url_before_path():
+    # URL内の / をパス置換に食われて "http<path>" に壊れないこと
+    assert normalize("see https://example.com/a/b now") == "see <url> now"
+
+
+def test_cluster_prompts_order_independent():
+    from itertools import permutations
+    texts = [
+        "今日のAIニュースを要約してノートに保存して",
+        "今日のAIニュースを要約して保存",
+        "ニュースを保存",
+    ]
+    results = set()
+    for perm in permutations(texts):
+        clusters = cluster_prompts([_prompt(t, i) for i, t in enumerate(perm)])
+        results.add(tuple(sorted((c.representative, c.count) for c in clusters)))
+    assert len(results) == 1  # どの入力順でも同じクラスタになる
+
+
 def test_render_prompt_report():
     prompts = [_prompt(f"今日のAIニュースを{i}件要約して", i) for i in range(5)]
     md = render_prompt_report(prompts, days=7, min_count=3)

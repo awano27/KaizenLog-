@@ -48,6 +48,16 @@ def test_target_met():
     assert target_met(130, ">=", 120)
 
 
+def test_target_met_float_tolerance():
+    # 0.1+0.2 は 0.30000000000000004 だが実用上は 0.3 と同値として扱う
+    assert target_met(0.1 + 0.2, "==", 0.3)
+    assert target_met(0.1 + 0.2, "<=", 0.3)
+    assert target_met(0.1 + 0.2, ">=", 0.3)
+    assert not target_met(0.1 + 0.2, "<", 0.3)
+    assert not target_met(0.1 + 0.2, ">", 0.3)
+    assert not target_met(0.31, "==", 0.3)
+
+
 def test_compute_metrics():
     s = _summary()
     assert compute_metric("context_switches", s, []) == 18.0

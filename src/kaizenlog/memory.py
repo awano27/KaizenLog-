@@ -15,7 +15,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 MEMORY_FILE = "suggestions.jsonl"
-ID_PATTERN = re.compile(r"KZN-(\d{8})-(\d{3})")
+ID_PATTERN = re.compile(r"KZN-(\d{8})-(\d{3,})")  # 1000件目以降は4桁になるため下限のみ固定
 ACTION_SECTION = "### 明日の最小アクション"
 _CHECKBOX_RE = re.compile(r"^(\s*- \[)([ xX])(\]\s*)(.*)$")
 

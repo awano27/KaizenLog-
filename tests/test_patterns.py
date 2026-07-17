@@ -103,6 +103,13 @@ def test_render_insufficient_data():
     assert "データが不足" in md
 
 
+def test_duplicate_day_stats_counted_once():
+    # 同じ日のstatsが複数渡っても「3日分」と誤検出しない
+    stats = [_day_stats(BASE, apps={"chrome.exe": 45.0}) for _ in range(3)]
+    assert detect_time_sinks(stats) == []
+    assert "1日分のデータ" in render_patterns_markdown(stats)
+
+
 def test_render_with_candidates():
     stats = [_day_stats(d, apps={"YouTube.exe": 60.0},
                         blocks=[_block(d, 20, "YouTube.exe", 60.0)])

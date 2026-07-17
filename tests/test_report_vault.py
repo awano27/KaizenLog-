@@ -58,6 +58,43 @@ def test_render_markdown_contains_sections():
     assert "### タイムライン" in md
 
 
+def test_summarize_overlapping_events_not_double_counted():
+    start = datetime(2026, 7, 5, 9, tzinfo=TZ)
+    events = [
+        ActivityEvent(start=start, end=start + timedelta(minutes=60),
+                      app="Code.exe", title="main.py - Visual Studio Code"),
+        ActivityEvent(start=start, end=start + timedelta(minutes=60),
+                      app="Code.exe", title="main.py - Visual Studio Code"),
+    ]
+    classified = Classifier(DEFAULT_RULES).classify_all(events)
+    s = summarize(date(2026, 7, 5), classified)
+    assert round(s.total_minutes) == 60
+
+
+def test_summarize_partial_overlap_clipped():
+    start = datetime(2026, 7, 5, 9, tzinfo=TZ)
+    events = [
+        ActivityEvent(start=start, end=start + timedelta(minutes=60),
+                      app="Code.exe", title="main.py"),
+        ActivityEvent(start=start + timedelta(minutes=30),
+                      end=start + timedelta(minutes=90),
+                      app="chrome.exe", title="docs"),
+    ]
+    classified = Classifier(DEFAULT_RULES).classify_all(events)
+    s = summarize(date(2026, 7, 5), classified)
+    assert round(s.total_minutes) == 90  # 和集合。重複30分は先着イベントに帰属
+    assert round(sum(s.by_category.values())) == 90
+
+
+def test_summarize_and_blocks_order_independent():
+    classified = Classifier(DEFAULT_RULES).classify_all(list(reversed(_events())))
+    s = summarize(date(2026, 7, 5), classified, gap_minutes=5.0)
+    assert round(s.total_minutes) == 105
+    blocks = build_blocks(classified, gap_minutes=5.0)
+    assert len(blocks) == 4
+    assert all(a.start <= b.start for a, b in zip(blocks, blocks[1:]))
+
+
 def test_upsert_section_idempotent():
     original = "---\ndate: 2026-07-05\n---\n\n## メモ\n手書きの内容\n"
     v1 = upsert_section(original, ACTIVITY_MARKER, "## 📊 Activity Log\n\nv1")

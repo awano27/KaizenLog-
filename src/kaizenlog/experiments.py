@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -62,12 +63,14 @@ def parse_target(target: str) -> tuple[str, float]:
 
 
 def target_met(value: float, op: str, target_value: float) -> bool:
+    # 0.1+0.2 != 0.3 のような浮動小数点誤差で判定を誤らないよう許容誤差付きで比較する
+    close = math.isclose(value, target_value, rel_tol=1e-9, abs_tol=1e-9)
     return {
-        "<=": value <= target_value,
-        ">=": value >= target_value,
-        "<": value < target_value,
-        ">": value > target_value,
-        "==": value == target_value,
+        "<=": value <= target_value or close,
+        ">=": value >= target_value or close,
+        "<": value < target_value and not close,
+        ">": value > target_value and not close,
+        "==": close,
     }[op]
 
 

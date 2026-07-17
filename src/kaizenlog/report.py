@@ -38,13 +38,18 @@ class DailySummary:
     context_switches: int  # カテゴリの切り替え回数
 
 
+def _sorted_events(classified: list[ClassifiedEvent]) -> list[ClassifiedEvent]:
+    """開始時刻順に並べる。集計・ブロック化は入力順に依存してはならない。"""
+    return sorted(classified, key=lambda ce: (ce.event.start, ce.event.end))
+
+
 def build_blocks(
     classified: list[ClassifiedEvent], gap_minutes: float = 5.0
 ) -> list[Block]:
     """連続するイベントをブロックにまとめる。gap_minutes以上空いたら別ブロック。"""
     blocks: list[Block] = []
     gap = timedelta(minutes=gap_minutes)
-    for ce in classified:
+    for ce in _sorted_events(classified):
         e = ce.event
         prev = blocks[-1] if blocks else None
         if (
@@ -78,10 +83,17 @@ def summarize(
     by_app: dict[str, float] = defaultdict(float)
     ai_tool_minutes: dict[str, float] = defaultdict(float)
 
-    for ce in classified:
-        minutes = ce.event.duration.total_seconds() / 60
+    # 重複区間は先着イベント優先でクリップし、同じ時間を二重計上しない
+    cursor: datetime | None = None
+    for ce in _sorted_events(classified):
+        e = ce.event
+        start = e.start if cursor is None else max(e.start, cursor)
+        cursor = e.end if cursor is None else max(cursor, e.end)
+        minutes = (e.end - start).total_seconds() / 60
+        if minutes <= 0:
+            continue
         by_category[ce.category] += minutes
-        by_app[ce.event.app] += minutes
+        by_app[e.app] += minutes
         if ce.ai and ce.matched_tool:
             ai_tool_minutes[ce.matched_tool] += minutes
 
