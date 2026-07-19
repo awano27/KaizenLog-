@@ -64,6 +64,15 @@ class ActivityWatchClient:
                 return bucket_id
         return None
 
+    def find_buckets(self, bucket_type: str) -> list[str]:
+        """指定タイプのバケットIDを全て返す。
+
+        web.tab.current はブラウザごと（Chrome/Edge/Firefox）に別バケットに
+        なるため、1つだけ拾うとデータを取りこぼす。
+        """
+        return [bid for bid, info in self.buckets().items()
+                if info.get("type") == bucket_type]
+
     def events(self, bucket_id: str, start: datetime, end: datetime) -> list[dict]:
         return self._get(
             f"/api/0/buckets/{bucket_id}/events",
@@ -198,11 +207,11 @@ def collect_day(
         # AFKデータが空の日はウィンドウイベントをそのまま採用する
         events = clip_to_active(window_raw, intervals or [(day_start, day_end)])
 
-    web_bucket = client.find_bucket("web.tab.current")
-    if web_bucket is not None:
-        web_raw = client.events(web_bucket, day_start, day_end)
-        if web_raw:
-            events = enrich_with_web(events, web_raw)
+    web_raw: list[dict] = []
+    for web_bucket in client.find_buckets("web.tab.current"):
+        web_raw.extend(client.events(web_bucket, day_start, day_end))
+    if web_raw:
+        events = enrich_with_web(events, web_raw)
     return events
 
 
