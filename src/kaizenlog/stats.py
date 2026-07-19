@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from .aiwork import AISession
+from .focus import InputStats
 from .report import DailySummary
 
 
@@ -20,7 +21,10 @@ def _round_minutes(d: dict[str, float]) -> dict[str, float]:
 
 
 def build_stats(
-    day: date, summary: DailySummary, cc_sessions: list[AISession]
+    day: date,
+    summary: DailySummary,
+    cc_sessions: list[AISession],
+    input_stats: InputStats | None = None,
 ) -> dict:
     projects: dict[str, dict] = {}
     for s in cc_sessions:
@@ -32,13 +36,14 @@ def build_stats(
         p["errors"] += s.tool_errors
         p["fragmented"] += 1 if s.is_fragmented else 0
 
-    return {
+    stats = {
         "version": 1,
         "day": day.isoformat(),
         "total_minutes": round(summary.total_minutes, 1),
         "context_switches": summary.context_switches,
         "by_category": _round_minutes(summary.by_category),
         "by_app": _round_minutes(summary.by_app),
+        "by_site": _round_minutes(summary.by_site),
         "blocks": [
             {
                 "start": b.start.isoformat(),
@@ -58,15 +63,29 @@ def build_stats(
             "projects": projects,
         },
     }
+    if input_stats is not None:
+        stats["input"] = {
+            "keypresses": input_stats.keypresses,
+            "clicks": input_stats.clicks,
+            "active_input_minutes": input_stats.active_input_minutes,
+            "focus_blocks": len(input_stats.focus_blocks),
+            "focus_minutes": round(input_stats.focus_minutes, 1),
+        }
+    return stats
 
 
 def write_stats(
-    stats_dir: Path, day: date, summary: DailySummary, cc_sessions: list[AISession]
+    stats_dir: Path,
+    day: date,
+    summary: DailySummary,
+    cc_sessions: list[AISession],
+    input_stats: InputStats | None = None,
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
     path.write_text(
-        json.dumps(build_stats(day, summary, cc_sessions), ensure_ascii=False, indent=1),
+        json.dumps(build_stats(day, summary, cc_sessions, input_stats),
+                   ensure_ascii=False, indent=1),
         encoding="utf-8",
     )
     return path

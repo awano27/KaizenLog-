@@ -14,6 +14,7 @@ from datetime import date
 from pathlib import Path
 
 from .aiwork import AISession
+from .focus import InputStats
 from .report import DailySummary
 from .vault import upsert_section
 
@@ -30,6 +31,10 @@ METRIC_DESCRIPTIONS = {
     "ai_interruptions": "Claude Codeのユーザー中断・拒否回数",
     "ai_avg_turns": "Claude Codeセッションの平均往復数",
     "category_minutes:<カテゴリ名>": "指定カテゴリの時間（分）例: category_minutes:エンタメ",
+    "site_minutes:<ドメイン>": "指定サイトの時間（分）例: site_minutes:youtube.com（要 aw-watcher-web）",
+    "focus_blocks": "集中ブロック数（25分以上入力が続いた区間。要 aw-watcher-input）",
+    "focus_minutes": "集中ブロックの合計時間（分。要 aw-watcher-input）",
+    "input_keypresses": "1日のキー入力数（要 aw-watcher-input）",
 }
 
 _TARGET_RE = re.compile(r"^(<=|>=|<|>|==?)\s*([\d.]+)$")
@@ -75,9 +80,23 @@ def target_met(value: float, op: str, target_value: float) -> bool:
 
 
 def compute_metric(
-    metric: str, summary: DailySummary, cc_sessions: list[AISession]
+    metric: str,
+    summary: DailySummary,
+    cc_sessions: list[AISession],
+    input_stats: InputStats | None = None,
 ) -> float | None:
-    """対象日の指標値を計算する。未知の指標はNone。"""
+    """対象日の指標値を計算する。未知の指標・データ不足はNone。"""
+    if metric in ("focus_blocks", "focus_minutes", "input_keypresses"):
+        if input_stats is None:
+            return None  # aw-watcher-input 未導入の日は計測不能
+        if metric == "focus_blocks":
+            return float(len(input_stats.focus_blocks))
+        if metric == "focus_minutes":
+            return round(input_stats.focus_minutes, 1)
+        return float(input_stats.keypresses)
+    if metric.startswith("site_minutes:"):
+        site = metric.split(":", 1)[1].strip().lower()
+        return round(summary.by_site.get(site, 0.0), 1)
     if metric == "context_switches":
         return float(summary.context_switches)
     if metric == "total_active_minutes":

@@ -47,13 +47,17 @@ DEFAULT_RULES: list[dict] = [
         "name": "ドキュメント・オフィス",
         "patterns": [r"excel", r"word", r"powerpoint", r"google (docs|sheets|slides)", r"pdf"],
     },
+    # エンタメは「ブラウジング」より先に評価する（内容がコンテナに勝つ）。
+    # 後ろに置くと "chrome | YouTube" がブラウザ名で先にマッチしてしまい、
+    # エンタメがブラウザ内で一切検出されなくなる。
+    {
+        "name": "エンタメ",
+        "patterns": [r"youtube", r"netflix", r"spotify", r"twitter", r"\bx\b", r"reddit", r"steam",
+                     r"nicovideo", r"tiktok", r"twitch"],
+    },
     {
         "name": "ブラウジング",
         "patterns": [r"chrome", r"edge", r"firefox", r"brave", r"vivaldi"],
-    },
-    {
-        "name": "エンタメ",
-        "patterns": [r"youtube", r"netflix", r"spotify", r"twitter", r"\bx\b", r"reddit", r"steam"],
     },
 ]
 

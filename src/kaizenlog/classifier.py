@@ -36,7 +36,9 @@ class Classifier:
             self.rules.append(Rule(name=rd["name"], patterns=patterns, ai=bool(rd.get("ai", False))))
 
     def classify(self, event: ActivityEvent) -> ClassifiedEvent:
-        text = f"{event.app} | {event.title}"
+        # aw-watcher-web導入時はドメインも判定対象に含める（"youtube\.com" 等のルールが書ける）
+        domain = event.domain
+        text = f"{event.app} | {domain} | {event.title}" if domain else f"{event.app} | {event.title}"
         for rule in self.rules:
             for pattern in rule.patterns:
                 m = pattern.search(text)

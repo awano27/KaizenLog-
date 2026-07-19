@@ -90,6 +90,16 @@ def _check_activitywatch(c: Check, cfg: Config) -> None:
         c.ok("AFK watcher検出（離席時間を除外できます）")
     else:
         c.warn("AFK watcherが見つかりません（離席中の時間も計上されます）")
+    if "web.tab.current" in types:
+        c.ok("ブラウザwatcher検出（aw-watcher-web、サイト単位の分類が有効）")
+    else:
+        c.warn("ブラウザwatcher未導入（サイト別集計・site_minutes指標は無効）。"
+               "ブラウザに aw-watcher-web 拡張を入れると有効になります")
+    if "os.hid.input" in types:
+        c.ok("入力watcher検出（aw-watcher-input、集中ブロック指標が有効）")
+    else:
+        c.warn("入力watcher未導入（集中ブロック・focus_blocks指標は無効）。"
+               "`pipx install aw-watcher-input` → `aw-watcher-input` 起動で有効になります")
 
 
 def _list_api_models(base_url: str, headers: dict) -> list[str] | None:

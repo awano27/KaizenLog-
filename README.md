@@ -188,6 +188,15 @@ ai = true
 patterns = ["dify", "自社チャットボット"]
 ```
 
+## オプションのwatcher（入れると解像度が上がる）
+
+| watcher | 追加されるもの | 導入 |
+| --- | --- | --- |
+| [aw-watcher-web](https://github.com/ActivityWatch/aw-watcher-web) | サイト別集計・ドメイン分類・`site_minutes:<ドメイン>` 実験指標 | ブラウザ拡張をストアから追加（Chrome/Edge/Firefox） |
+| [aw-watcher-input](https://github.com/ActivityWatch/aw-watcher-input) | 集中ブロック（25分以上入力が続いた区間）・`focus_blocks` / `focus_minutes` / `input_keypresses` 実験指標 | `pip install git+https://github.com/ActivityWatch/aw-watcher-input.git` → `aw-watcher-input` を常駐起動 |
+
+どちらも導入状況は `kaizenlog doctor` が検出して案内します。未導入でも従来どおり動作します（該当指標・セクションが出ないだけ）。
+
 ## ロードマップ
 
 - [x] **v0.2 — AI Work Telemetry**: Claude CodeのJSONLログから「AI作業の質」を集計
@@ -197,7 +206,7 @@ patterns = ["dify", "自社チャットボット"]
 - [x] **v1.1 — 日報ドラフト自動生成**（`kaizenlog report`）＋**プロンプト資産化**（`kaizenlog prompts`・スキル自動生成）
 - [x] **v1.2 — 運用強化パック**（`doctor` / `status` / `backfill` / 失敗通知 / LLMリトライ / `--dry-run`）
 - [x] **v1.3 — Product Ready**（Claude Code一級対応・スキル同梱と`skill install`・Kaizen Memory/Action Ledger・プライバシーレダクション・CI）
-- [ ] ブラウザ拡張watcher（aw-watcher-web）連携でURL粒度の分析
+- [x] ブラウザ拡張watcher（aw-watcher-web）連携でURL粒度の分析 ＋ 入力watcher（aw-watcher-input）連携で集中ブロック計測
 - [ ] Cursor / Copilot CLI などClaude Code以外のAIツールログ対応
 - [ ] [screenpipe](https://github.com/mediar-ai/screenpipe) 連携（OCRで画面内容まで分析）
 

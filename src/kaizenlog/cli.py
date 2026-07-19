@@ -52,7 +52,8 @@ from .skill_manager import (
     skill_description,
 )
 from .classifier import Classifier
-from .collector import ActivityWatchClient, ActivityWatchError, collect_day
+from .collector import ActivityWatchClient, ActivityWatchError, collect_day, collect_input
+from .focus import compute_input_stats
 from .config import Config, load_config
 from .experiments import (
     METRIC_DESCRIPTIONS,
@@ -90,7 +91,13 @@ def cmd_generate(cfg: Config, day: date) -> Path:
     events = collect_day(client, day_start, day_end)
     classified = Classifier(cfg.rules).classify_all(events)
     summary = summarize(day, classified, gap_minutes=cfg.session_gap_minutes)
-    section = render_markdown(summary, tz, min_block_minutes=cfg.min_block_minutes)
+
+    # aw-watcher-input 導入時のみ集中ブロックを算出（未導入ならNone）
+    input_raw = collect_input(client, day_start, day_end)
+    input_stats = compute_input_stats(input_raw) if input_raw is not None else None
+
+    section = render_markdown(summary, tz, min_block_minutes=cfg.min_block_minutes,
+                              input_stats=input_stats)
 
     cc_sessions = []
     if cfg.aiwork.enabled:
@@ -108,13 +115,13 @@ def cmd_generate(cfg: Config, day: date) -> Path:
           f" / Claude Codeセッション {len(cc_sessions)}回")
 
     # パターン検出用の機械可読な統計を蓄積する
-    write_stats(cfg.stats_path, day, summary, cc_sessions)
+    write_stats(cfg.stats_path, day, summary, cc_sessions, input_stats)
 
     # 実行中のカイゼン実験に対象日の実測値を追記する
     for exp in load_experiments(cfg.experiments_path):
         if exp.status not in ("running",):
             continue
-        value = compute_metric(exp.metric, summary, cc_sessions)
+        value = compute_metric(exp.metric, summary, cc_sessions, input_stats)
         if value is None:
             print(f"⚠️  実験「{exp.title}」の指標 {exp.metric} は不明のためスキップしました")
             continue

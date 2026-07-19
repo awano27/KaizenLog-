@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 import requests
+
+# タブ情報の合成対象とするブラウザのプロセス名
+BROWSER_APP_RE = re.compile(r"chrome|msedge|\bedge\b|firefox|brave|vivaldi|opera", re.IGNORECASE)
 
 
 @dataclass
@@ -14,10 +19,19 @@ class ActivityEvent:
     end: datetime
     app: str
     title: str
+    url: str = ""  # aw-watcher-web 導入時のみ入る（ブラウザのタブURL）
 
     @property
     def duration(self) -> timedelta:
         return self.end - self.start
+
+    @property
+    def domain(self) -> str:
+        """URLのドメイン部分（www.除去済み）。URLが無ければ空文字。"""
+        if not self.url:
+            return ""
+        netloc = urlparse(self.url).netloc.lower()
+        return netloc[4:] if netloc.startswith("www.") else netloc
 
 
 class ActivityWatchError(RuntimeError):
@@ -113,12 +127,59 @@ def clip_to_active(
     return events
 
 
+def enrich_with_web(
+    events: list[ActivityEvent], web_raw: list[dict]
+) -> list[ActivityEvent]:
+    """ブラウザのウィンドウイベントに、同時刻のタブ情報（URL・タイトル）を合成する。
+
+    ブラウザがアクティブな区間とタブイベント（aw-watcher-web）の交差部分を
+    新しいイベントに分割し、タブ側のURL/タイトルを採用する。タブ情報が無い
+    残り区間は元のイベントのまま残す。非ブラウザのイベントは変更しない。
+    """
+    tabs = _parse_events(web_raw)
+    out: list[ActivityEvent] = []
+    for ev in events:
+        if not BROWSER_APP_RE.search(ev.app):
+            out.append(ev)
+            continue
+        cursor = ev.start
+        pieces: list[ActivityEvent] = []
+        for t_start, t_end, data in tabs:
+            if t_end <= cursor:
+                continue
+            if t_start >= ev.end:
+                break
+            clipped = _intersect(cursor, ev.end, t_start, t_end)
+            if not clipped:
+                continue
+            c_start, c_end = clipped
+            if c_start > cursor:
+                pieces.append(ActivityEvent(cursor, c_start, ev.app, ev.title))
+            pieces.append(
+                ActivityEvent(
+                    c_start,
+                    c_end,
+                    ev.app,
+                    str(data.get("title", "")).strip() or ev.title,
+                    url=str(data.get("url", "")).strip(),
+                )
+            )
+            cursor = c_end
+        if cursor < ev.end:
+            pieces.append(ActivityEvent(cursor, ev.end, ev.app, ev.title))
+        out.extend(pieces or [ev])
+    out.sort(key=lambda e: e.start)
+    return out
+
+
 def collect_day(
     client: ActivityWatchClient, day_start: datetime, day_end: datetime
 ) -> list[ActivityEvent]:
     """1日分のアクティブなウィンドウイベントを取得する。
 
     AFKウォッチャーが無い環境では、ウィンドウイベントをそのまま使う。
+    aw-watcher-web（ブラウザ拡張）が導入されていれば、ブラウザ時間を
+    タブURL粒度に分割して返す。
     """
     window_bucket = client.find_bucket("currentwindow")
     if window_bucket is None:
@@ -130,11 +191,26 @@ def collect_day(
 
     afk_bucket = client.find_bucket("afkstatus")
     if afk_bucket is None:
-        return clip_to_active(window_raw, [(day_start, day_end)])
-
-    afk_raw = client.events(afk_bucket, day_start, day_end)
-    intervals = active_intervals(afk_raw)
-    if not intervals:
+        events = clip_to_active(window_raw, [(day_start, day_end)])
+    else:
+        afk_raw = client.events(afk_bucket, day_start, day_end)
+        intervals = active_intervals(afk_raw)
         # AFKデータが空の日はウィンドウイベントをそのまま採用する
-        return clip_to_active(window_raw, [(day_start, day_end)])
-    return clip_to_active(window_raw, intervals)
+        events = clip_to_active(window_raw, intervals or [(day_start, day_end)])
+
+    web_bucket = client.find_bucket("web.tab.current")
+    if web_bucket is not None:
+        web_raw = client.events(web_bucket, day_start, day_end)
+        if web_raw:
+            events = enrich_with_web(events, web_raw)
+    return events
+
+
+def collect_input(
+    client: ActivityWatchClient, day_start: datetime, day_end: datetime
+) -> list[dict] | None:
+    """入力量イベント（aw-watcher-input）を取得する。watcher未導入ならNone。"""
+    bucket = client.find_bucket("os.hid.input")
+    if bucket is None:
+        return None
+    return client.events(bucket, day_start, day_end)

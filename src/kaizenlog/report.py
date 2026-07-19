@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, tzinfo
 
 from .classifier import ClassifiedEvent
+from .focus import FOCUS_MIN_MINUTES, InputStats
 
 
 @dataclass
@@ -36,6 +37,7 @@ class DailySummary:
     ai_tool_minutes: dict[str, float]
     ai_sessions: int
     context_switches: int  # カテゴリの切り替え回数
+    by_site: dict[str, float] = field(default_factory=dict)  # ドメイン別（aw-watcher-web導入時のみ）
 
 
 def _sorted_events(classified: list[ClassifiedEvent]) -> list[ClassifiedEvent]:
@@ -81,6 +83,7 @@ def summarize(
 ) -> DailySummary:
     by_category: dict[str, float] = defaultdict(float)
     by_app: dict[str, float] = defaultdict(float)
+    by_site: dict[str, float] = defaultdict(float)
     ai_tool_minutes: dict[str, float] = defaultdict(float)
 
     # 重複区間は先着イベント優先でクリップし、同じ時間を二重計上しない
@@ -94,6 +97,8 @@ def summarize(
             continue
         by_category[ce.category] += minutes
         by_app[e.app] += minutes
+        if e.domain:
+            by_site[e.domain] += minutes
         if ce.ai and ce.matched_tool:
             ai_tool_minutes[ce.matched_tool] += minutes
 
@@ -117,6 +122,7 @@ def summarize(
         ai_tool_minutes=dict(ai_tool_minutes),
         ai_sessions=ai_sessions,
         context_switches=context_switches,
+        by_site=dict(by_site),
     )
 
 
@@ -134,6 +140,7 @@ def render_markdown(
     tz: tzinfo,
     min_block_minutes: float = 3.0,
     max_timeline_rows: int = 60,
+    input_stats: InputStats | None = None,
 ) -> str:
     """デイリーノートに埋め込むアクティビティログのMarkdownを生成する。"""
     lines: list[str] = []
@@ -149,6 +156,15 @@ def render_markdown(
                  f" / コンテキストスイッチ: {summary.context_switches}回")
     lines.append("")
 
+    if input_stats is not None:
+        lines.append(
+            f"**集中ブロック**: {len(input_stats.focus_blocks)}回 / "
+            f"合計 {_fmt_minutes(input_stats.focus_minutes)}"
+            f"（{FOCUS_MIN_MINUTES:.0f}分以上入力が続いた区間）"
+            f" / キー入力 {input_stats.keypresses:,}回"
+        )
+        lines.append("")
+
     # カテゴリ別サマリー
     lines.append("### カテゴリ別")
     lines.append("")
@@ -158,6 +174,17 @@ def render_markdown(
         pct = minutes / summary.total_minutes * 100
         lines.append(f"| {cat} | {_fmt_minutes(minutes)} | {pct:.0f}% |")
     lines.append("")
+
+    # サイト別（aw-watcher-web 導入時のみ）
+    if summary.by_site:
+        lines.append("### 🌐 サイト別（上位10）")
+        lines.append("")
+        lines.append("| サイト | 時間 |")
+        lines.append("| --- | ---: |")
+        for site, minutes in sorted(summary.by_site.items(), key=lambda x: -x[1])[:10]:
+            site_escaped = site.replace("|", "\\|")
+            lines.append(f"| {site_escaped} | {_fmt_minutes(minutes)} |")
+        lines.append("")
 
     # AI作業の詳細
     if summary.ai_tool_minutes:
