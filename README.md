@@ -46,16 +46,26 @@ kaizenlog init-config        # kaizenlog.toml の雛形を生成
 
 生成された `kaizenlog.toml` を編集して `%APPDATA%\kaizenlog\config.toml` に置く（最低限 `vault_dir` を自分のObsidianボールトに変更）。
 
-### 3. LLMバックエンドの設定（4択）
+### 3. LLMバックエンドの設定
+
+**自動フォールバック機構搭載** — 指定されたバックエンドが利用できない場合、自動的にローカル LLM（Ollama）にフォールバック。すべて失敗時のみエラー。
 
 | バックエンド | 向いている人 | 準備 |
 | --- | --- | --- |
 | **Claude Code CLI** | Claude Pro/Maxサブスク保有者・提案の質最優先 | [Claude Code](https://claude.com/claude-code) をインストール → `claude` で一度ログイン |
 | **GitHub Copilot CLI**（デフォルト） | Copilotサブスク保有者 | `npm install -g @github/copilot` → `copilot` で一度ログイン |
-| **Ollama** | GPUなしPCでも完全ローカルでやりたい人 | `ollama pull qwen3:8b`（16GB RAM推奨、8GBなら `qwen3:4b`） |
+| **Ollama**（自動フォールバック先） | 環境がない場合の自動選択肢 / 完全ローカル | `ollama pull qwen3:8b`（16GB RAM推奨、8GBなら `qwen3:4b`） |
 | **GitHub Models** | 無料APIで済ませたい人 | `models:read` 権限のPATを発行し環境変数 `KAIZENLOG_API_KEY` に設定 |
 
-`kaizenlog.toml` の `[llm] backend` を `"claude-code-cli"` / `"copilot-cli"` / `"openai-compatible"` に設定。いずれのバックエンドも**テキスト生成のみ**を行い、ノートへの書き込みは常にKaizenLogがマーカー区間に対して行います（LLMにファイルを直接触らせません）。
+**セットアップ不要の最小構成**（最初は Copilot CLI を試すが、なければ Ollama が起動していれば自動利用）:
+
+```toml
+# kaizenlog.toml
+[llm]
+backend = "copilot-cli"  # 見つからなければ自動的に Ollama を試す
+```
+
+いずれのバックエンドも**テキスト生成のみ**を行い、ノートへの書き込みは常にKaizenLogがマーカー区間に対して行います（LLMにファイルを直接触らせません）。
 
 ### 4. 毎晩の自動実行
 

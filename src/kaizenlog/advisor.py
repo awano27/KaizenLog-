@@ -195,31 +195,54 @@ def generate_text(
 ) -> str:
     """設定されたバックエンドでテキストを生成する（改善提案・日報などの共通経路）。
 
+    バックエンドの優先度:
+    1. config で指定されたバックエンド
+    2. ローカル LLM (Ollama) へ自動フォールバック
+    3. LLM なし (none)
+
     一時エラー（レート制限・タイムアウト・接続断など）に備えて cfg.retries 回まで
     間隔を空けて再試行する。無人の夜間実行の成功率を上げるための処置。
     """
+    # バックエンドの試行順序を決定
+    backends_to_try: list[tuple[str, Callable]] = []
+
+    # 設定されたバックエンドを優先
     if cfg.backend == "claude-code-cli":
-        call = _call_claude_code_cli
+        backends_to_try.append(("claude-code-cli", _call_claude_code_cli))
     elif cfg.backend == "copilot-cli":
-        call = _call_copilot_cli
+        backends_to_try.append(("copilot-cli", _call_copilot_cli))
     elif cfg.backend == "openai-compatible":
-        call = _call_openai_compatible
+        backends_to_try.append(("openai-compatible", _call_openai_compatible))
     elif cfg.backend == "none":
         raise AdvisorError("llm.backend = 'none' のためLLM生成はスキップされました。")
     else:
         raise AdvisorError(f"不明なLLMバックエンドです: {cfg.backend}")
 
+    # Ollama へのフォールバック（設定値が指定されている場合、その失敗時のみ試行）
+    if cfg.backend != "openai-compatible":
+        backends_to_try.append(("openai-compatible (Ollama fallback)", _call_openai_compatible))
+
     last_error: AdvisorError | None = None
-    for attempt in range(cfg.retries + 1):
-        try:
-            return call(cfg, system_prompt, user_prompt)
-        except AdvisorError as e:
-            last_error = e
-            if attempt < cfg.retries:
-                print(f"⚠️  LLM呼び出しに失敗（{attempt + 1}回目）。"
-                      f"{cfg.retry_wait_seconds}秒後に再試行します: {e}")
-                sleep(cfg.retry_wait_seconds)
-    raise last_error
+
+    for backend_name, call in backends_to_try:
+        for attempt in range(cfg.retries + 1):
+            try:
+                return call(cfg, system_prompt, user_prompt)
+            except AdvisorError as e:
+                last_error = e
+                if attempt < cfg.retries:
+                    print(f"⚠️  {backend_name} 呼び出しに失敗（{attempt + 1}回目）。"
+                          f"{cfg.retry_wait_seconds}秒後に再試行します: {e}")
+                    sleep(cfg.retry_wait_seconds)
+
+        # バックエンドの切り替え時のメッセージ
+        if len(backends_to_try) > 1 and backends_to_try.index((backend_name, call)) < len(backends_to_try) - 1:
+            next_backend = backends_to_try[backends_to_try.index((backend_name, call)) + 1][0]
+            print(f"⚠️  {backend_name} が利用できません。{next_backend} にフォールバックします...")
+            sleep(1)
+
+    # すべてのバックエンドが失敗
+    raise last_error or AdvisorError("すべてのLLMバックエンドが利用できません。")
 
 
 def generate_advice(

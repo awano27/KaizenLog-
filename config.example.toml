@@ -34,10 +34,18 @@ enabled = true
 claude_projects_dir = "~/.claude/projects"
 
 [llm]
+# LLMバックエンド優先度（指定されたものが失敗したら自動フォールバック）:
+#   1. 設定値（下記から選択）
+#   2. ローカルLLM (Ollama)
+#   3. LLM なし
+#
 # "claude-code-cli"   : Claude Code CLI（要: https://claude.com/claude-code & ログイン済み）
 # "copilot-cli"       : GitHub Copilot CLI（要: npm install -g @github/copilot & ログイン済み）
 # "openai-compatible" : GitHub Models / Ollama などOpenAI互換API
 # "none"              : 改善提案をスキップ（ログ生成のみ）
+#
+# 注: どのバックエンドも見つからない場合、自動的に Ollama (http://localhost:11434/v1) にフォールバック。
+#     Ollama も起動していない場合のみ、エラーが発生します。
 backend = "copilot-cli"
 # システムプロンプト: 同梱テンプレート名（daily_advisor / privacy_safe /
 # weekly_review / ai_work_deep_review）または自作プロンプトのファイルパス
