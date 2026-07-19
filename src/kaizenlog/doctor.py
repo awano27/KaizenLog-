@@ -12,7 +12,7 @@ from pathlib import Path
 
 import requests
 
-from .config import Config, find_config_file
+from .config import Config, existing_config_candidates, find_config_file
 from .runlog import load_runs
 
 
@@ -40,6 +40,17 @@ def _check_config(c: Check, config_path: str | None) -> None:
         return
     if found:
         c.ok(f"設定ファイル: {found}")
+        # 複数の設定ファイルが存在すると、実行時のカレントディレクトリ次第で
+        # 別の設定が選ばれる（例: 手動実行はリポジトリの kaizenlog.toml、
+        # 夜間タスクは %APPDATA% の config.toml）。内容がズレていると
+        # 「手動では正常なのに夜間だけ別ボールトに書く」事故になるため警告する。
+        if not config_path:
+            others = [p for p in existing_config_candidates() if p.resolve() != found.resolve()]
+            if others:
+                c.warn("他の場所にも設定ファイルがあります（現在は無視）: "
+                       + ", ".join(str(p) for p in others)
+                       + " — 作業ディレクトリが異なる実行（夜間タスク等）では"
+                         "そちらが使われる可能性があります。内容を同期するか片方を削除してください")
     else:
         c.warn("設定ファイルが見つかりません（デフォルト設定で動作中）。"
                "`kaizenlog init-config` で作成してください")

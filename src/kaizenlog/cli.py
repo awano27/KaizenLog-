@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from datetime import date, datetime, time, timedelta
 from time import monotonic
 from pathlib import Path
@@ -612,6 +613,18 @@ def main(argv: list[str] | None = None) -> int:
                     error=str(e), retention_days=cfg.log_retention_days)
             if cfg.notify_on_failure:
                 notify("KaizenLog 失敗", f"{args.command}: {e}")
+        return 1
+    except Exception as e:
+        # 想定外の例外でも「静かな故障」にしない：無人の夜間実行では
+        # 実行ログへの記録と失敗通知が唯一の発覚経路になる
+        traceback.print_exc()
+        if not dry_run:
+            log_run(cfg.logs_path, args.command, ok=False,
+                    duration_seconds=monotonic() - start_time,
+                    error=f"想定外のエラー: {e.__class__.__name__}: {e}",
+                    retention_days=cfg.log_retention_days)
+            if cfg.notify_on_failure:
+                notify("KaizenLog 失敗", f"{args.command}: {e.__class__.__name__}: {e}")
         return 1
     if not dry_run:
         log_run(cfg.logs_path, args.command, ok=True,

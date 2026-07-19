@@ -134,6 +134,23 @@ class Config:
         return Path(self.vault_dir).expanduser() / self.memory_dir
 
 
+def existing_config_candidates() -> list[Path]:
+    """存在する設定ファイル候補を優先順で返す（先頭が実際に使われる）。
+
+    先頭2つの候補はカレントディレクトリ相対なので、タスクスケジューラ等
+    実行時のcwdが違う環境では別の設定が選ばれうる。doctor はこの一覧で
+    「設定の影武者」を警告する。
+    """
+    found: list[Path] = []
+    env = os.environ.get("KAIZENLOG_CONFIG")
+    if env and Path(env).expanduser().is_file():
+        found.append(Path(env).expanduser())
+    for cand in DEFAULT_CONFIG_LOCATIONS:
+        if cand.is_file():
+            found.append(cand)
+    return found
+
+
 def find_config_file(explicit: str | None = None) -> Path | None:
     if explicit:
         p = Path(explicit).expanduser()

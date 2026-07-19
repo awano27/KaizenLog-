@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from kaizenlog.advisor import AdvisorError, BackendUnavailable, generate_text
-from kaizenlog.config import LLMConfig
+from kaizenlog.config import LLMConfig, existing_config_candidates
 from kaizenlog.runlog import load_runs, log_run, render_status
 from kaizenlog.stats import missing_days
 
@@ -128,6 +128,17 @@ def test_generate_text_backend_none_does_not_retry():
     with pytest.raises(AdvisorError, match="none"):
         generate_text(_cfg(backend="none"), "sys", "user", sleep=sleeps.append)
     assert sleeps == []  # 設定エラーはリトライしない
+
+
+# ---- 設定ファイルの影武者検出 ----
+
+def test_existing_config_candidates_orders_cwd_first(tmp_path, monkeypatch):
+    """カレントの kaizenlog.toml が最優先で、他の候補も列挙される。"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "kaizenlog.toml").write_text("[general]\n", encoding="utf-8")
+    (tmp_path / "config.toml").write_text("[general]\n", encoding="utf-8")
+    found = existing_config_candidates()
+    assert [p.name for p in found[:2]] == ["kaizenlog.toml", "config.toml"]
 
 
 # ---- 欠損日検出 ----

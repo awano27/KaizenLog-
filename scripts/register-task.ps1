@@ -36,13 +36,17 @@ if (-not $kaizenlog) {
     exit 1
 }
 
-$action = New-ScheduledTaskAction -Execute $kaizenlog -Argument "run"
+# 作業フォルダを登録時のカレントに固定する。
+# これがないとタスクは C:\Windows\System32 で実行され、カレント優先の設定解決
+# （./kaizenlog.toml → %APPDATA%）により手動実行と別の設定を拾う事故が起きる。
+$workDir = (Get-Location).Path
+$action = New-ScheduledTaskAction -Execute $kaizenlog -Argument "run" -WorkingDirectory $workDir
 $trigger = New-ScheduledTaskTrigger -Daily -At $Time
 # PCがスリープしていた場合、次回起動時に実行する
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1)
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
-Write-Host "タスク '$TaskName' を登録しました（毎日 $Time に実行）。"
+Write-Host "タスク '$TaskName' を登録しました（毎日 $Time に実行 / 作業フォルダ: $workDir）。"
 
 if ($Weekly) {
     if (-not $VaultDir) {
