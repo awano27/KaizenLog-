@@ -54,6 +54,7 @@ from .skill_manager import (
 from .classifier import Classifier
 from .collector import ActivityWatchClient, ActivityWatchError, collect_day, collect_input
 from .focus import compute_input_stats
+from .intervention import detect_time_sinks, render_leechblock_options, render_plan, suggest_rules
 from .config import Config, load_config
 from .experiments import (
     METRIC_DESCRIPTIONS,
@@ -148,6 +149,50 @@ def cmd_backfill(cfg: Config, days: int, end_day: date) -> int:
             print(f"⚠️  {d} の補完に失敗: {e}", file=sys.stderr)
             break  # ActivityWatch自体に繋がらないなら以降も無駄
     return done
+
+
+def cmd_block(cfg: Config, end_day: date, days: int, min_minutes: float,
+              write: bool, out: str | None) -> int:
+    """時間泥棒を検出し、LeechBlock NGのブロックルールと効果測定実験を生成する。"""
+    stats_list = load_stats(cfg.stats_path, days, end_day)
+    if not stats_list:
+        print("❌ 日次統計がまだありません。まず `kaizenlog generate` を数日分実行してください"
+              "（過去分は `kaizenlog backfill`）。", file=sys.stderr)
+        return 1
+
+    sinks = detect_time_sinks(stats_list, cfg.rules, min_avg_minutes=min_minutes)
+    rules = suggest_rules(sinks)
+    print(render_plan(sinks, rules))
+    if not rules:
+        return 0
+    if not write:
+        print("\n👉 適用するには: kaizenlog block --write")
+        return 0
+
+    # 1) LeechBlock インポートファイル（適用は人間がブラウザでインポートする）
+    out_path = Path(out) if out else cfg.stats_path.parent / "leechblock-options.txt"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(render_leechblock_options(rules), encoding="utf-8")
+    print(f"\n✅ ブロックルールを書き出しました: {out_path}")
+
+    # 2) 効果測定のカイゼン実験を起票（毎晩の generate が自動計測）
+    for rule in rules:
+        title = f"介入 {rule.set_name.removeprefix('KZN: ')}"
+        try:
+            path = create_experiment(
+                cfg.experiments_path, title, rule.metric, rule.target,
+                today=end_day, deadline=end_day + timedelta(days=14),
+                hypothesis=f"{rule.evidence}。LeechBlockの制限で目標まで下げられるはず。",
+            )
+            print(f"🧪 実験を起票: {path.name}（{rule.metric} {rule.target}）")
+        except ExperimentError as e:
+            print(f"⚠️  実験の起票をスキップ: {e}")
+
+    print("\n👉 次の手順（人間の承認ゲート）:")
+    print("   1. ブラウザの LeechBlock NG → Options → Import Options で上記ファイルを選択")
+    print("   2. 適用後は毎晩の kaizenlog run が効果を自動計測します")
+    print("   3. 2週間後の週次レビューが採用/棄却を判定します")
+    return 0
 
 
 def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
@@ -531,6 +576,14 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--days", type=int, default=14, help="遡る日数（デフォルト14）")
     pr.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
     pr.add_argument("--min-count", type=int, default=3, help="レポートする最低反復回数（デフォルト3）")
+    blk = sub.add_parser("block", help="時間泥棒からLeechBlockのブロックルールを生成（介入）")
+    blk.add_argument("--days", type=int, default=14, help="分析する日数（デフォルト14）")
+    blk.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
+    blk.add_argument("--min-minutes", type=float, default=15.0,
+                     help="対象とする平均時間/日の下限（デフォルト15分）")
+    blk.add_argument("--write", action="store_true",
+                     help="ルールファイルの書き出しと効果測定実験の起票まで行う")
+    blk.add_argument("--out", help="ルールファイルの出力先（省略時: <vault>/.kaizenlog/leechblock-options.txt）")
     sub.add_parser("init-config")
 
     args = parser.parse_args(argv)
@@ -589,6 +642,12 @@ def main(argv: list[str] | None = None) -> int:
         end_day = _parse_date(args.date, tz)
         cmd_prompts(cfg, args.days, end_day, args.min_count)
         return 0
+
+    if args.command == "block":
+        tz = ZoneInfo(cfg.timezone)
+        end_day = _parse_date(args.date, tz)
+        return cmd_block(cfg, end_day, days=args.days, min_minutes=args.min_minutes,
+                         write=args.write, out=args.out)
 
     if args.command == "experiment":
         if args.exp_command == "new":
