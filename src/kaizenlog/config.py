@@ -61,6 +61,8 @@ DEFAULT_RULES: list[dict] = [
 @dataclass
 class LLMConfig:
     backend: str = "copilot-cli"  # "claude-code-cli" | "copilot-cli" | "openai-compatible" | "none"
+    # 指定バックエンドが利用できないとき openai-compatible（Ollama等）へ自動切替
+    fallback_to_local: bool = True
     # システムプロンプト: 同梱テンプレート名（daily_advisor / privacy_safe 等）またはファイルパス
     system_prompt: str = "daily_advisor"
     # claude-code-cli
@@ -200,6 +202,7 @@ def load_config(path: str | None = None) -> Config:
 
     llm = data.get("llm", {})
     cfg.llm.backend = llm.get("backend", cfg.llm.backend)
+    cfg.llm.fallback_to_local = bool(llm.get("fallback_to_local", cfg.llm.fallback_to_local))
     cfg.llm.system_prompt = llm.get("system_prompt", cfg.llm.system_prompt)
     cfg.llm.lookback_days = int(llm.get("lookback_days", cfg.llm.lookback_days))
     cc = llm.get("claude_code_cli", {})

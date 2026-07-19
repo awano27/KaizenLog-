@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from kaizenlog.advisor import AdvisorError, generate_text
+from kaizenlog.advisor import AdvisorError, BackendUnavailable, generate_text
 from kaizenlog.config import LLMConfig
 from kaizenlog.runlog import load_runs, log_run, render_status
 from kaizenlog.stats import missing_days
@@ -47,8 +47,9 @@ def test_load_runs_skips_broken_lines(tmp_path):
 
 # ---- LLMリトライ ----
 
-def _cfg(backend="copilot-cli", retries=2):
-    return LLMConfig(backend=backend, retries=retries, retry_wait_seconds=1)
+def _cfg(backend="copilot-cli", retries=2, fallback=True):
+    return LLMConfig(backend=backend, retries=retries, retry_wait_seconds=1,
+                     fallback_to_local=fallback)
 
 
 def test_generate_text_retries_then_succeeds(monkeypatch):
@@ -74,7 +75,52 @@ def test_generate_text_raises_after_all_retries(monkeypatch):
 
     monkeypatch.setattr("kaizenlog.advisor._call_copilot_cli", always_fail)
     with pytest.raises(AdvisorError, match="恒久エラー"):
-        generate_text(_cfg(retries=1), "sys", "user", sleep=lambda s: None)
+        generate_text(_cfg(retries=1, fallback=False), "sys", "user", sleep=lambda s: None)
+
+
+# ---- ローカルLLMフォールバック ----
+
+def test_generate_text_falls_back_to_local(monkeypatch):
+    """CLI未インストール時はリトライ待ちせず即ローカルLLMに切り替える。"""
+    def missing_cli(cfg, system, user):
+        raise BackendUnavailable("copilot が見つかりません")
+
+    monkeypatch.setattr("kaizenlog.advisor._call_copilot_cli", missing_cli)
+    monkeypatch.setattr("kaizenlog.advisor._call_openai_compatible",
+                        lambda cfg, system, user: "ローカルLLMの提案")
+    sleeps = []
+    result = generate_text(_cfg(), "sys", "user", sleep=sleeps.append)
+    assert result == "ローカルLLMの提案"
+    assert sleeps == []  # 未インストールはリトライしない（即フォールバック）
+
+
+def test_generate_text_fallback_disabled(monkeypatch):
+    def missing_cli(cfg, system, user):
+        raise BackendUnavailable("copilot が見つかりません")
+
+    called = []
+    monkeypatch.setattr("kaizenlog.advisor._call_copilot_cli", missing_cli)
+    monkeypatch.setattr("kaizenlog.advisor._call_openai_compatible",
+                        lambda cfg, system, user: called.append(1) or "呼ばれてはいけない")
+    with pytest.raises(AdvisorError, match="copilot が見つかりません"):
+        generate_text(_cfg(fallback=False), "sys", "user", sleep=lambda s: None)
+    assert called == []
+
+
+def test_generate_text_all_backends_fail_reports_both(monkeypatch):
+    def missing_cli(cfg, system, user):
+        raise BackendUnavailable("copilot が見つかりません")
+
+    def ollama_down(cfg, system, user):
+        raise BackendUnavailable("LLM API に接続できません")
+
+    monkeypatch.setattr("kaizenlog.advisor._call_copilot_cli", missing_cli)
+    monkeypatch.setattr("kaizenlog.advisor._call_openai_compatible", ollama_down)
+    with pytest.raises(AdvisorError) as ei:
+        generate_text(_cfg(), "sys", "user", sleep=lambda s: None)
+    msg = str(ei.value)
+    assert "copilot が見つかりません" in msg
+    assert "LLM API に接続できません" in msg
 
 
 def test_generate_text_backend_none_does_not_retry():

@@ -81,38 +81,86 @@ def _check_activitywatch(c: Check, cfg: Config) -> None:
         c.warn("AFK watcherが見つかりません（離席中の時間も計上されます）")
 
 
+def _list_api_models(base_url: str, headers: dict) -> list[str] | None:
+    """OpenAI互換APIのモデル一覧を取得する。取得・解釈できなければ None。"""
+    try:
+        r = requests.get(f"{base_url}/models", headers=headers, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        ids = [m.get("id") for m in data.get("data", []) if isinstance(m, dict)]
+        return [i for i in ids if i] or None
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def _check_openai_compatible(c: Check, llm, *, as_fallback: bool, essential: bool = True) -> None:
+    """openai-compatible（Ollama / GitHub Models等）の接続とモデル存在を確認する。
+
+    essential=False は「主バックエンドが健在で、これは予備経路」の場合。
+    そのときだけ問題を警告に留める（主が欠けた状態で予備も死んでいたらエラー）。
+    """
+    label = "フォールバック先ローカルLLM" if as_fallback else "LLM API"
+    report_problem = c.error if essential else c.warn
+    headers = {}
+    api_key = os.environ.get(llm.api_key_env, "")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+        if not as_fallback:
+            c.ok(f"APIキー検出（環境変数 {llm.api_key_env}）")
+    elif not as_fallback:
+        c.warn(f"環境変数 {llm.api_key_env} が未設定（Ollamaなら不要、クラウドAPIなら必須）")
+
+    try:
+        r = requests.get(f"{llm.base_url}/models", headers=headers, timeout=15)
+        if r.status_code >= 500:
+            report_problem(f"{label} がエラー応答: HTTP {r.status_code}")
+            return
+    except requests.RequestException as e:
+        report_problem(f"{label} ({llm.base_url}) に接続できません: {e.__class__.__name__}。"
+                       "Ollamaの場合は起動を確認してください")
+        return
+
+    # 設定されたモデルが実際に利用可能かまで確認する（未pullのモデル指定を実行前に検出）
+    models = _list_api_models(llm.base_url, headers)
+    if models is not None and llm.model not in models:
+        candidates = ", ".join(sorted(models)[:5])
+        report_problem(f"{label}: モデル '{llm.model}' がありません（利用可能: {candidates} 等）。"
+                       f"`ollama pull {llm.model}` するか config の model を変更してください")
+        return
+    c.ok(f"{label} 応答あり: {llm.base_url}（model: {llm.model}）")
+
+
 def _check_llm(c: Check, cfg: Config) -> None:
     llm = cfg.llm
     if llm.backend == "none":
         c.warn("LLMバックエンド: none（改善提案・日報のLLMモードは無効）")
         return
-    if llm.backend == "copilot-cli":
-        path = shutil.which(llm.copilot_command)
+
+    cli_checks = {
+        "copilot-cli": ("Copilot CLI", llm.copilot_command,
+                        "`npm install -g @github/copilot` 後、新しいシェルで再確認してください"),
+        "claude-code-cli": ("Claude Code CLI", llm.claude_command,
+                            "https://claude.com/claude-code からインストールしてください"),
+    }
+    if llm.backend in cli_checks:
+        name, command, hint = cli_checks[llm.backend]
+        path = shutil.which(command)
         if path:
-            c.ok(f"Copilot CLI 検出: {path}")
+            c.ok(f"{name} 検出: {path}")
         else:
-            c.error(f"Copilot CLI ('{llm.copilot_command}') が見つかりません。"
-                    "`npm install -g @github/copilot` 後、新しいシェルで再確認してください")
+            # フォールバックが効く場合は起動不能ではないため警告に留める
+            report = c.warn if llm.fallback_to_local else c.error
+            report(f"{name} ('{command}') が見つかりません。{hint}")
+    elif llm.backend == "openai-compatible":
+        _check_openai_compatible(c, llm, as_fallback=False)
         return
-    if llm.backend == "openai-compatible":
-        headers = {}
-        api_key = os.environ.get(llm.api_key_env, "")
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-            c.ok(f"APIキー検出（環境変数 {llm.api_key_env}）")
-        else:
-            c.warn(f"環境変数 {llm.api_key_env} が未設定（Ollamaなら不要、クラウドAPIなら必須）")
-        try:
-            r = requests.get(f"{llm.base_url}/models", headers=headers, timeout=15)
-            if r.status_code < 500:
-                c.ok(f"LLM API 応答あり: {llm.base_url}（model: {llm.model}）")
-            else:
-                c.error(f"LLM API がエラー応答: HTTP {r.status_code}")
-        except requests.RequestException as e:
-            c.error(f"LLM API ({llm.base_url}) に接続できません: {e.__class__.__name__}。"
-                    "Ollamaの場合は起動を確認してください")
+    else:
+        c.error(f"不明なLLMバックエンド: {llm.backend}")
         return
-    c.error(f"不明なLLMバックエンド: {llm.backend}")
+
+    if llm.fallback_to_local:
+        # 主CLIが欠けているなら予備経路が生命線 → その障害はエラー扱い
+        _check_openai_compatible(c, llm, as_fallback=True, essential=(path is None))
 
 
 def _check_aiwork(c: Check, cfg: Config) -> None:

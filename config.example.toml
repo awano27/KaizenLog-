@@ -44,9 +44,11 @@ claude_projects_dir = "~/.claude/projects"
 # "openai-compatible" : GitHub Models / Ollama などOpenAI互換API
 # "none"              : 改善提案をスキップ（ログ生成のみ）
 #
-# 注: どのバックエンドも見つからない場合、自動的に Ollama (http://localhost:11434/v1) にフォールバック。
-#     Ollama も起動していない場合のみ、エラーが発生します。
+# 注: 指定バックエンドが利用できない場合、[llm.openai_compatible] の設定
+#     （既定: Ollama http://localhost:11434/v1）に自動フォールバックします。
+#     無効にするには fallback_to_local = false。
 backend = "copilot-cli"
+fallback_to_local = true
 # システムプロンプト: 同梱テンプレート名（daily_advisor / privacy_safe /
 # weekly_review / ai_work_deep_review）または自作プロンプトのファイルパス
 system_prompt = "daily_advisor"

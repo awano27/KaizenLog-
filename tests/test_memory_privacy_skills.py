@@ -201,19 +201,27 @@ def _fake_run(stdout="", stderr="", returncode=0):
     return run
 
 
+def _fake_which(monkeypatch, path="C:/fake/claude.exe"):
+    # CLIの有無に依存せずテストできるよう、コマンド解決（shutil.which）を固定する
+    monkeypatch.setattr("kaizenlog.advisor.shutil.which", lambda cmd: path)
+
+
 def test_claude_backend_parses_json(monkeypatch):
+    _fake_which(monkeypatch)
     payload = json.dumps({"result": "改善提案です", "session_id": "s"})
     monkeypatch.setattr("kaizenlog.advisor.subprocess.run", _fake_run(stdout=payload))
     assert _call_claude_code_cli(LLMConfig(), "sys", "user") == "改善提案です"
 
 
 def test_claude_backend_falls_back_to_plain_text(monkeypatch):
+    _fake_which(monkeypatch)
     monkeypatch.setattr("kaizenlog.advisor.subprocess.run",
                         _fake_run(stdout="プレーンな応答"))
     assert _call_claude_code_cli(LLMConfig(), "sys", "user") == "プレーンな応答"
 
 
 def test_claude_backend_error_includes_stderr(monkeypatch):
+    _fake_which(monkeypatch)
     monkeypatch.setattr("kaizenlog.advisor.subprocess.run",
                         _fake_run(stderr="Not logged in", returncode=1))
     with pytest.raises(AdvisorError, match="Not logged in"):
@@ -221,8 +229,6 @@ def test_claude_backend_error_includes_stderr(monkeypatch):
 
 
 def test_claude_backend_missing_cli(monkeypatch):
-    def raise_fnf(cmd, **kwargs):
-        raise FileNotFoundError()
-    monkeypatch.setattr("kaizenlog.advisor.subprocess.run", raise_fnf)
+    _fake_which(monkeypatch, path=None)
     with pytest.raises(AdvisorError, match="インストール"):
         _call_claude_code_cli(LLMConfig(), "sys", "user")

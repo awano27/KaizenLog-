@@ -462,7 +462,23 @@ def cmd_init_config() -> None:
     print(f"✅ 設定ファイルの雛形を作成しました: {out.resolve()}")
 
 
+def _harden_console_encoding() -> None:
+    """絵文字入りメッセージがcp932コンソール/パイプで UnicodeEncodeError にならないようにする。
+
+    日本語Windowsではリダイレクト時のstdoutがcp932になり、✅/⚠️等の出力で
+    クラッシュする（タスクスケジューラの夜間実行が典型）。表示できない文字は
+    置換して、出力エラーで本処理を落とさない。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _harden_console_encoding()
     parser = argparse.ArgumentParser(prog="kaizenlog", description=__doc__)
     parser.add_argument("--config", help="設定ファイル（TOML）のパス")
     sub = parser.add_subparsers(dest="command", required=True)
