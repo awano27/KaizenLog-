@@ -96,6 +96,50 @@ def test_claude_prompt_passed_via_stdin(monkeypatch):
     assert all("user prompt" not in c for c in captured["cmd"])  # 引数には載らない
 
 
+# ---- advisor: 認証切れは即フォールバック（B-1: 実CLIで採取した401封筒）----
+# 実CLI(claude 2.1.199)の実挙動: 認証切れは stderr 空・stdout のJSONに 401 が入り、
+# returncode は 1(subprocess経由) にも 0(TTY) にもなりうる。両方を検出できること。
+
+_AUTH_401_ENVELOPE = json.dumps({
+    "type": "result", "subtype": "success", "is_error": True,
+    "api_error_status": 401,
+    "result": "Failed to authenticate. API Error: 401 OAuth access token has expired. "
+              "Re-authenticate to continue.",
+})
+
+
+def test_claude_auth_error_returncode1_stdout_is_backend_unavailable(monkeypatch):
+    monkeypatch.setattr("kaizenlog.advisor.shutil.which", lambda c: "C:/fake/claude.exe")
+    # stderr は空、401情報は stdout にのみ入る（旧コードは stderr だけ見て取りこぼした）
+    monkeypatch.setattr("kaizenlog.advisor.subprocess.run",
+                        _fake_run(stdout=_AUTH_401_ENVELOPE, stderr="", returncode=1))
+    with pytest.raises(BackendUnavailable, match="未認証"):
+        _call_claude_code_cli(LLMConfig(), "sys", "user")
+
+
+def test_claude_auth_error_exit0_envelope_is_backend_unavailable(monkeypatch):
+    monkeypatch.setattr("kaizenlog.advisor.shutil.which", lambda c: "C:/fake/claude.exe")
+    monkeypatch.setattr("kaizenlog.advisor.subprocess.run",
+                        _fake_run(stdout=_AUTH_401_ENVELOPE, returncode=0))
+    with pytest.raises(BackendUnavailable, match="未認証"):
+        _call_claude_code_cli(LLMConfig(), "sys", "user")
+
+
+def test_claude_auth_error_triggers_fallback_not_retry(monkeypatch):
+    # 未認証(BackendUnavailable)はリトライせず即座に次バックエンドへ落ちる
+    monkeypatch.setattr("kaizenlog.advisor.shutil.which", lambda c: "C:/fake/claude.exe")
+    monkeypatch.setattr("kaizenlog.advisor.subprocess.run",
+                        _fake_run(stdout=_AUTH_401_ENVELOPE, returncode=1))
+    monkeypatch.setattr("kaizenlog.advisor._call_openai_compatible",
+                        lambda cfg, s, u: "fallback advice")
+    sleeps = []
+    from kaizenlog.advisor import generate_text
+    cfg = LLMConfig(backend="claude-code-cli", fallback_to_local=True,
+                    retries=2, retry_wait_seconds=20)
+    assert generate_text(cfg, "s", "u", sleep=sleeps.append) == "fallback advice"
+    assert sleeps == []  # 認証切れで20秒リトライを空回りしない
+
+
 # ---- advisor: Windowsコマンドライン上限と.CMD無害化 ----
 
 def test_cmdline_length_guard_raises_backend_unavailable():

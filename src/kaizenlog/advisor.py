@@ -201,12 +201,20 @@ def _call_claude_code_cli(cfg: LLMConfig, system_prompt: str, user_prompt: str) 
         raise AdvisorError(f"Claude Code CLI がタイムアウトしました（{cfg.timeout_seconds}秒）。") from e
     if result.returncode != 0:
         stderr = result.stderr.strip()[:500]
-        if "log" in stderr.lower() or "auth" in stderr.lower():
+        stdout = result.stdout.strip()[:500]
+        # 認証エラーの本文はstderrではなく stdout のJSON（result/api_error_status）に
+        # 入ることがある（実CLI: exit 1・stderr空・stdoutに "401 OAuth ... expired"）。
+        # 両方を見て判定しないと、リトライで直らない未認証を一時エラー扱いして
+        # 20秒×リトライを空回りさせた挙句、意味不明な空メッセージを出す
+        detail = stderr or stdout
+        combined = f"{stderr}\n{stdout}".lower()
+        if any(k in combined for k in ("authenticate", "unauthor", "oauth",
+                                       "/login", "log in", "401", "api key")):
             # 未認証はリトライで直らない → 即フォールバック対象
             raise BackendUnavailable(
                 f"Claude Code CLI が未認証の可能性があります。"
-                f"`claude` を対話起動して /login してください:\n{stderr}")
-        raise AdvisorError(f"Claude Code CLI がエラーを返しました:\n{stderr}")
+                f"`claude` を対話起動して /login してください:\n{detail}")
+        raise AdvisorError(f"Claude Code CLI がエラーを返しました:\n{detail}")
     stdout = result.stdout.strip()
     if not stdout:
         raise AdvisorError("Claude Code CLI の出力が空でした。")
@@ -221,6 +229,13 @@ def _call_claude_code_cli(cfg: LLMConfig, system_prompt: str, user_prompt: str) 
         result_text = data.get("result")
         if not data.get("is_error") and isinstance(result_text, str) and result_text.strip():
             return result_text.strip()
+        # 認証切れは exit 0・is_error:true・api_error_status:401 で返ることがある。
+        # リトライで直らないので即フォールバック対象（BackendUnavailable）
+        err_body = f"{data.get('api_error_status', '')} {result_text or ''}".lower()
+        if data.get("api_error_status") in (401, 403) or "authenticate" in err_body:
+            raise BackendUnavailable(
+                f"Claude Code CLI が未認証です。`claude` を対話起動して /login してください:\n"
+                f"{str(result_text)[:300]}")
         subtype = data.get("subtype", "unknown")
         raise AdvisorError(
             f"Claude Code CLI がエラー応答を返しました（subtype: {subtype}）:\n{stdout[:500]}")
