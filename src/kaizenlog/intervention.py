@@ -35,7 +35,9 @@ SET_NAME_PREFIX = "KZN: "
 SITE_HINTS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"youtube", re.IGNORECASE), "youtube.com"),
     (re.compile(r"netflix", re.IGNORECASE), "netflix.com"),
-    (re.compile(r"twitter|\bx\.com\b", re.IGNORECASE), "twitter.com x.com"),
+    # Xのウィンドウタイトルは「ホーム / X」等で "x.com" を含まないため \bx\b で拾う
+    # （エンタメ分類済みブロックのみが対象なので誤爆リスクは分類器と同等）
+    (re.compile(r"twitter|\bx\b|x\.com", re.IGNORECASE), "x.com twitter.com"),
     (re.compile(r"reddit", re.IGNORECASE), "reddit.com"),
     (re.compile(r"tiktok", re.IGNORECASE), "tiktok.com"),
     (re.compile(r"twitch", re.IGNORECASE), "twitch.tv"),
@@ -67,17 +69,32 @@ class TimeSink:
 class BlockRule:
     set_name: str
     sites: str
-    times: str        # "1700-1900" 形式。空なら終日
+    times: str        # LeechBlockのtimes形式（"1700-1900" / 深夜跨ぎは分割済み）。空なら終日
     limit_mins: int
     limit_period: int  # 秒（3600=毎時 / 86400=毎日）
     metric: str
     target: str       # 効果測定実験の目標（例 "<= 20"）
     evidence: str
+    window: tuple[int, int] | None = None  # 表示用の時間帯（開始時, 終了時）
 
     @property
     def conj_mode(self) -> bool:
         # 時間帯あり = 「その時間帯の中で」上限を超えたらブロック（AND条件）
         return bool(self.times)
+
+
+def format_times(start_hour: int, end_hour: int) -> str:
+    """時間帯ウィンドウを LeechBlock の times 形式にする。
+
+    LeechBlock は start >= end の期間を「継続時間なし」として黙って捨てる
+    （cleanTimePeriods）。深夜を跨ぐウィンドウは 2400 で分割し、終了0時は
+    2400 と表記しないとルールが無言で無効化される。
+    """
+    if 0 < end_hour <= start_hour:
+        return f"{start_hour:02d}00-2400,0000-{end_hour:02d}00"
+    if end_hour == 0:
+        return f"{start_hour:02d}00-2400"
+    return f"{start_hour:02d}00-{end_hour:02d}00"
 
 
 def _classify_domain(classifier: Classifier, domain: str) -> str:
@@ -143,16 +160,24 @@ def detect_time_sinks(
                     break
 
     sinks: list[TimeSink] = []
-    for site, minutes in site_minutes.items():
-        sinks.append(TimeSink(domains=site, label=site, total_minutes=minutes,
-                              days_with_data=days, source="site"))
-    covered = {d for s in sinks for d in s.domains.split()}
+    consumed_sites: set[str] = set()
+    # 同じドメインを実測とタイトル推定の両方が指す場合は大きい方を採用する。
+    # 実測を無条件優先すると、拡張導入直後（実測が数分だけ）に45分/日の
+    # 時間泥棒がしきい値未満となり、検出から丸ごと消えてしまう。
     for domains, (label, minutes) in hint_minutes.items():
-        if any(d in covered for d in domains.split()):
-            continue  # 実測がある場合はそちらを優先
+        overlap = [d for d in domains.split() if d in site_minutes]
+        site_total = sum(site_minutes[d] for d in overlap)
+        if overlap and site_total >= minutes:
+            continue  # 実測の方が大きい → site ソースに任せる
+        consumed_sites.update(overlap)
         sinks.append(TimeSink(domains=domains, label=label, total_minutes=minutes,
                               days_with_data=days,
                               hour_minutes=hint_hours.get(domains, {}), source="title"))
+    for site, minutes in site_minutes.items():
+        if site in consumed_sites:
+            continue
+        sinks.append(TimeSink(domains=site, label=site, total_minutes=minutes,
+                              days_with_data=days, source="site"))
 
     return sorted(
         [s for s in sinks if s.avg_minutes >= min_avg_minutes],
@@ -196,14 +221,15 @@ def suggest_rules(sinks: list[TimeSink], max_rules: int = 5) -> list[BlockRule]:
         target_minutes = max(10, int(round(sink.avg_minutes / 2 / 5) * 5))
         target = f"<= {target_minutes}"
         if window:
-            times = f"{window[0]:02d}00-{window[1]:02d}00"
+            end_label = f"{window[1]}時" if window[1] > window[0] else f"翌{window[1]}時"
             evidence = (f"{sink.label}: 平均 {sink.avg_minutes:.0f}分/日、"
-                        f"主に {window[0]}時〜{window[1]}時に集中")
+                        f"主に {window[0]}時〜{end_label}に集中")
             out.append(BlockRule(
                 set_name=f"{SET_NAME_PREFIX}{sink.label}",
-                sites=sink.domains, times=times,
+                sites=sink.domains, times=format_times(*window),
                 limit_mins=10, limit_period=3600,
                 metric=metric, target=target, evidence=evidence,
+                window=window,
             ))
         else:
             evidence = (f"{sink.label}: 平均 {sink.avg_minutes:.0f}分/日（終日に分散）"
@@ -246,9 +272,10 @@ def render_plan(sinks: list[TimeSink], rules: list[BlockRule]) -> str:
                 "（平均15分/日以上のエンタメサイトが対象）。")
     lines = ["# LeechBlock 介入プラン", ""]
     for rule in rules:
-        if rule.times:
-            action = (f"{rule.times[:2]}時〜{rule.times[5:7]}時は"
-                      f"1時間あたり{rule.limit_mins}分まで")
+        if rule.window:
+            start_h, end_h = rule.window
+            end_label = f"{end_h}時" if end_h > start_h else f"翌{end_h}時"
+            action = f"{start_h}時〜{end_label}は1時間あたり{rule.limit_mins}分まで"
         else:
             action = f"1日あたり{rule.limit_mins}分まで"
         lines.append(f"- **{rule.set_name}** — {action}")

@@ -33,6 +33,9 @@ def default_frontmatter(day: date) -> str:
 def upsert_section(content: str, marker: str, section_md: str) -> str:
     """マーカー区間があれば置換、なければ末尾に追加する。"""
     start_tag, end_tag = _start_tag(marker), _end_tag(marker)
+    # 中身に同じマーカーが紛れ込むと（LLMがマーカーを復唱した場合など）、
+    # 次回のupsertが偽の終了タグで区間を誤認しノートを壊す。事前に除去する。
+    section_md = section_md.replace(start_tag, "").replace(end_tag, "")
     wrapped = f"{start_tag}\n{section_md.rstrip()}\n{end_tag}"
 
     start_idx = content.find(start_tag)

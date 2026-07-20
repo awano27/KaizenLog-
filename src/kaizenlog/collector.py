@@ -11,6 +11,25 @@ import requests
 
 # タブ情報の合成対象とするブラウザのプロセス名
 BROWSER_APP_RE = re.compile(r"chrome|msedge|\bedge\b|firefox|brave|vivaldi|opera", re.IGNORECASE)
+# WebView2ホスト（Teams/Outlook等の埋め込みブラウザ）は "msedge" を含むが
+# ブラウザではない。タブ情報を合成すると他アプリの時間にURLが誤帰属する。
+NON_BROWSER_APP_RE = re.compile(r"webview", re.IGNORECASE)
+
+# webバケットID中のブラウザ名 → そのブラウザのプロセス名パターン。
+# aw-watcher-web はブラウザごとに別バケットを作るため、Chromeのバケットを
+# Firefoxのウィンドウ時間に合成しないよう対応付ける。
+BUCKET_BROWSER_APP_RES: dict[str, re.Pattern] = {
+    "chrome": re.compile(r"chrome", re.IGNORECASE),
+    "firefox": re.compile(r"firefox", re.IGNORECASE),
+    "edge": re.compile(r"msedge|\bedge\b", re.IGNORECASE),
+    "brave": re.compile(r"brave", re.IGNORECASE),
+    "vivaldi": re.compile(r"vivaldi", re.IGNORECASE),
+    "opera": re.compile(r"opera", re.IGNORECASE),
+}
+
+
+def _is_browser_app(app: str) -> bool:
+    return bool(BROWSER_APP_RE.search(app)) and not NON_BROWSER_APP_RE.search(app)
 
 
 @dataclass
@@ -103,10 +122,18 @@ def _intersect(
 
 
 def active_intervals(afk_raw: list[dict]) -> list[tuple[datetime, datetime]]:
-    """AFKウォッチャーのイベントから「PCの前にいた」区間を抽出する。"""
-    intervals = []
+    """AFKウォッチャーのイベントから「PCの前にいた」区間を抽出する。
+
+    重複・隣接する区間はマージする（重複したままclip_to_activeに渡すと
+    同じ時間が二重にイベント化されるため）。
+    """
+    intervals: list[tuple[datetime, datetime]] = []
     for start, end, data in _parse_events(afk_raw):
-        if data.get("status") == "not-afk":
+        if data.get("status") != "not-afk":
+            continue
+        if intervals and start <= intervals[-1][1]:
+            intervals[-1] = (intervals[-1][0], max(intervals[-1][1], end))
+        else:
             intervals.append((start, end))
     return intervals
 
@@ -137,18 +164,24 @@ def clip_to_active(
 
 
 def enrich_with_web(
-    events: list[ActivityEvent], web_raw: list[dict]
+    events: list[ActivityEvent], web_raw: list[dict],
+    app_re: re.Pattern | None = None,
 ) -> list[ActivityEvent]:
     """ブラウザのウィンドウイベントに、同時刻のタブ情報（URL・タイトル）を合成する。
 
     ブラウザがアクティブな区間とタブイベント（aw-watcher-web）の交差部分を
     新しいイベントに分割し、タブ側のURL/タイトルを採用する。タブ情報が無い
-    残り区間は元のイベントのまま残す。非ブラウザのイベントは変更しない。
+    残り区間は元のイベントのまま残す。非ブラウザのイベント・既にURL付きの
+    イベント（他バケットで合成済み）は変更しない。
+
+    app_re を渡すと、そのブラウザのプロセスにだけ合成する（バケットと
+    ブラウザの対応付け用。省略時は全ブラウザ）。
     """
     tabs = _parse_events(web_raw)
     out: list[ActivityEvent] = []
     for ev in events:
-        if not BROWSER_APP_RE.search(ev.app):
+        matches = (app_re.search(ev.app) if app_re else _is_browser_app(ev.app))
+        if ev.url or not matches or not _is_browser_app(ev.app):
             out.append(ev)
             continue
         cursor = ev.start
@@ -181,6 +214,55 @@ def enrich_with_web(
     return out
 
 
+def _pick_busiest_bucket(
+    client: ActivityWatchClient, bucket_type: str,
+    day_start: datetime, day_end: datetime,
+) -> tuple[str | None, list[dict]]:
+    """指定タイプのバケットのうち、対象日のイベントが最も多いものを選ぶ。
+
+    ホスト名変更などで同タイプのバケットが複数残っている場合、辞書順で
+    先頭の（空かもしれない）バケットを掴むと、その日のデータを丸ごと
+    取りこぼす。イベント数で選べば常に「生きている」バケットを使える。
+    """
+    buckets = client.find_buckets(bucket_type)
+    if not buckets:
+        return None, []
+    if len(buckets) == 1:
+        return buckets[0], client.events(buckets[0], day_start, day_end)
+    best: tuple[str | None, list[dict]] = (None, [])
+    for bucket_id in buckets:
+        raw = client.events(bucket_id, day_start, day_end)
+        if best[0] is None or len(raw) > len(best[1]):
+            best = (bucket_id, raw)
+    return best
+
+
+def _clip_intervals_to_day(
+    intervals: list[tuple[datetime, datetime]],
+    day_start: datetime, day_end: datetime,
+) -> list[tuple[datetime, datetime]]:
+    """区間を日の範囲に収める。
+
+    ActivityWatchは範囲に「重なる」イベントを返すため、深夜を跨ぐイベントを
+    そのまま使うと前日と当日の両方で全時間が計上される（二重カウント）。
+    """
+    out = []
+    for start, end in intervals:
+        clipped = _intersect(start, end, day_start, day_end)
+        if clipped:
+            out.append(clipped)
+    return out
+
+
+def _bucket_browser_app_re(bucket_id: str) -> re.Pattern | None:
+    """webバケットIDからブラウザ名を推定し、対応するプロセス名パターンを返す。"""
+    lowered = bucket_id.lower()
+    for browser, app_re in BUCKET_BROWSER_APP_RES.items():
+        if browser in lowered:
+            return app_re
+    return None  # 不明なブラウザ → 全ブラウザ扱い
+
+
 def collect_day(
     client: ActivityWatchClient, day_start: datetime, day_end: datetime
 ) -> list[ActivityEvent]:
@@ -190,28 +272,30 @@ def collect_day(
     aw-watcher-web（ブラウザ拡張）が導入されていれば、ブラウザ時間を
     タブURL粒度に分割して返す。
     """
-    window_bucket = client.find_bucket("currentwindow")
+    window_bucket, window_raw = _pick_busiest_bucket(
+        client, "currentwindow", day_start, day_end)
     if window_bucket is None:
         raise ActivityWatchError(
             "ウィンドウウォッチャーのバケットが見つかりません。"
             "aw-watcher-window が動作しているか確認してください。"
         )
-    window_raw = client.events(window_bucket, day_start, day_end)
 
-    afk_bucket = client.find_bucket("afkstatus")
+    afk_bucket, afk_raw = _pick_busiest_bucket(client, "afkstatus", day_start, day_end)
     if afk_bucket is None:
-        events = clip_to_active(window_raw, [(day_start, day_end)])
+        intervals = [(day_start, day_end)]
     else:
-        afk_raw = client.events(afk_bucket, day_start, day_end)
-        intervals = active_intervals(afk_raw)
         # AFKデータが空の日はウィンドウイベントをそのまま採用する
-        events = clip_to_active(window_raw, intervals or [(day_start, day_end)])
+        intervals = active_intervals(afk_raw) or [(day_start, day_end)]
+    # 深夜を跨ぐイベントの二重カウントを防ぐため、常に日の範囲へクリップする
+    intervals = _clip_intervals_to_day(intervals, day_start, day_end) or [(day_start, day_end)]
+    events = clip_to_active(window_raw, intervals)
 
-    web_raw: list[dict] = []
+    # ブラウザごとのwebバケットを、そのブラウザのウィンドウ時間にだけ合成する
     for web_bucket in client.find_buckets("web.tab.current"):
-        web_raw.extend(client.events(web_bucket, day_start, day_end))
-    if web_raw:
-        events = enrich_with_web(events, web_raw)
+        web_raw = client.events(web_bucket, day_start, day_end)
+        if web_raw:
+            events = enrich_with_web(events, web_raw,
+                                     app_re=_bucket_browser_app_re(web_bucket))
     return events
 
 
@@ -219,7 +303,7 @@ def collect_input(
     client: ActivityWatchClient, day_start: datetime, day_end: datetime
 ) -> list[dict] | None:
     """入力量イベント（aw-watcher-input）を取得する。watcher未導入ならNone。"""
-    bucket = client.find_bucket("os.hid.input")
+    bucket, raw = _pick_busiest_bucket(client, "os.hid.input", day_start, day_end)
     if bucket is None:
         return None
-    return client.events(bucket, day_start, day_end)
+    return raw

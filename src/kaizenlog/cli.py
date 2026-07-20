@@ -95,7 +95,8 @@ def cmd_generate(cfg: Config, day: date) -> Path:
 
     # aw-watcher-input 導入時のみ集中ブロックを算出（未導入ならNone）
     input_raw = collect_input(client, day_start, day_end)
-    input_stats = compute_input_stats(input_raw) if input_raw is not None else None
+    input_stats = (compute_input_stats(input_raw, day_start=day_start, day_end=day_end)
+                   if input_raw is not None else None)
 
     section = render_markdown(summary, tz, min_block_minutes=cfg.min_block_minutes,
                               input_stats=input_stats)

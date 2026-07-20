@@ -212,8 +212,9 @@ def render_markdown(
             title = b.titles[0] if b.titles else ""
             if len(title) > 60:
                 title = title[:57] + "..."
-            title = title.replace("|", "\\|")
-            app = b.app.replace("|", "\\|")
+            # 改行・パイプはMarkdownテーブルの行構造を壊すため無害化する
+            title = " ".join(title.split()).replace("|", "\\|")
+            app = " ".join(b.app.split()).replace("|", "\\|")
             lines.append(
                 f"| {_fmt_time(b.start, tz)}-{_fmt_time(b.end, tz)} "
                 f"| {_fmt_minutes(b.minutes)} | {b.category} | {app} | {title} |"

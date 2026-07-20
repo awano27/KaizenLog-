@@ -16,7 +16,7 @@ from pathlib import Path
 from .aiwork import AISession
 from .focus import InputStats
 from .report import DailySummary
-from .vault import upsert_section
+from .vault import extract_section, upsert_section
 
 MEASUREMENTS_MARKER = "kaizenlog:measurements"
 
@@ -64,7 +64,13 @@ def parse_target(target: str) -> tuple[str, float]:
             f"target の形式が不正です: {target!r}（例: \"<= 15\", \">= 120\"）"
         )
     op = "==" if m.group(1) == "=" else m.group(1)
-    return op, float(m.group(2))
+    try:
+        value = float(m.group(2))
+    except ValueError as e:
+        # "1.2.3" のような値は正規表現を通るがfloat化できない。生のValueErrorの
+        # まま漏らすと呼び出し側のexcept ExperimentErrorを素通りして夜間実行が落ちる
+        raise ExperimentError(f"target の数値が不正です: {target!r}") from e
+    return op, value
 
 
 def target_met(value: float, op: str, target_value: float) -> bool:
@@ -154,9 +160,14 @@ def _set_frontmatter_field(content: str, key: str, value: str) -> str:
 
 
 def _parse_measurements(content: str) -> dict[date, float]:
+    # マーカー区間があればそこだけを読む。ノート全体を対象にすると、
+    # Notes欄などに手書きした日付始まりのテーブル行まで実測値として
+    # 吸い込み、次回のupsertで自動テーブルに混入してしまう。
+    section = extract_section(content, MEASUREMENTS_MARKER)
+    target = section if section is not None else content
     out: dict[date, float] = {}
     for m in re.finditer(
-        r"^\|\s*(\d{4}-\d{2}-\d{2})\s*\|\s*([\d.\-]+)\s*\|", content, re.MULTILINE
+        r"^\|\s*(\d{4}-\d{2}-\d{2})\s*\|\s*([\d.\-]+)\s*\|", target, re.MULTILINE
     ):
         try:
             out[date.fromisoformat(m.group(1))] = float(m.group(2))
@@ -173,7 +184,9 @@ def load_experiments(experiments_dir: Path) -> list[Experiment]:
     for path in sorted(experiments_dir.glob("*.md")):
         try:
             content = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # 他エディタ由来の非UTF-8ノート等は読める形式ではないためスキップ
+            # （クラッシュさせると夜間実行全体が止まる）
             continue
         fields, ok = _parse_frontmatter(content)
         if not ok or "metric" not in fields or "target" not in fields:
@@ -260,9 +273,11 @@ deadline: {deadline}
 
 {hypothesis}
 
+<!-- kaizenlog:measurements:start -->
 ## Measurements（自動計測）
 
 `kaizenlog generate` が毎晩ここに実測値を追記します。
+<!-- kaizenlog:measurements:end -->
 
 ## Notes
 

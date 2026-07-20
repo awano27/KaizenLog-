@@ -50,13 +50,15 @@ def test_detect_falls_back_to_block_titles():
     assert sinks[0].hour_minutes.get(17, 0) > 0
 
 
-def test_site_data_preferred_over_title_estimate():
+def test_site_data_preferred_when_comparable():
+    # 実測がタイトル推定と同等以上なら実測（正確な方）を採用
     stats = [_stats(f"2026-07-{d:02d}",
-                    by_site={"youtube.com": 30},
+                    by_site={"youtube.com": 50},
                     blocks=[_block(17, 45)]) for d in range(1, 8)]
     sinks = detect_time_sinks(stats, DEFAULT_RULES)
     assert len(sinks) == 1
     assert sinks[0].source == "site"
+    assert sinks[0].avg_minutes == 50.0
 
 
 def test_detect_empty_stats():

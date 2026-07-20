@@ -47,14 +47,28 @@ def compute_input_stats(
     raw: list[dict],
     min_block_minutes: float = FOCUS_MIN_MINUTES,
     max_gap_minutes: float = FOCUS_MAX_GAP_MINUTES,
+    day_start: datetime | None = None,
+    day_end: datetime | None = None,
 ) -> InputStats:
-    """入力イベントを集計する。rawが空でもゼロ値のInputStatsを返す。"""
+    """入力イベントを集計する。rawが空でもゼロ値のInputStatsを返す。
+
+    day_start/day_end を渡すとイベントを日の範囲にクリップする
+    （ActivityWatchは範囲に重なるイベントを返すため、深夜跨ぎの
+    イベントが前日と二重計上されるのを防ぐ）。
+    """
     presses = clicks = 0
     active_seconds = 0.0
+    active_cursor: datetime | None = None  # 重複区間を二重計上しないための走査位置
     runs: list[list[datetime]] = []  # [start, end] 入力が続いた区間（gap統合済み）
     gap = timedelta(minutes=max_gap_minutes)
 
     for start, end, data in _parse_events(raw):
+        if day_start is not None and start < day_start:
+            start = day_start
+        if day_end is not None and end > day_end:
+            end = day_end
+        if start >= end:
+            continue
         p = int(data.get("presses", 0) or 0)
         c = int(data.get("clicks", 0) or 0)
         moved = abs(float(data.get("deltaX", 0) or 0)) + abs(float(data.get("deltaY", 0) or 0))
@@ -62,7 +76,11 @@ def compute_input_stats(
             continue  # 無入力ハートビート（アイドル区間）は連続にカウントしない
         presses += p
         clicks += c
-        active_seconds += (end - start).total_seconds()
+        # 重複するハートビートがあっても実時間を二重計上しない（区間の和集合）
+        eff_start = start if active_cursor is None else max(start, active_cursor)
+        if eff_start < end:
+            active_seconds += (end - eff_start).total_seconds()
+        active_cursor = end if active_cursor is None else max(active_cursor, end)
         if runs and start - runs[-1][1] <= gap:
             runs[-1][1] = max(runs[-1][1], end)
         else:
