@@ -5,8 +5,22 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    """一時ファイルに書いてから os.replace で置き換えるアトミック書き込み。
+
+    夜間実行中のクラッシュ・電源断で半分だけ書けたファイル（不正なUTF-8・
+    壊れたJSON・欠けたノート）が残ると、以後の実行が読み込みで連鎖的に
+    失敗する。os.replace は同一ボリューム内でアトミックに完了する。
+    """
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, path)
 
 ACTIVITY_MARKER = "kaizenlog:activity"
 ADVICE_MARKER = "kaizenlog:advice"
@@ -60,9 +74,20 @@ def extract_heading_section(content: str, heading: str) -> str | None:
     level = 0
     body: list[str] = []
     found = False
+    in_fence = False
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("#"):
+        # コードフェンス内の「# コメント」やObsidianの「#タグ」を見出し扱いすると、
+        # そこでセクションが切れて以降のタスク行が黙って消える
+        if stripped.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            if found:
+                body.append(line)
+            continue
+        is_heading = (not in_fence
+                      and stripped.startswith("#")
+                      and stripped.lstrip("#")[:1] in (" ", "\t", ""))
+        if is_heading:
             hashes = len(stripped) - len(stripped.lstrip("#"))
             text = stripped[hashes:].strip().lower()
             if found:
@@ -105,5 +130,5 @@ class DailyNoteStore:
         content = self.read(day)
         if content is None:
             content = default_frontmatter(day) + "\n"
-        p.write_text(upsert_section(content, marker, section_md), encoding="utf-8")
+        atomic_write_text(p, upsert_section(content, marker, section_md))
         return p

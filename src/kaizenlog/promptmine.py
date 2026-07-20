@@ -30,7 +30,11 @@ def normalize(text: str) -> str:
     """比較用に依頼文を正規化する。数値・パス・空白の違いを吸収する。"""
     t = text.lower()
     t = re.sub(r"https?://\S+", "<url>", t)  # パス置換より先（URL内の/をパス扱いしない）
-    t = re.sub(r"[a-z]:[\\/][^\s]+|/[^\s]+/[^\s]+", "<path>", t)  # ファイルパス
+    # パス文字は明示的なASCIIに限定する。[^\s]は日本語にもマッチするため、
+    # 空白のない日本語文中のパスから文末までを丸ごと飲み込み、無関係な依頼文が
+    # 同一クラスタに潰れて偽の「頻出パターン」を報告してしまう
+    t = re.sub(r"[a-z]:[\\/][a-z0-9_.\-\\/]+|/?[a-z0-9_.\-]+(?:/[a-z0-9_.\-]+)+",
+               "<path>", t)  # ファイルパス
     t = re.sub(r"\d+", "#", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t[:200]
@@ -63,7 +67,9 @@ def cluster_prompts(
             clusters.append(best)
         best.count += 1
         best.projects.add(p.project)
-        best.days.add(p.timestamp.date().isoformat())
+        # タイムスタンプはUTC。UTCのまま日付を取ると日本の夕方〜深夜の依頼が
+        # 別日に割れて「◯日間で反復」の判定（提案の強さ）がずれる
+        best.days.add(p.timestamp.astimezone().date().isoformat())
     return clusters
 
 

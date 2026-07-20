@@ -11,6 +11,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .vault import atomic_write_text
+
 RUNS_FILE = "runs.jsonl"
 
 
@@ -23,7 +25,14 @@ def load_runs(logs_dir: Path) -> list[dict]:
     if not path.is_file():
         return []
     runs = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    # errors="replace": 途中で切れた書き込み等の不正バイトが1行あるだけで
+    # 全実行ログ（=status/doctor/毎晩のlog_run）が壊れないようにする。
+    # 化けた行は下のJSONパースで自然に間引かれる
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -68,9 +77,9 @@ def log_run(
 
     logs_dir = Path(logs_dir)
     logs_dir.mkdir(parents=True, exist_ok=True)
-    _runs_path(logs_dir).write_text(
+    atomic_write_text(
+        _runs_path(logs_dir),
         "\n".join(json.dumps(r, ensure_ascii=False) for r in kept) + "\n",
-        encoding="utf-8",
     )
 
 

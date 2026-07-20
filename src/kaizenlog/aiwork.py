@@ -34,6 +34,9 @@ class AISession:
     api_calls: int = 0
     output_tokens: int = 0
     models: set[str] = field(default_factory=set)
+    # usage重複排除用: 1つのAPI応答が複数のJSONL行（thinking/text/tool_use毎）に
+    # 分かれて記録され、各行が同じusageを繰り返し持つ
+    seen_message_ids: set[str] = field(default_factory=set)
 
     @property
     def minutes(self) -> float:
@@ -107,18 +110,27 @@ def _update_session(session: AISession, record: dict, ts: datetime) -> None:
                 session.user_turns += 1
 
     elif rtype == "assistant":
-        session.api_calls += 1
         msg = record.get("message")
         if not isinstance(msg, dict):
             msg = {}
+        # 1回のAPI呼び出しは複数行（コンテンツブロック毎）に分割記録され、
+        # 各行が同一の message.id と同一の usage を持つ。行ごとに加算すると
+        # api_calls とトークン量が2〜3倍に膨らむため、初出のidのみ計上する
+        msg_id = msg.get("id")
+        first_line_of_call = not (isinstance(msg_id, str) and msg_id in session.seen_message_ids)
+        if isinstance(msg_id, str):
+            session.seen_message_ids.add(msg_id)
+        if first_line_of_call:
+            session.api_calls += 1
+            usage = msg.get("usage", {})
+            if isinstance(usage, dict):
+                tokens = usage.get("output_tokens")
+                if isinstance(tokens, (int, float)):
+                    session.output_tokens += int(tokens)
         model = msg.get("model")
         if isinstance(model, str) and model and model != "<synthetic>":
             session.models.add(model)
-        usage = msg.get("usage", {})
-        if isinstance(usage, dict):
-            tokens = usage.get("output_tokens")
-            if isinstance(tokens, (int, float)):
-                session.output_tokens += int(tokens)
+        # tool_useブロックは行ごとに一度しか現れないため、行単位の計上でよい
         for item in _content_items(record):
             if isinstance(item, dict) and item.get("type") == "tool_use":
                 session.tool_counts[str(item.get("name", "unknown"))] += 1
@@ -150,6 +162,14 @@ def scan_sessions(
                         continue
                     if record.get("type") not in ("user", "assistant"):
                         continue
+                    # サブエージェント（isSidechain）の行は親と同じsessionIdを持ち、
+                    # その「user」プロンプトは親モデルが書いたもの。混ぜると往復数・
+                    # ツール数・トークンが大きく水増しされる
+                    if record.get("isSidechain"):
+                        continue
+                    # 自動コンパクションの要約はtype=userだがユーザー発話ではない
+                    if record.get("isCompactSummary"):
+                        continue
                     ts = _parse_ts(record)
                     if ts is None or not (day_start <= ts < day_end):
                         continue
@@ -165,7 +185,10 @@ def scan_sessions(
         except OSError:
             continue
 
-    result = [s for s in sessions.values() if s.user_turns > 0 or s.api_calls > 0]
+    # ユーザーの関与が皆無のセッション断片は数えない。深夜を跨いだセッションの
+    # 翌日分（assistant継続イベントのみ）が「2往復以下の細切れセッション」として
+    # 誤カウントされるのを防ぐ
+    result = [s for s in sessions.values() if s.user_turns > 0 or s.interruptions > 0]
     result.sort(key=lambda s: s.start)
     return result
 
@@ -204,6 +227,11 @@ def scan_user_prompts(
                     if not isinstance(record, dict) or record.get("type") != "user":
                         continue
                     if record.get("isMeta"):
+                        continue
+                    # サブエージェントへの指示は親モデルが書いた文章、コンパクション
+                    # 要約は数十KBの自動生成テキスト。どちらも「ユーザーの依頼文」では
+                    # ないため、プロンプト資産化の入力に混ぜない
+                    if record.get("isSidechain") or record.get("isCompactSummary"):
                         continue
                     ts = _parse_ts(record)
                     if ts is None or not (start <= ts < end):

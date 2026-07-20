@@ -16,7 +16,7 @@ from pathlib import Path
 from .aiwork import AISession
 from .focus import InputStats
 from .report import DailySummary
-from .vault import extract_section, upsert_section
+from .vault import atomic_write_text, extract_section, upsert_section
 
 MEASUREMENTS_MARKER = "kaizenlog:measurements"
 
@@ -251,7 +251,7 @@ def record_measurement(exp: Experiment, day: date, value: float) -> bool:
         exp.status = "expired"
         content = _set_frontmatter_field(content, "status", "expired")
 
-    exp.path.write_text(content, encoding="utf-8")
+    atomic_write_text(exp.path, content)
     return met
 
 

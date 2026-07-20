@@ -52,7 +52,8 @@ def check_skill(vault_dir: Path, name: str) -> SkillStatus:
     dest = Path(vault_dir) / ".claude" / "skills" / name / "SKILL.md"
     if not dest.is_file():
         return SkillStatus(name=name, state="not-installed")
-    if dest.read_text(encoding="utf-8") == bundled_skill_content(name):
+    # errors="replace": 非UTF-8のファイルでもクラッシュせず「差分あり」扱いにする
+    if dest.read_text(encoding="utf-8", errors="replace") == bundled_skill_content(name):
         return SkillStatus(name=name, state="up-to-date", installed_path=dest)
     return SkillStatus(name=name, state="outdated-or-modified", installed_path=dest)
 
@@ -65,7 +66,7 @@ def install_skill(vault_dir: Path, name: str, force: bool = False) -> tuple[str,
     dest = Path(vault_dir) / ".claude" / "skills" / name / "SKILL.md"
 
     if dest.is_file():
-        existing = dest.read_text(encoding="utf-8")
+        existing = dest.read_text(encoding="utf-8", errors="replace")
         if existing == content:
             return "unchanged", dest
         if not force:
@@ -85,7 +86,7 @@ def diff_skill(vault_dir: Path, name: str, context_lines: int = 2) -> str:
     if not dest.is_file():
         return ""
     diff = difflib.unified_diff(
-        dest.read_text(encoding="utf-8").splitlines(),
+        dest.read_text(encoding="utf-8", errors="replace").splitlines(),
         bundled_skill_content(name).splitlines(),
         fromfile=f"installed/{name}/SKILL.md",
         tofile=f"bundled/{name}/SKILL.md",

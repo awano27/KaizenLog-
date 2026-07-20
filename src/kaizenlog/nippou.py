@@ -126,7 +126,13 @@ def generate_nippou_deterministic(
     if checked:
         lines.extend(f"- {t} を完了" for t in checked[:3])
     else:
-        total = stats.get("total_minutes", 0)
+        # 合計にも私的時間（エンタメ等）を含めない。【本日の業務】から除外した
+        # 時間を合計だけに足すと、提出用日報の作業時間が水増しされる
+        private = sum(
+            m for cat, m in stats.get("by_category", {}).items()
+            if cat in _PRIVATE_CATEGORIES
+        )
+        total = max(0.0, stats.get("total_minutes", 0) - private)
         lines.append(f"- 合計 {_fmt_minutes(total)} の作業を実施")
     ai = stats.get("ai", {})
     if ai.get("sessions", 0) > 0:

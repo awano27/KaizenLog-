@@ -133,8 +133,15 @@ def _check_openai_compatible(c: Check, llm, *, as_fallback: bool, essential: boo
 
     try:
         r = requests.get(f"{llm.base_url}/models", headers=headers, timeout=15)
-        if r.status_code >= 500:
-            report_problem(f"{label} がエラー応答: HTTP {r.status_code}")
+        # 4xxも「不健康」。特に401/403（APIキー切れ）を✅と誤診すると、
+        # 夜間のadviseが毎晩失敗するのにdoctorは正常と言い張ることになる
+        if r.status_code in (401, 403):
+            report_problem(f"{label} が認証エラー (HTTP {r.status_code})。"
+                           f"環境変数 {llm.api_key_env} のAPIキーを確認してください")
+            return
+        if r.status_code >= 400:
+            report_problem(f"{label} がエラー応答: HTTP {r.status_code}"
+                           "（base_url の設定を確認してください）")
             return
     except requests.RequestException as e:
         report_problem(f"{label} ({llm.base_url}) に接続できません: {e.__class__.__name__}。"

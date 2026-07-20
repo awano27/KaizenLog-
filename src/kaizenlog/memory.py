@@ -38,7 +38,12 @@ def load_entries(memory_dir: Path) -> list[MemoryEntry]:
     if not path.is_file():
         return []
     entries: dict[str, MemoryEntry] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    # errors="replace": 追記が中断された不正バイトでadvise全体を落とさない
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    for line in text.splitlines():
         line = line.strip()
         if not line:
             continue

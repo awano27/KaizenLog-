@@ -82,7 +82,9 @@ def detect_routines(
             if b.get("minutes", 0) < min_block_minutes:
                 continue
             try:
-                hour = datetime.fromisoformat(b["start"]).hour
+                # 統計のタイムスタンプはUTC。ローカル時刻に変換しないと
+                # 「毎日9時台のルーチン」が実際には18時台（JST）の作業になる
+                hour = datetime.fromisoformat(b["start"]).astimezone().hour
             except (KeyError, ValueError):
                 continue
             key = (b.get("app", ""), hour)

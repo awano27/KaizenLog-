@@ -55,7 +55,7 @@ from .classifier import Classifier
 from .collector import ActivityWatchClient, ActivityWatchError, collect_day, collect_input
 from .focus import compute_input_stats
 from .intervention import detect_time_sinks, render_leechblock_options, render_plan, suggest_rules
-from .config import Config, load_config
+from .config import Config, ConfigError, load_config
 from .experiments import (
     METRIC_DESCRIPTIONS,
     ExperimentError,
@@ -196,17 +196,27 @@ def cmd_block(cfg: Config, end_day: date, days: int, min_minutes: float,
     return 0
 
 
+def _is_valid_date(s: str) -> bool:
+    try:
+        date.fromisoformat(s)
+        return True
+    except ValueError:
+        return False
+
+
 def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
     store = DailyNoteStore(cfg.daily_notes_path)
     content = store.read(day)
+    # SystemExitはBaseException派生でmain()のexcept Exceptionを素通りし、
+    # 実行ログ・失敗通知なしに死ぬ（夜間実行では発覚経路が消える）。AdvisorErrorで投げる
     if content is None:
-        raise SystemExit(
+        raise AdvisorError(
             f"デイリーノートがありません: {store.path_for(day)}\n"
             "先に `kaizenlog generate` を実行してください。"
         )
     activity_md = extract_section(content, ACTIVITY_MARKER)
     if activity_md is None:
-        raise SystemExit("Activity Log セクションがありません。先に `kaizenlog generate` を実行してください。")
+        raise AdvisorError("Activity Log セクションがありません。先に `kaizenlog generate` を実行してください。")
 
     intent = _extract_intent(content)
 
@@ -226,14 +236,21 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
 
     experiments_ctx = render_experiments_context(load_experiments(cfg.experiments_path))
 
-    # Kaizen Memory: 直近ノートのチェックボックスからdoneを検出し、要約をLLMに渡す
+    # Kaizen Memory: 提案日のノートのチェックボックスからdoneを検出し、要約をLLMに渡す。
+    # KZNチェックボックスは提案日のノートにしか存在しないため、固定の直近N日ではなく
+    # 「未完了エントリの提案日」のノートを走査する（4日以上経ってからのチェックも拾う）
     entries = load_entries(cfg.memory_path)
+    scan_days = {day} | {
+        date.fromisoformat(e.date) for e in entries
+        if e.status == "proposed" and _is_valid_date(e.date)
+    }
     status_updates = []
-    for i in range(0, 4):  # 今日を含む直近4日分のノートを走査
-        past = store.read(day - timedelta(days=i))
+    for scan_day in sorted(scan_days, reverse=True):
+        past = store.read(scan_day)
         if past:
             status_updates.extend(update_statuses_from_note(past, entries, day))
-    if status_updates:
+    if status_updates and not dry_run:
+        # dry-runは「何も書き込まない」約束なので、検出結果の永続化は本実行のみ
         append_entries(cfg.memory_path, status_updates)
         entries = load_entries(cfg.memory_path)
         print(f"📗 完了アクションを記録しました: "
@@ -479,10 +496,11 @@ def cmd_skill(cfg: Config, args: argparse.Namespace) -> int:
                 print(f"✅ {name}: 最新です")
             elif status.state == "not-installed":
                 print(f"⚠️  {name}: 未インストール（kaizenlog skill install で導入）")
-                worst = max(worst, 0)
+                worst = max(worst, 1)  # スクリプトから検知できるよう非ゼロで返す
             else:
                 print(f"⚠️  {name}: 同梱版と差分あり（更新 or ローカル改変）。"
                       "差分を確認して --force で更新できます")
+                worst = max(worst, 1)
         return worst
 
     # install
@@ -601,7 +619,11 @@ def main(argv: list[str] | None = None) -> int:
         cmd_init_config()
         return 0
 
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
 
     if args.command == "status":
         print(render_status(load_runs(cfg.logs_path)))
@@ -619,7 +641,9 @@ def main(argv: list[str] | None = None) -> int:
         tz = ZoneInfo(cfg.timezone)
         end_day = _parse_date(args.date, tz)
         cmd_backfill(cfg, args.days, end_day)
-        return 0
+        # 補完対象が残ったまま中断した場合（ActivityWatch停止等）は
+        # スクリプト/スケジューラから検知できるよう非ゼロで返す
+        return 1 if missing_days(cfg.stats_path, end_day, args.days) else 0
 
     if args.command == "patterns":
         tz = ZoneInfo(cfg.timezone)
@@ -657,15 +681,18 @@ def main(argv: list[str] | None = None) -> int:
             cmd_experiment_list(cfg)
         return 0
 
-    tz = ZoneInfo(cfg.timezone)
-    day = _parse_date(args.date, tz)
     dry_run = bool(getattr(args, "dry_run", False))
 
     start_time = monotonic()
     try:
+        # ZoneInfo/日付解釈もtry内で行う。設定のタイムゾーンtypo等で夜間実行が
+        # 落ちたとき、実行ログと失敗通知を必ず残すため（外だと素通りで無音になる）
+        tz = ZoneInfo(cfg.timezone)
+        day = _parse_date(args.date, tz)
         if args.command in ("generate", "run"):
             # 日付指定のない通常実行では、直近の欠損日を先に自動補完する
-            if not args.date and cfg.auto_backfill_days > 0:
+            # （dry-runは書き込みを伴うため補完しない）
+            if not args.date and cfg.auto_backfill_days > 0 and not dry_run:
                 if missing_days(cfg.stats_path, day, cfg.auto_backfill_days):
                     cmd_backfill(cfg, cfg.auto_backfill_days, day)
             if not dry_run:

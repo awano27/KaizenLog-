@@ -14,6 +14,7 @@ from pathlib import Path
 from .aiwork import AISession
 from .focus import InputStats
 from .report import DailySummary
+from .vault import atomic_write_text
 
 
 def _round_minutes(d: dict[str, float]) -> dict[str, float]:
@@ -83,10 +84,10 @@ def write_stats(
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
-    path.write_text(
+    atomic_write_text(
+        path,
         json.dumps(build_stats(day, summary, cc_sessions, input_stats),
                    ensure_ascii=False, indent=1),
-        encoding="utf-8",
     )
     return path
 
@@ -111,7 +112,9 @@ def load_stats(stats_dir: Path, days: int, end_day: date) -> list[dict]:
             continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
+            # ValueError は JSONDecodeError と UnicodeDecodeError（部分書き込みで
+            # 生じる不正UTF-8）の両方を覆う。1日分の破損で patterns/block を落とさない
             continue
         if isinstance(data, dict) and "day" in data:
             out.append(data)

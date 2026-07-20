@@ -103,6 +103,34 @@ def _resolve_command(command: str, hint: str) -> str:
     return path
 
 
+# Windows CreateProcess のコマンドライン上限（32,767文字）。超えると起動自体が失敗する
+_WINDOWS_CMDLINE_LIMIT = 30000
+
+
+def _prompt_arg_for_batch(exe: str, prompt: str) -> str:
+    """バッチファイル（.cmd/.bat）経由のCLIに渡すプロンプトを無害化する。
+
+    npm製CLIは copilot.CMD のようなバッチとして配置され、Windowsは内部的に
+    cmd.exe で実行する。cmd.exe は引数内の `"` や `%` を再解釈するため、
+    Webページタイトル等に含まれる特殊文字がコマンド注入・引数破壊になりうる
+    （CVE-2024-24576 と同類。Pythonのsubprocessは.batに対して安全な引用を保証
+    しない）。意味を保ったまま全角に置換して無害化する。
+    """
+    if not exe.lower().endswith((".cmd", ".bat")):
+        return prompt
+    return prompt.replace('"', "”").replace("%", "％").replace("^", "＾")
+
+
+def _check_cmdline_length(cmd: list[str], backend_name: str) -> None:
+    total = sum(len(c) + 3 for c in cmd)
+    if total > _WINDOWS_CMDLINE_LIMIT:
+        # 引数で渡せないほど長い日誌（lookback含む）はこのバックエンドでは処理不能。
+        # リトライで直らないため即フォールバック（Ollama経由ならHTTPなので制限なし）
+        raise BackendUnavailable(
+            f"{backend_name}: プロンプトがWindowsのコマンドライン上限を超えています"
+            f"（約{total:,}文字）。ローカルLLMへのフォールバックを試みます。")
+
+
 def _call_copilot_cli(cfg: LLMConfig, system_prompt: str, user_prompt: str) -> str:
     """GitHub Copilot CLI のプログラマティックモードでテキストを生成する。"""
     missing_hint = (
@@ -110,7 +138,9 @@ def _call_copilot_cli(cfg: LLMConfig, system_prompt: str, user_prompt: str) -> s
         "`npm install -g @github/copilot` でインストールし、`copilot` で一度ログインしてください。"
     )
     exe = _resolve_command(cfg.copilot_command, missing_hint)
-    cmd = [exe, "-p", f"{system_prompt}\n\n{user_prompt}", *cfg.copilot_extra_args]
+    prompt = _prompt_arg_for_batch(exe, f"{system_prompt}\n\n{user_prompt}")
+    cmd = [exe, "-p", prompt, *cfg.copilot_extra_args]
+    _check_cmdline_length(cmd, "Copilot CLI")
     try:
         result = subprocess.run(
             cmd,
@@ -148,15 +178,18 @@ def _call_claude_code_cli(cfg: LLMConfig, system_prompt: str, user_prompt: str) 
         "https://claude.com/claude-code からインストールし、`claude` で一度ログインしてください。"
     )
     exe = _resolve_command(cfg.claude_command, missing_hint)
+    # プロンプトは引数ではなくstdinで渡す。Windowsの32,767文字のコマンドライン上限と、
+    # .CMDシム経由時のcmd.exeによる特殊文字の再解釈（コマンド注入）を両方回避できる
     cmd = [
         exe,
-        "-p", f"{system_prompt}\n\n{user_prompt}",
+        "-p",
         "--output-format", "json",
         *cfg.claude_extra_args,
     ]
     try:
         result = subprocess.run(
             cmd,
+            input=f"{system_prompt}\n\n{user_prompt}",
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -179,13 +212,18 @@ def _call_claude_code_cli(cfg: LLMConfig, system_prompt: str, user_prompt: str) 
         raise AdvisorError("Claude Code CLI の出力が空でした。")
     try:
         data = json.loads(stdout)
-        if isinstance(data, dict) and isinstance(data.get("result"), str):
-            text = data["result"].strip()
-            if not text:
-                raise AdvisorError("Claude Code CLI のresultが空でした。")
-            return text
     except json.JSONDecodeError:
-        pass  # 古いCLI等でJSON非対応の場合はプレーンテキストとして扱う
+        return stdout  # 古いCLI等でJSON非対応の場合はプレーンテキストとして扱う
+    if isinstance(data, dict):
+        # JSONで応答した以上はJSONプロトコルとして厳密に扱う。exit 0 でも
+        # {"is_error": true, "result": null} のようなエラー封筒がありうるため、
+        # そのままreturnすると生JSONが「改善提案」としてノートに書き込まれる
+        result_text = data.get("result")
+        if not data.get("is_error") and isinstance(result_text, str) and result_text.strip():
+            return result_text.strip()
+        subtype = data.get("subtype", "unknown")
+        raise AdvisorError(
+            f"Claude Code CLI がエラー応答を返しました（subtype: {subtype}）:\n{stdout[:500]}")
     return stdout
 
 
@@ -210,18 +248,30 @@ def _call_openai_compatible(cfg: LLMConfig, system_prompt: str, user_prompt: str
             timeout=cfg.timeout_seconds,
         )
         r.raise_for_status()
+        data = r.json()
     except requests.ConnectionError as e:
         raise BackendUnavailable(
             f"LLM API に接続できません ({cfg.base_url})。"
             "Ollamaの場合は `ollama serve` が動作しているか確認してください。"
         ) from e
+    except requests.Timeout as e:
+        # Ollamaの初回モデルロード等で起きる。リトライで直る可能性があるのでAdvisorError
+        raise AdvisorError(
+            f"LLM API がタイムアウトしました ({cfg.base_url}, {cfg.timeout_seconds}秒)。"
+        ) from e
     except requests.HTTPError as e:
         raise AdvisorError(f"LLM API がエラーを返しました: {e}\n{r.text[:500]}") from e
-    data = r.json()
+    except (requests.RequestException, ValueError) as e:
+        # その他の通信エラー・非JSON応答（プロキシのHTMLエラーページ等）
+        raise AdvisorError(f"LLM API の応答を処理できません: {e.__class__.__name__}: {e}") from e
     try:
-        return data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError) as e:
-        raise AdvisorError(f"LLM API の応答形式が想定外です: {data}") from e
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise AdvisorError(f"LLM API の応答形式が想定外です: {str(data)[:500]}") from e
+    if not isinstance(content, str) or not content.strip():
+        # content: null はコンテンツフィルタ停止やツール呼び出し応答などで発生する
+        raise AdvisorError(f"LLM API がテキストを返しませんでした: {str(data)[:500]}")
+    return content.strip()
 
 
 def generate_text(

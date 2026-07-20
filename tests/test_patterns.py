@@ -64,7 +64,9 @@ def test_routine_detected_same_hour():
     ]
     out = detect_routines(stats)
     assert len(out) == 1
-    assert "9時台" in out[0].title
+    # 報告される時刻はUTCではなくローカル時刻（JST環境ならUTC 9時 = 18時台）
+    local_hour = datetime(2026, 7, 1, 9, tzinfo=TZ).astimezone().hour
+    assert f"{local_hour}時台" in out[0].title
     assert "AIニュースまとめ" in out[0].title
 
 

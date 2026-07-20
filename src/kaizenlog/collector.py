@@ -65,13 +65,20 @@ class ActivityWatchClient:
     def _get(self, path: str, **params):
         try:
             r = requests.get(f"{self.base_url}{path}", params=params, timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
         except requests.ConnectionError as e:
             raise ActivityWatchError(
                 f"ActivityWatchに接続できません ({self.base_url})。"
                 "ActivityWatchが起動しているか確認してください。"
             ) from e
-        r.raise_for_status()
-        return r.json()
+        except (requests.RequestException, ValueError) as e:
+            # Timeout・HTTP 5xx・非JSON応答も既知のエラー型に揃える。
+            # 生のまま漏らすとbackfillの日別ハンドリングを素通りする
+            raise ActivityWatchError(
+                f"ActivityWatch APIエラー ({self.base_url}{path}): "
+                f"{e.__class__.__name__}: {e}"
+            ) from e
 
     def buckets(self) -> dict:
         return self._get("/api/0/buckets/")
@@ -281,13 +288,20 @@ def collect_day(
         )
 
     afk_bucket, afk_raw = _pick_busiest_bucket(client, "afkstatus", day_start, day_end)
-    if afk_bucket is None:
+    if afk_bucket is None or not afk_raw:
+        # AFKウォッチャーが無い/データが無い日はウィンドウイベントをそのまま採用する
         intervals = [(day_start, day_end)]
     else:
-        # AFKデータが空の日はウィンドウイベントをそのまま採用する
-        intervals = active_intervals(afk_raw) or [(day_start, day_end)]
+        # AFKデータは有るが not-afk 区間がゼロ ＝ 終日離席。
+        # ここで全日にフォールバックすると、開きっぱなしのウィンドウが
+        # 丸一日分の活動として誤計上される（不在の日ほど活動が多く見える）
+        intervals = active_intervals(afk_raw)
+        if not intervals:
+            return []
     # 深夜を跨ぐイベントの二重カウントを防ぐため、常に日の範囲へクリップする
-    intervals = _clip_intervals_to_day(intervals, day_start, day_end) or [(day_start, day_end)]
+    intervals = _clip_intervals_to_day(intervals, day_start, day_end)
+    if not intervals:
+        return []
     events = clip_to_active(window_raw, intervals)
 
     # ブラウザごとのwebバケットを、そのブラウザのウィンドウ時間にだけ合成する

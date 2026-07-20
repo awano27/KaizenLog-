@@ -62,6 +62,35 @@ DEFAULT_RULES: list[dict] = [
 ]
 
 
+class ConfigError(ValueError):
+    """設定ファイルの値が不正。どのキーが悪いかを含めて報告する。"""
+
+
+def _coerce(cast, value, key):
+    """数値系設定の変換。失敗時は生のValueErrorではなくキー名つきのConfigErrorに。
+
+    生のまま漏らすとCLIの捕捉網を素通りし、夜間実行が実行ログ・通知なしで死ぬ。
+    """
+    try:
+        return cast(value)
+    except (TypeError, ValueError) as e:
+        raise ConfigError(
+            f"設定値 {key} が不正です: {value!r}（数値を指定してください）") from e
+
+
+def _as_str_list(value, key) -> list[str]:
+    """リスト系設定の取得。文字列単体はよくある書き間違いなので1要素リストとして扱う。
+
+    list("文字列") は1文字ずつに分解され、redact_patterns なら1文字ごとの
+    マスクでプロンプトが原型を留めなくなる（静かな大規模破壊）。
+    """
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    raise ConfigError(f"設定値 {key} が不正です: {value!r}（文字列の配列を指定してください）")
+
+
 @dataclass
 class LLMConfig:
     backend: str = "copilot-cli"  # "claude-code-cli" | "copilot-cli" | "openai-compatible" | "none"
@@ -189,8 +218,8 @@ def load_config(path: str | None = None) -> Config:
     cfg.experiments_dir = general.get("experiments_dir", cfg.experiments_dir)
     cfg.stats_dir = general.get("stats_dir", cfg.stats_dir)
     cfg.logs_dir = general.get("logs_dir", cfg.logs_dir)
-    cfg.auto_backfill_days = int(general.get("auto_backfill_days", cfg.auto_backfill_days))
-    cfg.log_retention_days = int(general.get("log_retention_days", cfg.log_retention_days))
+    cfg.auto_backfill_days = _coerce(int, general.get("auto_backfill_days", cfg.auto_backfill_days), "general.auto_backfill_days")
+    cfg.log_retention_days = _coerce(int, general.get("log_retention_days", cfg.log_retention_days), "general.log_retention_days")
 
     cfg.memory_dir = general.get("memory_dir", cfg.memory_dir)
 
@@ -198,10 +227,10 @@ def load_config(path: str | None = None) -> Config:
     cfg.notify_on_failure = bool(notifications.get("on_failure", cfg.notify_on_failure))
 
     privacy = data.get("privacy", {})
-    cfg.privacy.redact_patterns = list(privacy.get("redact_patterns", []))
+    cfg.privacy.redact_patterns = _as_str_list(privacy.get("redact_patterns", []), "privacy.redact_patterns")
     cfg.privacy.replacement = privacy.get("replacement", cfg.privacy.replacement)
-    cfg.min_block_minutes = float(general.get("min_block_minutes", cfg.min_block_minutes))
-    cfg.session_gap_minutes = float(general.get("session_gap_minutes", cfg.session_gap_minutes))
+    cfg.min_block_minutes = _coerce(float, general.get("min_block_minutes", cfg.min_block_minutes), "general.min_block_minutes")
+    cfg.session_gap_minutes = _coerce(float, general.get("session_gap_minutes", cfg.session_gap_minutes), "general.session_gap_minutes")
 
     aw = data.get("activitywatch", {})
     cfg.aw_base_url = aw.get("base_url", cfg.aw_base_url).rstrip("/")
@@ -225,19 +254,19 @@ def load_config(path: str | None = None) -> Config:
     cfg.llm.backend = llm.get("backend", cfg.llm.backend)
     cfg.llm.fallback_to_local = bool(llm.get("fallback_to_local", cfg.llm.fallback_to_local))
     cfg.llm.system_prompt = llm.get("system_prompt", cfg.llm.system_prompt)
-    cfg.llm.lookback_days = int(llm.get("lookback_days", cfg.llm.lookback_days))
+    cfg.llm.lookback_days = _coerce(int, llm.get("lookback_days", cfg.llm.lookback_days), "llm.lookback_days")
     cc = llm.get("claude_code_cli", {})
     cfg.llm.claude_command = cc.get("command", cfg.llm.claude_command)
-    cfg.llm.claude_extra_args = list(cc.get("extra_args", cfg.llm.claude_extra_args))
+    cfg.llm.claude_extra_args = _as_str_list(cc.get("extra_args", cfg.llm.claude_extra_args), "llm.claude_code_cli.extra_args")
     cop = llm.get("copilot_cli", {})
     cfg.llm.copilot_command = cop.get("command", cfg.llm.copilot_command)
-    cfg.llm.copilot_extra_args = list(cop.get("extra_args", cfg.llm.copilot_extra_args))
+    cfg.llm.copilot_extra_args = _as_str_list(cop.get("extra_args", cfg.llm.copilot_extra_args), "llm.copilot_cli.extra_args")
     oai = llm.get("openai_compatible", {})
     cfg.llm.base_url = oai.get("base_url", cfg.llm.base_url).rstrip("/")
     cfg.llm.model = oai.get("model", cfg.llm.model)
     cfg.llm.api_key_env = oai.get("api_key_env", cfg.llm.api_key_env)
-    cfg.llm.timeout_seconds = int(oai.get("timeout_seconds", cfg.llm.timeout_seconds))
-    cfg.llm.retries = int(llm.get("retries", cfg.llm.retries))
-    cfg.llm.retry_wait_seconds = int(llm.get("retry_wait_seconds", cfg.llm.retry_wait_seconds))
+    cfg.llm.timeout_seconds = _coerce(int, oai.get("timeout_seconds", cfg.llm.timeout_seconds), "llm.openai_compatible.timeout_seconds")
+    cfg.llm.retries = _coerce(int, llm.get("retries", cfg.llm.retries), "llm.retries")
+    cfg.llm.retry_wait_seconds = _coerce(int, llm.get("retry_wait_seconds", cfg.llm.retry_wait_seconds), "llm.retry_wait_seconds")
 
     return cfg
