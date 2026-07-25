@@ -11,9 +11,9 @@ from kaizenlog.advisor import (
     AdvisorError,
     BackendUnavailable,
     _call_claude_code_cli,
+    _call_copilot_cli,
     _call_openai_compatible,
     _check_cmdline_length,
-    _prompt_arg_for_batch,
 )
 from kaizenlog.collector import active_intervals, clip_to_active, collect_day
 from kaizenlog.config import ConfigError, LLMConfig, load_config
@@ -140,16 +140,56 @@ def test_claude_auth_error_triggers_fallback_not_retry(monkeypatch):
     assert sleeps == []  # 認証切れで20秒リトライを空回りしない
 
 
-# ---- advisor: Windowsコマンドライン上限と.CMD無害化 ----
+# ---- advisor: Windowsコマンドライン上限とCopilot npm shim迂回 ----
 
 def test_cmdline_length_guard_raises_backend_unavailable():
     with pytest.raises(BackendUnavailable, match="上限"):
         _check_cmdline_length(["copilot.CMD", "-p", "x" * 40000], "Copilot CLI")
 
 
-def test_batch_prompt_sanitized_only_for_cmd_shims():
-    assert '"' not in _prompt_arg_for_batch("C:/x/copilot.CMD", 'say "hi" 100%')
-    assert _prompt_arg_for_batch("C:/x/claude.exe", 'say "hi"') == 'say "hi"'
+def test_copilot_cmd_uses_node_loader_and_preserves_multiline_prompt(
+        monkeypatch, tmp_path):
+    npm_root = tmp_path / "npm"
+    shim = npm_root / "copilot.CMD"
+    shim.parent.mkdir()
+    shim.touch()
+    loader = npm_root / "node_modules" / "@github" / "copilot" / "npm-loader.js"
+    loader.parent.mkdir(parents=True)
+    loader.touch()
+    node = tmp_path / "node.exe"
+    node.touch()
+
+    def which(command):
+        return str(shim) if command == "copilot" else str(node) if command == "node" else None
+
+    captured = {}
+
+    def run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr("kaizenlog.advisor.shutil.which", which)
+    monkeypatch.setattr("kaizenlog.advisor.subprocess.run", run)
+    prompt = 'line 1\nline 2: "quoted" 100% ^caret'
+
+    assert _call_copilot_cli(LLMConfig(), "system", prompt) == "ok"
+    assert captured["cmd"][:2] == [str(node), str(loader)]
+    assert captured["cmd"][captured["cmd"].index("-p") + 1] == f"system\n\n{prompt}"
+    assert "--silent" in captured["cmd"]
+    assert "--no-custom-instructions" in captured["cmd"]
+    assert "--disable-builtin-mcps" in captured["cmd"]
+
+
+def test_copilot_cmd_without_official_loader_is_unavailable(monkeypatch, tmp_path):
+    shim = tmp_path / "copilot.CMD"
+    shim.touch()
+    monkeypatch.setattr(
+        "kaizenlog.advisor.shutil.which",
+        lambda command: str(shim) if command == "copilot" else "C:/node.exe",
+    )
+
+    with pytest.raises(BackendUnavailable, match="npm-loader.js"):
+        _call_copilot_cli(LLMConfig(), "system", "user")
 
 
 # ---- collector: 終日AFKの日はゼロ活動（全日フォールバックしない）----

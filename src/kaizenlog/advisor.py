@@ -117,18 +117,33 @@ def _resolve_command(command: str, hint: str) -> str:
 _WINDOWS_CMDLINE_LIMIT = 30000
 
 
-def _prompt_arg_for_batch(exe: str, prompt: str) -> str:
-    """バッチファイル（.cmd/.bat）経由のCLIに渡すプロンプトを無害化する。
+def _copilot_launch_command(exe: str) -> list[str]:
+    """Copilot CLIをシェル解釈なしで起動するコマンドを返す。
 
-    npm製CLIは copilot.CMD のようなバッチとして配置され、Windowsは内部的に
-    cmd.exe で実行する。cmd.exe は引数内の `"` や `%` を再解釈するため、
-    Webページタイトル等に含まれる特殊文字がコマンド注入・引数破壊になりうる
-    （CVE-2024-24576 と同類。Pythonのsubprocessは.batに対して安全な引用を保証
-    しない）。意味を保ったまま全角に置換して無害化する。
+    Windowsのnpm shim（copilot.CMD）へ複数行プロンプトを渡すと、cmd.exeが
+    改行以降を別コマンドとして解釈し、先頭行しかCopilotへ届かない。また引用符や
+    `%`等を置換する回避策はプロンプトの意味を変える。公式npm binの実体である
+    npm-loader.jsをNodeで直接起動し、subprocessの引数配列を最後まで維持する。
     """
     if not exe.lower().endswith((".cmd", ".bat")):
-        return prompt
-    return prompt.replace('"', "”").replace("%", "％").replace("^", "＾")
+        return [exe]
+
+    shim_dir = Path(exe).parent
+    loader = shim_dir / "node_modules" / "@github" / "copilot" / "npm-loader.js"
+    if not loader.is_file():
+        raise BackendUnavailable(
+            f"Copilot CLIのnpm-loader.jsが見つかりません: {loader}\n"
+            "`npm install -g @github/copilot` で再インストールしてください。"
+        )
+
+    bundled_node = shim_dir / "node.exe"
+    node = str(bundled_node) if bundled_node.is_file() else shutil.which("node")
+    if not node:
+        raise BackendUnavailable(
+            "Copilot CLIの起動に必要なNode.jsが見つかりません。"
+            "Node.jsをインストールしてPATHを確認してください。"
+        )
+    return [node, str(loader)]
 
 
 def _check_cmdline_length(cmd: list[str], backend_name: str) -> None:
@@ -148,8 +163,16 @@ def _call_copilot_cli(cfg: LLMConfig, system_prompt: str, user_prompt: str) -> s
         "`npm install -g @github/copilot` でインストールし、`copilot` で一度ログインしてください。"
     )
     exe = _resolve_command(cfg.copilot_command, missing_hint)
-    prompt = _prompt_arg_for_batch(exe, f"{system_prompt}\n\n{user_prompt}")
-    cmd = [exe, "-p", prompt, *cfg.copilot_extra_args]
+    prompt = f"{system_prompt}\n\n{user_prompt}"
+    cmd = [
+        *_copilot_launch_command(exe),
+        "-p", prompt,
+        "--silent",
+        "--no-custom-instructions",
+        "--disable-builtin-mcps",
+        "--no-ask-user",
+        *cfg.copilot_extra_args,
+    ]
     _check_cmdline_length(cmd, "Copilot CLI")
     try:
         result = subprocess.run(
@@ -354,6 +377,10 @@ _FACT_ID_RE = re.compile(r"\[F\d+\]")
 _NUMBERED_ITEM_RE = re.compile(r"^\s*\d+[.)]\s+", re.MULTILINE)
 _ACTION_RE = re.compile(r"^\s*- \[ \]\s+(.+)$", re.MULTILINE)
 _ANY_CHECKBOX_RE = re.compile(r"^\s*- \[[ xX]\]\s+.+$", re.MULTILINE)
+_MEASURABLE_COMPARISON_RE = re.compile(
+    r"(?:前日|前回|基準).{0,12}(?:比|より|同数|同水準|同じ)"
+    r"|(?:同数|同水準|同数値|増加|減少|上昇|低下|変化なし)"
+)
 
 
 def _coerce_evidence(evidence: AdviceEvidence | None) -> AdviceEvidence:
@@ -465,7 +492,7 @@ def advice_contract_errors(
         )
         if not pass_value or not fail_value:
             errors.append(f"最小アクション{index}に翌日の PASS:/FAIL: 条件がありません")
-        elif not re.search(r"\d", pass_value) or not re.search(r"\d", fail_value):
+        elif not _is_measurable_condition(pass_value) or not _is_measurable_condition(fail_value):
             errors.append(f"最小アクション{index}の PASS:/FAIL: は数値条件にしてください")
         if re.search(r"KZN-\d{8}-\d+", action):
             errors.append(f"最小アクション{index}にモデル生成のKZN IDがあります")
@@ -480,12 +507,18 @@ def advice_contract_errors(
     return errors
 
 
+def _is_measurable_condition(value: str) -> bool:
+    """数値リテラルまたは前日値等との明示的な相対比較を判定可能とみなす。"""
+    return bool(re.search(r"\d", value) or _MEASURABLE_COMPARISON_RE.search(value))
+
+
 def _has_uncertainty_language(sentence: str) -> bool:
     return any(
         phrase in sentence
         for phrase in (
-            "ではない", "でない", "判断不能", "測定不能", "不明", "根拠なし",
-            "根拠がない", "断定しない", "意味しない", "とは限らない",
+            "ではない", "ではなく", "でない", "判断不能", "測定不能", "評価対象外",
+            "不明", "根拠なし", "根拠がない", "断定しない", "意味しない",
+            "とは限らない",
         )
     )
 
@@ -545,12 +578,20 @@ def _semantic_contract_errors(advice: str, evidence: AdviceEvidence) -> list[str
         )
         unsupported_ai_quality = re.compile(
             r"(?:(?:会話|セッション|往復).{0,12}(?:多い|少ない|短い|長い|細切れ|過多|多発)"
-            r"|(?:細切れ|往復過多|会話品質|AI品質))"
+            r"|(?:往復過多|会話品質|AI品質))"
         )
         for sentence in sentences:
             clause = _observed_clause(sentence)
+            ai_fragmentation_claim = (
+                "細切れ" in clause
+                and bool(re.search(r"AI|会話|セッション|往復", clause))
+            )
             if (
-                (numeric_ai_claim.search(clause) or unsupported_ai_quality.search(clause))
+                (
+                    numeric_ai_claim.search(clause)
+                    or unsupported_ai_quality.search(clause)
+                    or ai_fragmentation_claim
+                )
                 and not _has_uncertainty_language(clause)
                 and not is_measurement_instruction(clause)
             ):
@@ -595,14 +636,60 @@ def _contract_repair_prompt(
     errors: list[str],
 ) -> str:
     rendered_errors = "\n".join(f"- {error}" for error in errors)
+    allowed_ids = " ".join(evidence.fact_ids) or "なし"
+    repair_source = _sanitize_repair_source(advice)
     return (
         "# 出力契約の修正依頼\n"
         "前回の回答は保存条件を満たしませんでした。分析事実を増やしたり推測したりせず、"
-        "同じ内容を契約どおりに書き直してください。\n\n"
-        f"## 使用できる根拠\n{evidence.markdown}\n\n"
+        "同じ内容を契約どおりに書き直してください。\n"
+        "回答本文だけを返し、説明やコードフェンスを付けないでください。\n"
+        "\n## 修正チェックリスト\n"
+        "- 必須見出しと件数を維持する\n"
+        "- 「今日の改善提案」と「AI作業の改善」は、各項目の番号と[F#]の数字だけを"
+        "残し、それ以外の算用数字を0個にする\n"
+        "- 観測回数・日数・時刻は言い換えるか省略し、数値は"
+        "「明日の最小アクション」の行動量とPASS/FAILだけに置く\n"
+        "- 各PASSと各FAILの両方を、算用数字または前日値との増減・同数比較で"
+        "翌日判定できる条件にする\n"
+        "- KZN IDはどの見出しにも書かない\n"
+        "- AI関連画面ブロックは会話数・セッション数・往復数ではない。否定する場合は"
+        "「ではない」または「測定不能」と明記する\n"
+        f"- 使用できる根拠IDは {allowed_ids} だけ\n\n"
         f"## 違反\n{rendered_errors}\n\n"
-        f"## 前回の回答\n{advice}"
+        "## 前回の回答（禁止された観測数値は除去済み）\n"
+        f"{repair_source}"
     )
+
+
+def _sanitize_repair_source(advice: str) -> str:
+    """修復モデルが禁止済みの観測数値やKZN IDをそのまま複写しないようにする。"""
+    current_heading = ""
+    output: list[str] = []
+    for line in advice.splitlines():
+        if line.startswith("### "):
+            current_heading = line[4:].strip()
+            output.append(line)
+            continue
+        if current_heading not in {"今日の改善提案", "AI作業の改善"}:
+            output.append(line)
+            continue
+
+        sanitized = re.sub(r"KZN-\d{8}-\d+", "既存アクション", line)
+        facts: list[str] = []
+
+        def protect_fact(match: re.Match[str]) -> str:
+            facts.append(match.group(0))
+            return f"§FACT{chr(65 + len(facts) - 1)}§"
+
+        sanitized = _FACT_ID_RE.sub(protect_fact, sanitized)
+        numbering = re.match(r"^(\s*\d+[.)]\s*)", sanitized)
+        prefix = numbering.group(1) if numbering else ""
+        body = sanitized[len(prefix):]
+        body = re.sub(r"\d+(?:\.\d+)?", "数値省略", body)
+        for index, fact in enumerate(facts):
+            body = body.replace(f"§FACT{chr(65 + index)}§", fact)
+        output.append(prefix + body)
+    return "\n".join(output)
 
 
 def requires_daily_contract(cfg: LLMConfig) -> bool:

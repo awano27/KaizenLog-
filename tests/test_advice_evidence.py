@@ -10,6 +10,7 @@ from kaizenlog.advice_evidence import build_advice_evidence
 from kaizenlog.advisor import (
     AdviceContractError,
     AdvisorError,
+    _contract_repair_prompt,
     advice_contract_errors,
     build_prompt,
     generate_advice,
@@ -459,6 +460,58 @@ def test_generate_advice_repairs_contract_once(monkeypatch):
     assert result.endswith(VALID_ADVICE)
     assert len(calls) == 2
     assert "出力契約の修正依頼" in calls[1]
+    assert "算用数字を0個" in calls[1]
+    assert "番号と[F#]の数字だけ" in calls[1]
+
+
+def test_contract_repair_masks_observed_numbers_and_kzn_ids():
+    evidence = build_advice_evidence(CURRENT)
+    invalid = VALID_ADVICE.replace(
+        "1. [F3]",
+        "1. [F3] 集中ブロックは47回（継続 KZN-20260721-003）。\n1. [F3]",
+        1,
+    )
+
+    prompt = _contract_repair_prompt(evidence, invalid, ["観測数値を再掲しています"])
+
+    assert "47回" not in prompt
+    assert "KZN-20260721-003" not in prompt
+    assert "数値省略回（継続 既存アクション）" in prompt
+
+
+def test_contract_accepts_explicit_f4_non_session_statement():
+    evidence = build_advice_evidence(CURRENT)
+    advice = re.sub(
+        r"(?m)^- \[F5\].*$",
+        "- [F4] 画面ブロックは会話セッション数ではなく評価対象外。",
+        VALID_ADVICE,
+    )
+
+    assert advice_contract_errors(advice, evidence) == []
+
+
+def test_contract_accepts_measurable_relative_fail_condition():
+    evidence = build_advice_evidence(CURRENT)
+    advice = re.sub(
+        r"FAIL: [^\n]+",
+        "FAIL: 前日と同数以上",
+        VALID_ADVICE,
+        count=1,
+    )
+
+    assert advice_contract_errors(advice, evidence) == []
+
+
+def test_contract_does_not_treat_non_ai_fragmentation_as_ai_quality():
+    evidence = build_advice_evidence(CURRENT)
+    advice = VALID_ADVICE.replace(
+        "1. [F3]",
+        "1. [F3] 細切れ区間をまとめる。",
+        1,
+    )
+
+    errors = advice_contract_errors(advice, evidence)
+    assert not any("AI会話テレメトリ" in error for error in errors)
 
 
 def test_contract_repair_redacts_first_model_answer(monkeypatch):
