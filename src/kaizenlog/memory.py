@@ -20,6 +20,11 @@ ACTION_SECTION = "### 明日試すこと"
 LEGACY_ACTION_SECTION = "### 明日の最小アクション"
 _CHECKBOX_RE = re.compile(r"^(\s*- \[)([ xX])(\]\s*)(.*)$")
 
+# 消化率が低いときの適応投与（プロンプト経由のソフト制御）
+_DOSING_MIN_PROPOSED = 6
+_DOSING_DONE_RATE = 0.4
+_STATS_WINDOW_DAYS = 14
+
 
 @dataclass
 class MemoryEntry:
@@ -209,19 +214,121 @@ def update_statuses_from_note(
     return updated
 
 
+@dataclass(frozen=True)
+class ActionStats:
+    """提案の消化率・PASS率（北極星指標）の集計結果。"""
+
+    window_days: int
+    proposed: int  # 窓内に提案されたアクション数
+    done: int  # うち status == "done"
+    judged: int  # うち verdict が pass/fail
+    passed: int  # うち verdict == "pass"
+
+    @property
+    def done_rate(self) -> float | None:
+        if self.proposed == 0:
+            return None
+        return self.done / self.proposed
+
+    @property
+    def pass_rate(self) -> float | None:
+        if self.judged == 0:
+            return None
+        return self.passed / self.judged
+
+
+def compute_action_stats(
+    entries: list[MemoryEntry], today: date, window_days: int = _STATS_WINDOW_DAYS
+) -> ActionStats:
+    """提案日が today-window 〜 today-1 のエントリを集計する。
+
+    当日提案は実行機会がないため除外。不正な date は無視する。
+    """
+    start = (today - timedelta(days=window_days)).isoformat()
+    end = (today - timedelta(days=1)).isoformat()
+    proposed = done = judged = passed = 0
+    for e in entries:
+        if not e.date or not _is_iso_date(e.date):
+            continue
+        if not (start <= e.date <= end):
+            continue
+        proposed += 1
+        if e.status == "done":
+            done += 1
+        if e.verdict in ("pass", "fail"):
+            judged += 1
+            if e.verdict == "pass":
+                passed += 1
+    return ActionStats(
+        window_days=window_days,
+        proposed=proposed,
+        done=done,
+        judged=judged,
+        passed=passed,
+    )
+
+
+def _is_iso_date(s: str) -> bool:
+    try:
+        date.fromisoformat(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _pct_label(rate: float | None) -> str:
+    """整数%表示。分母0は '-'。"""
+    if rate is None:
+        return "-"
+    return f"{round(rate * 100)}%"
+
+
+def render_action_stats_line(stats: ActionStats) -> str:
+    """status コマンド用の1行サマリ。"""
+    label = f"📈 Kaizen実績（直近{stats.window_days}日）"
+    if stats.proposed == 0:
+        return f"{label}: まだ提案がありません"
+    return (
+        f"{label}: 提案 {stats.proposed}件 / 消化 {stats.done}件"
+        f"（{_pct_label(stats.done_rate)}）/ 自動判定 {stats.judged}件"
+        f" / PASS {stats.passed}件（{_pct_label(stats.pass_rate)}）"
+    )
+
+
 def summarize_for_prompt(
     entries: list[MemoryEntry], today: date, max_items: int = 10
 ) -> str:
-    """LLMに渡す「過去の提案の記録」を組み立てる。無ければ空文字。"""
+    """LLMに渡す「過去の提案の記録」を組み立てる。無ければ空文字。
+
+    先頭に消化率/PASS率の実績ブロックを置き、消化率が低いときは
+    提案を1件に絞る指示（適応投与）を付ける。
+    """
     if not entries:
         return ""
+    stats = compute_action_stats(entries, today)
+    lines: list[str] = [
+        f"## 提案の実績（直近{stats.window_days}日）",
+        (
+            f"提案{stats.proposed}件 / 消化率{_pct_label(stats.done_rate)}"
+            f" / 自動判定{stats.judged}件 / PASS率{_pct_label(stats.pass_rate)}"
+        ),
+    ]
+    if (
+        stats.proposed >= _DOSING_MIN_PROPOSED
+        and stats.done_rate is not None
+        and stats.done_rate < _DOSING_DONE_RATE
+    ):
+        lines.append(
+            "⚠️ 消化率が低いため、今回は「今日の改善提案」と「明日の最小アクション」"
+            "を1件だけにし、最も小さく始められるものを選ぶこと。"
+        )
+
     d30 = (today - timedelta(days=30)).isoformat()
     d7 = (today - timedelta(days=7)).isoformat()
 
     open_actions = [e for e in entries if e.status == "proposed" and e.date >= d30]
     recent_done = [e for e in entries if e.status == "done" and (e.done_date or "") >= d7]
 
-    lines: list[str] = []
     if open_actions:
         lines.append("## 未完了のアクション（再提案しない。価値があれば「（継続）」と明示して1行のみ）")
         for e in open_actions[-max_items:]:

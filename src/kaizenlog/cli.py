@@ -36,7 +36,9 @@ from .doctor import run_doctor
 from .memory import (
     append_entries,
     assign_action_ids,
+    compute_action_stats,
     load_entries,
+    render_action_stats_line,
     render_actions_section,
     summarize_for_prompt,
     update_statuses_from_note,
@@ -693,6 +695,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "status":
         print(render_status(load_runs(cfg.logs_path)))
+        # 北極星: 消化率 / PASS率（読み込み失敗で status 全体を落とさない）
+        try:
+            today = datetime.now(ZoneInfo(cfg.timezone)).date()
+            stats = compute_action_stats(load_entries(cfg.memory_path), today)
+            print()
+            print(render_action_stats_line(stats))
+        except Exception:
+            pass
         return 0
 
     if args.command == "skill":
