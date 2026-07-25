@@ -27,6 +27,7 @@ from .advisor import (
     AdvisorError,
     generate_advice,
     prepare_advice_request,
+    render_reader_advice,
 )
 from .advice_evidence import build_advice_evidence
 from .aiwork import render_aiwork_markdown, scan_sessions, scan_user_prompts
@@ -327,13 +328,15 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         evidence=evidence_ctx,
         redactor=redactor,
     )
-    # 「明日の最小アクション」に安定ID（KZN-YYYYMMDD-NNN）を付与して記録する
+    advice_md = render_reader_advice(advice_md, evidence_ctx)
+    # 「明日試すこと」に安定ID（KZN-YYYYMMDD-NNN）を付与して記録する
     advice_md, new_entries = assign_action_ids(advice_md, day, effective_entries)
     path = store.write_section(day, ADVICE_MARKER, advice_md)
     append_entries(cfg.memory_path, new_entries)
     print(f"✅ 改善提案を書き込みました: {path}")
-    if new_entries:
-        print("🆔 アクションID: " + ", ".join(e.id for e in new_entries))
+    proposed_entries = [entry for entry in new_entries if entry.status == "proposed"]
+    if proposed_entries:
+        print("🆔 アクションID: " + ", ".join(e.id for e in proposed_entries))
     return path
 
 

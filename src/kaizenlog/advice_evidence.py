@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, tzinfo
+from datetime import date, datetime, timedelta, tzinfo
 from math import isfinite
 import re
 from statistics import median
@@ -25,6 +25,11 @@ class AdviceEvidence:
     fact_ids: frozenset[str]
     ai_conversation_metrics_available: bool
     entertainment_observed: bool
+    reader_summary: str
+    reader_notes: tuple[str, ...]
+    max_actions: int
+    previous_day_available: bool
+    browser_sample_sufficient: bool
 
 
 def _evidence(
@@ -32,6 +37,11 @@ def _evidence(
     *,
     ai_conversation_metrics_available: bool = False,
     entertainment_observed: bool = False,
+    reader_summary: str = "当日の確定統計がないため、作業状況を評価できません。",
+    reader_notes: tuple[str, ...] = ("先にActivity Logを生成してください。",),
+    max_actions: int = 1,
+    previous_day_available: bool = False,
+    browser_sample_sufficient: bool = False,
 ) -> AdviceEvidence:
     markdown = "\n".join(lines)
     return AdviceEvidence(
@@ -39,6 +49,11 @@ def _evidence(
         fact_ids=frozenset(re.findall(r"\[F\d+\]", markdown)),
         ai_conversation_metrics_available=ai_conversation_metrics_available,
         entertainment_observed=entertainment_observed,
+        reader_summary=reader_summary,
+        reader_notes=reader_notes,
+        max_actions=max_actions,
+        previous_day_available=previous_day_available,
+        browser_sample_sufficient=browser_sample_sufficient,
     )
 
 
@@ -139,6 +154,23 @@ def _transition_fact(blocks: list[object], timezone: tzinfo | None) -> str:
     return f"- [F9] 上位カテゴリ遷移: {pairs}{suffix}。"
 
 
+def _previous_day_available(
+    stats: Mapping[str, Any],
+    history: Sequence[Mapping[str, Any]] | None,
+) -> bool:
+    try:
+        previous_day = date.fromisoformat(str(stats.get("day"))) - timedelta(days=1)
+    except ValueError:
+        return False
+    return any(
+        item.get("day") == previous_day.isoformat()
+        and _valid_nonnegative_number(item.get("total_minutes"))
+        and float(item["total_minutes"]) >= _MIN_BASELINE_ACTIVE_MINUTES
+        for item in (history or [])
+        if isinstance(item, Mapping)
+    )
+
+
 def build_advice_evidence(
     stats: Mapping[str, Any] | None,
     history: Sequence[Mapping[str, Any]] | None = None,
@@ -231,6 +263,8 @@ def build_advice_evidence(
     input_value = stats.get("input")
     input_fields = ("focus_blocks", "focus_minutes", "active_input_minutes")
     input_stats = _mapping(input_value)
+    focus_blocks: int | None = None
+    focus_minutes: float | None = None
     if _valid_count_fields(input_value, input_fields):
         focus_blocks = int(_number(input_stats.get("focus_blocks")))
         focus_minutes = _number(input_stats.get("focus_minutes"))
@@ -402,8 +436,76 @@ def build_advice_evidence(
 
     lines.append(_transition_fact(blocks, timezone))
 
+    short_record = total_minutes < 120
+    previous_day_available = _previous_day_available(stats, history)
+    browser_sample_sufficient = bool(
+        browser_category_minutes is not None and browser_category_minutes >= 30
+    )
+    max_actions = 1 if short_record else 3
+
+    summary_parts = [
+        (
+            f"本日の記録は合計{_fmt(total_minutes)}分のため、"
+            "1日の働き方を評価するにはデータ不足です。"
+            if short_record
+            else f"本日は合計{_fmt(total_minutes)}分の作業が記録されています。"
+        )
+    ]
+    if focus_blocks is not None and focus_minutes is not None and focus_blocks > 0:
+        summary_parts.append(
+            f"一方、25分以上の集中ブロックを{focus_blocks}回"
+            f"（合計{_fmt(focus_minutes)}分）確保できており、維持したい実績です。"
+        )
+    elif focus_blocks == 0:
+        summary_parts.append(
+            "25分以上の集中ブロックは記録されていませんが、単日の原因は判断できません。"
+        )
+
+    reader_notes: list[str] = []
+    if not (ai_stats_valid and telemetry_sessions > 0):
+        ai_time = f"{_fmt(ai_minutes)}分" if ai_minutes is not None else "一定時間"
+        reader_notes.append(
+            f"AI関連画面は{ai_time}記録されていますが、会話回数や回答品質は"
+            "計測できないため、画面切り替えだけからAIの使い方を評価しません。"
+        )
+    if (
+        browser_category_minutes is not None
+        and 0 < browser_category_minutes < 30
+    ):
+        reader_notes.append(
+            f"ブラウザ利用は{_fmt(browser_category_minutes)}分と短いため、"
+            "URL watcherの設定改善は現時点では優先しません。"
+        )
+    if not previous_day_available:
+        reader_notes.append(
+            "比較可能な前日の記録がないため、前日比ではなく絶対値で翌日の合否を判定します。"
+        )
+    if not reader_notes:
+        reader_notes.append("現時点で、追加の計測上の注意はありません。")
+
+    if short_record:
+        lines.append(
+            "- [L9] 当日の記録が120分未満で評価材料が少ない。問題を作らず、"
+            "改善提案は維持行動を最大1件だけにする。"
+        )
+    if not previous_day_available:
+        lines.append(
+            "- [L10] 比較可能な前日統計がない。前日比のPASS/FAILは禁止し、"
+            "単独で判定できる絶対値を使う。"
+        )
+    if not browser_sample_sufficient:
+        lines.append(
+            "- [L11] ブラウジング実測が30分未満。URL watcher設定を改善課題として"
+            "優先しない。"
+        )
+
     return _evidence(
         lines,
         ai_conversation_metrics_available=ai_stats_valid and telemetry_sessions > 0,
         entertainment_observed=entertainment_observed,
+        reader_summary=" ".join(summary_parts),
+        reader_notes=tuple(reader_notes),
+        max_actions=max_actions,
+        previous_day_available=previous_day_available,
+        browser_sample_sufficient=browser_sample_sufficient,
     )

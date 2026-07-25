@@ -111,6 +111,26 @@ def test_assign_action_ids_idempotent_same_day():
     assert "KZN-20260707-001: Cursorのレビュー指示をテンプレート化する" in md2
 
 
+def test_assign_action_ids_reuses_and_supersedes_same_day_actions():
+    existing = [
+        MemoryEntry(id="KZN-20260707-001", date="2026-07-07", action="旧A"),
+        MemoryEntry(id="KZN-20260707-002", date="2026-07-07", action="旧B"),
+    ]
+    replacement = """## 🚀 Kaizen
+
+### 明日試すこと
+- [ ] 新しい維持アクション
+"""
+
+    markdown, updates = assign_action_ids(replacement, TODAY, existing)
+
+    assert "KZN-20260707-001: 新しい維持アクション" in markdown
+    assert [(entry.id, entry.status) for entry in updates] == [
+        ("KZN-20260707-001", "proposed"),
+        ("KZN-20260707-002", "superseded"),
+    ]
+
+
 def test_next_id_no_collision():
     existing = [MemoryEntry(id="KZN-20260707-002", date="2026-07-07", action="x")]
     assert next_id(existing, TODAY) == "KZN-20260707-001"

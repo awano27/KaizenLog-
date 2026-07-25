@@ -449,6 +449,10 @@ def advice_contract_errors(
     actions = _ACTION_RE.findall(sections.get("明日の最小アクション", ""))
     if not 1 <= len(actions) <= 3:
         errors.append("「明日の最小アクション」は未チェックのチェックボックスで1〜3件にしてください")
+    elif len(actions) > evidence_ctx.max_actions:
+        errors.append(
+            f"当日のデータ量では改善アクションは最大{evidence_ctx.max_actions}件にしてください"
+        )
     if improvements and actions and len(improvements) != len(actions):
         errors.append("改善提案と最小アクションの件数を1対1にしてください")
     if len(_ANY_CHECKBOX_RE.findall(advice)) != len(actions):
@@ -496,6 +500,33 @@ def advice_contract_errors(
             errors.append(f"最小アクション{index}の PASS:/FAIL: は数値条件にしてください")
         if re.search(r"KZN-\d{8}-\d+", action):
             errors.append(f"最小アクション{index}にモデル生成のKZN IDがあります")
+        if not evidence_ctx.previous_day_available and "前日" in action:
+            errors.append(
+                f"最小アクション{index}は比較可能な前日データがないため前日比を使えません"
+            )
+        if "通知" in action:
+            errors.append(
+                f"最小アクション{index}は通知を計測していないため通知操作を根拠にできません"
+            )
+        if (
+            not evidence_ctx.ai_conversation_metrics_available
+            and re.search(
+                r"\bAI\b|ChatGPT|Claude|Copilot|プロンプト|メッセージ",
+                action,
+                re.IGNORECASE,
+            )
+            and re.search(r"まとめ|一括|往復|依頼内容", action)
+        ):
+            errors.append(
+                f"最小アクション{index}はAI会話を計測していないため依頼方法を最適化できません"
+            )
+        if (
+            not evidence_ctx.browser_sample_sufficient
+            and re.search(r"watcher|URL観測|拡張機能", action, re.IGNORECASE)
+        ):
+            errors.append(
+                f"最小アクション{index}はブラウザ実測が短いためwatcher設定を優先できません"
+            )
 
         if index <= len(improvements) and available_fact_ids:
             improvement_ids = set(_FACT_ID_RE.findall(improvements[index - 1]))
@@ -505,6 +536,28 @@ def advice_contract_errors(
     errors.extend(_semantic_contract_errors(advice, evidence_ctx))
 
     return errors
+
+
+def render_reader_advice(advice_md: str, evidence: AdviceEvidence) -> str:
+    """検証済みの内部回答を、F-IDを見せない読者向け日次提案へ変換する。"""
+    sections = _level3_sections(advice_md)
+    actions = _ACTION_RE.findall(sections.get("明日の最小アクション", ""))
+    rendered_actions = []
+    for action in actions:
+        without_ids = _FACT_ID_RE.sub("", action)
+        cleaned = re.sub(r"\s{2,}", " ", without_ids).strip()
+        rendered_actions.append(f"- [ ] {cleaned}")
+
+    notes = "\n".join(evidence.reader_notes)
+    return (
+        "## 🚀 Kaizen（AIからの改善提案）\n\n"
+        "### 今日の結論\n\n"
+        f"{evidence.reader_summary}\n\n"
+        "### 明日試すこと\n\n"
+        + "\n".join(rendered_actions)
+        + "\n\n### 計測上の注意\n\n"
+        + notes
+    )
 
 
 def _is_measurable_condition(value: str) -> bool:

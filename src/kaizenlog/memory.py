@@ -16,7 +16,8 @@ from pathlib import Path
 
 MEMORY_FILE = "suggestions.jsonl"
 ID_PATTERN = re.compile(r"KZN-(\d{8})-(\d{3,})")  # 1000件目以降は4桁になるため下限のみ固定
-ACTION_SECTION = "### 明日の最小アクション"
+ACTION_SECTION = "### 明日試すこと"
+LEGACY_ACTION_SECTION = "### 明日の最小アクション"
 _CHECKBOX_RE = re.compile(r"^(\s*- \[)([ xX])(\]\s*)(.*)$")
 
 
@@ -25,7 +26,7 @@ class MemoryEntry:
     id: str
     date: str  # 提案日 YYYY-MM-DD
     action: str
-    status: str = "proposed"  # proposed | done
+    status: str = "proposed"  # proposed | done | superseded
     done_date: str | None = None
 
 
@@ -90,7 +91,7 @@ def next_id(existing: list[MemoryEntry], day: date, offset: int = 0) -> str:
 def assign_action_ids(
     advice_md: str, day: date, existing: list[MemoryEntry]
 ) -> tuple[str, list[MemoryEntry]]:
-    """「### 明日の最小アクション」内のチェックボックス行にIDを付与する。
+    """読者向け・旧形式のアクション欄にあるチェックボックス行へIDを付与する。
 
     LLMはIDを書かない約束なので、ID無しの行に KZN-YYYYMMDD-NNN を挿入し、
     新規エントリのリストを返す。既にIDがある行はそのまま。
@@ -101,29 +102,67 @@ def assign_action_ids(
     assigned = 0
     # 同日・同文のアクションは既存IDを再利用する（adviseの再実行で重複させない）
     same_day_actions = {
-        e.action: e.id for e in existing if e.date == day.isoformat()
+        e.action: e.id
+        for e in existing
+        if e.date == day.isoformat() and e.status == "proposed"
     }
+    reusable_same_day = [
+        e for e in existing
+        if e.date == day.isoformat() and e.status == "proposed"
+    ]
+    used_ids: set[str] = set()
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith("#"):
-            in_section = "明日の最小アクション" in stripped
+            in_section = (
+                ACTION_SECTION.removeprefix("### ") in stripped
+                or LEGACY_ACTION_SECTION.removeprefix("### ") in stripped
+            )
         if not in_section:
             continue
         m = _CHECKBOX_RE.match(line)
-        if not m or ID_PATTERN.search(m.group(4)):
+        if not m:
+            continue
+        existing_id = ID_PATTERN.search(m.group(4))
+        if existing_id:
+            used_ids.add(existing_id.group(0))
             continue
         text = m.group(4).strip()
         if not text:
             continue
         if text in same_day_actions:
-            lines[i] = f"{m.group(1)}{m.group(2)}{m.group(3)}{same_day_actions[text]}: {text}"
+            reused_id = same_day_actions[text]
+            used_ids.add(reused_id)
+            lines[i] = f"{m.group(1)}{m.group(2)}{m.group(3)}{reused_id}: {text}"
+            continue
+        reusable = next(
+            (entry for entry in reusable_same_day if entry.id not in used_ids),
+            None,
+        )
+        if reusable is not None:
+            used_ids.add(reusable.id)
+            lines[i] = f"{m.group(1)}{m.group(2)}{m.group(3)}{reusable.id}: {text}"
+            new_entries.append(
+                MemoryEntry(id=reusable.id, date=day.isoformat(), action=text)
+            )
             continue
         new_id = next_id(existing + new_entries, day, offset=assigned)
         assigned += 1
+        used_ids.add(new_id)
         lines[i] = f"{m.group(1)}{m.group(2)}{m.group(3)}{new_id}: {text}"
         new_entries.append(
             MemoryEntry(id=new_id, date=day.isoformat(), action=text)
         )
+    new_entries.extend(
+        MemoryEntry(
+            id=entry.id,
+            date=entry.date,
+            action=entry.action,
+            status="superseded",
+        )
+        for entry in reusable_same_day
+        if entry.id not in used_ids
+    )
     return "\n".join(lines), new_entries
 
 

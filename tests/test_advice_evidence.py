@@ -14,6 +14,7 @@ from kaizenlog.advisor import (
     advice_contract_errors,
     build_prompt,
     generate_advice,
+    render_reader_advice,
 )
 from kaizenlog.config import LLMConfig
 
@@ -74,6 +75,16 @@ MISSING_EVIDENCE_ADVICE = """### 今日の改善提案
 
 ### AI作業の改善
 - [F5] AI会話の往復数と品質は測定不能なので断定しない。
+"""
+
+SHORT_DAY_ADVICE = """### 今日の改善提案
+1. [F3] 集中できた時間帯の開始条件を明日も再現する。
+
+### 明日の最小アクション
+- [ ] [F3] 開発開始時に25分タイマーを1回設定する｜PASS: 25分以上の集中ブロックが1回以上｜FAIL: 0回
+
+### AI作業の改善
+- [F5] AI会話の品質は測定不能なので評価しない。
 """
 
 
@@ -209,6 +220,71 @@ def test_evidence_is_before_human_readable_log():
 def test_valid_advice_contract():
     evidence = build_advice_evidence(CURRENT)
     assert advice_contract_errors(VALID_ADVICE, evidence) == []
+
+
+def test_short_day_reader_output_is_plain_and_limits_actions():
+    current = deepcopy(CURRENT)
+    current.update({
+        "total_minutes": 44.0,
+        "context_switches": 39,
+        "by_category": {"AI作業": 32.0, "開発": 5.0, "ブラウジング": 2.0},
+        "input": {
+            "focus_blocks": 1,
+            "focus_minutes": 32.0,
+            "active_input_minutes": 35.0,
+        },
+    })
+    evidence = build_advice_evidence(current, source_status="verified")
+
+    assert evidence.max_actions == 1
+    assert evidence.previous_day_available is False
+    assert evidence.browser_sample_sufficient is False
+    assert "合計44分" in evidence.reader_summary
+    assert "集中ブロックを1回（合計32分）" in evidence.reader_summary
+    assert any("前日比ではなく絶対値" in note for note in evidence.reader_notes)
+    assert any("URL watcher" in note and "優先しません" in note for note in evidence.reader_notes)
+    assert any("最大1件" in error for error in advice_contract_errors(VALID_ADVICE, evidence))
+
+    rendered = render_reader_advice(
+        f"## 🚀 Kaizen（AIからの改善提案）\n\n{SHORT_DAY_ADVICE}",
+        evidence,
+    )
+    assert "### 今日の結論" in rendered
+    assert "### 明日試すこと" in rendered
+    assert "### 計測上の注意" in rendered
+    assert "[F3]" not in rendered
+    assert "[F5]" not in rendered
+    assert "25分以上の集中ブロックが1回以上" in rendered
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expected"),
+    [
+        ("通知を切って25分作業する", "通知を計測していない"),
+        ("AIへの依頼内容を1メッセージにまとめる", "AI会話を計測していない"),
+        ("URL watcher拡張機能を確認する", "watcher設定を優先できません"),
+    ],
+)
+def test_short_day_rejects_unmeasured_or_low_priority_actions(replacement, expected):
+    current = deepcopy(CURRENT)
+    current.update({
+        "total_minutes": 44.0,
+        "by_category": {"AI作業": 32.0, "開発": 5.0, "ブラウジング": 2.0},
+    })
+    evidence = build_advice_evidence(current, source_status="verified")
+    advice = SHORT_DAY_ADVICE.replace("開発開始時に25分タイマーを1回設定する", replacement)
+
+    assert any(expected in error for error in advice_contract_errors(advice, evidence))
+
+
+def test_without_previous_day_rejects_relative_action_condition():
+    evidence = build_advice_evidence(CURRENT, source_status="verified")
+    advice = SHORT_DAY_ADVICE.replace(
+        "PASS: 25分以上の集中ブロックが1回以上｜FAIL: 0回",
+        "PASS: 前日比で増加｜FAIL: 前日比で減少または同数",
+    )
+
+    assert any("前日比を使えません" in error for error in advice_contract_errors(advice, evidence))
 
 
 def test_missing_evidence_uses_safe_unmeasured_context():
@@ -491,7 +567,10 @@ def test_contract_accepts_explicit_f4_non_session_statement():
 
 
 def test_contract_accepts_measurable_relative_fail_condition():
-    evidence = build_advice_evidence(CURRENT)
+    evidence = build_advice_evidence(
+        CURRENT,
+        [{"day": "2026-07-20", "total_minutes": 120.0, "context_switches": 20}],
+    )
     advice = re.sub(
         r"FAIL: [^\n]+",
         "FAIL: 前日と同数以上",

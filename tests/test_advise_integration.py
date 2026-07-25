@@ -78,8 +78,13 @@ def test_success_commits_status_and_new_actions_together(monkeypatch, tmp_path):
     assert entries["KZN-20260721-002"].status == "proposed"
     assert entries["KZN-20260721-003"].status == "proposed"
     note = store.read(DAY) or ""
-    assert "KZN-20260721-002: [F3]" in note
-    assert "KZN-20260721-003: [F9]" in note
+    assert "### 今日の結論" in note
+    assert "### 明日試すこと" in note
+    assert "### 計測上の注意" in note
+    assert "KZN-20260721-002: 始業時に集中枠" in note
+    assert "KZN-20260721-003: 調査リンク" in note
+    assert "[F3]" not in note
+    assert "[F9]" not in note
 
 
 def test_note_write_failure_persists_completion_but_not_new_actions(monkeypatch, tmp_path):
