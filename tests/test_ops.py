@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -132,13 +133,26 @@ def test_generate_text_backend_none_does_not_retry():
 
 # ---- 設定ファイルの影武者検出 ----
 
-def test_existing_config_candidates_orders_cwd_first(tmp_path, monkeypatch):
-    """カレントの kaizenlog.toml が最優先で、他の候補も列挙される。"""
+def test_existing_config_candidates_lists_all(tmp_path, monkeypatch):
+    """優先順は env → AppData → CWD。AppData が存在するとき CWD より前に並ぶ。"""
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("KAIZENLOG_CONFIG", raising=False)
+    monkeypatch.setattr("kaizenlog.config.sys.platform", "win32")
+    app = tmp_path / "AppData" / "kaizenlog"
+    app.mkdir(parents=True)
+    app_cfg = app / "config.toml"
+    app_cfg.write_text("[general]\n", encoding="utf-8")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
     (tmp_path / "kaizenlog.toml").write_text("[general]\n", encoding="utf-8")
     (tmp_path / "config.toml").write_text("[general]\n", encoding="utf-8")
     found = existing_config_candidates()
-    assert [p.name for p in found[:2]] == ["kaizenlog.toml", "config.toml"]
+    assert app_cfg.resolve() in {p.resolve() for p in found}
+    cwd_cfg = (tmp_path / "kaizenlog.toml").resolve()
+    assert found.index(next(p for p in found if p.resolve() == app_cfg.resolve())) < \
+        found.index(next(p for p in found if p.resolve() == cwd_cfg))
+    names = [p.name for p in found]
+    assert "kaizenlog.toml" in names
+    assert "config.toml" in names
 
 
 # ---- 欠損日検出 ----

@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import os
+import re
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-DEFAULT_CONFIG_LOCATIONS = [
-    Path("kaizenlog.toml"),
-    Path("config.toml"),
-    Path(os.environ.get("APPDATA", "~/.config")).expanduser() / "kaizenlog" / "config.toml",
-]
+from .vault import atomic_write_text
 
 # デフォルトのカテゴリ分類ルール。上から順に評価され、最初にマッチしたものが採用される。
 # patterns は「アプリ名 | ウィンドウタイトル」を結合した文字列への正規表現（大文字小文字無視）。
@@ -167,24 +165,50 @@ class Config:
         return Path(self.vault_dir).expanduser() / self.memory_dir
 
 
+def default_config_path() -> Path:
+    """OS 標準のユーザー設定ディレクトリ上の config.toml パスを返す。
+
+    Windows: %APPDATA%/kaizenlog/config.toml
+    それ以外: $XDG_CONFIG_HOME/kaizenlog/config.toml または ~/.config/kaizenlog/config.toml
+    """
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        return base / "kaizenlog" / "config.toml"
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg).expanduser() / "kaizenlog" / "config.toml"
+    return Path.home() / ".config" / "kaizenlog" / "config.toml"
+
+
 def existing_config_candidates() -> list[Path]:
     """存在する設定ファイル候補を優先順で返す（先頭が実際に使われる）。
 
-    先頭2つの候補はカレントディレクトリ相対なので、タスクスケジューラ等
-    実行時のcwdが違う環境では別の設定が選ばれうる。doctor はこの一覧で
-    「設定の影武者」を警告する。
+    優先順: KAIZENLOG_CONFIG → AppData/XDG → CWD の kaizenlog.toml / config.toml。
+    doctor はこの一覧で「設定の影武者」を警告する。
     """
     found: list[Path] = []
     env = os.environ.get("KAIZENLOG_CONFIG")
     if env and Path(env).expanduser().is_file():
         found.append(Path(env).expanduser())
-    for cand in DEFAULT_CONFIG_LOCATIONS:
+    app = default_config_path()
+    if app.is_file():
+        found.append(app)
+    seen = {p.resolve() for p in found}
+    for cand in (Path("kaizenlog.toml"), Path("config.toml")):
         if cand.is_file():
-            found.append(cand)
+            resolved = cand.resolve()
+            if resolved not in seen:
+                found.append(resolved)
+                seen.add(resolved)
     return found
 
 
 def find_config_file(explicit: str | None = None) -> Path | None:
+    """設定ファイルを探索する。
+
+    優先順: 明示パス → KAIZENLOG_CONFIG（欠落時は fail-closed）→
+    AppData/XDG → CWD の kaizenlog.toml / config.toml。
+    """
     if explicit:
         p = Path(explicit).expanduser()
         if not p.is_file():
@@ -193,12 +217,145 @@ def find_config_file(explicit: str | None = None) -> Path | None:
     env = os.environ.get("KAIZENLOG_CONFIG")
     if env:
         p = Path(env).expanduser()
-        if p.is_file():
-            return p
-    for cand in DEFAULT_CONFIG_LOCATIONS:
+        if not p.is_file():
+            raise FileNotFoundError(f"KAIZENLOG_CONFIG の設定ファイルが見つかりません: {p}")
+        return p
+    app = default_config_path()
+    if app.is_file():
+        return app
+    for cand in (Path("kaizenlog.toml"), Path("config.toml")):
         if cand.is_file():
-            return cand
+            return cand.resolve()
     return None
+
+
+def _toml_path_str(path: Path | str) -> str:
+    """TOML 文字列用にパスをスラッシュ区切りへ正規化する。"""
+    return str(path).replace("\\", "/")
+
+
+def render_config_template(
+    vault_dir: Path | str,
+    backend: str,
+    model: str,
+    **kwargs,
+) -> str:
+    """設定ファイル雛形の本文を生成する。"""
+    vault = _toml_path_str(vault_dir)
+    return f'''\
+# KaizenLog 設定ファイル
+# 置き場所: %APPDATA%/kaizenlog/config.toml（推奨）または
+#           環境変数 KAIZENLOG_CONFIG でパスを指定してください。
+# 初期セットアップ: kaizenlog setup
+
+[general]
+timezone = "Asia/Tokyo"
+vault_dir = "{vault}"   # Obsidianボールトのルート
+daily_notes_dir = "01 Daily Notes"
+experiments_dir = "03 Areas/Kaizen Experiments"   # カイゼン実験ノートの置き場所
+stats_dir = ".kaizenlog/stats"   # パターン検出用の日次統計JSON（ドットフォルダ=Obsidian非表示）
+logs_dir = ".kaizenlog/logs"     # 実行ログ（kaizenlog status で確認）
+memory_dir = "Kaizen/Memory"     # 提案の記録（Kaizen Memory、重複提案の防止に使用）
+auto_backfill_days = 3      # 毎晩の実行時に直近N日の欠損を自動補完（0で無効）
+log_retention_days = 90     # 実行ログの保持日数
+min_block_minutes = 3.0     # タイムラインに載せる最小ブロック長（分）
+session_gap_minutes = 5.0   # この分数以上空いたら別画面ブロック扱い
+
+[notifications]
+on_failure = true   # 夜間実行が失敗したときWindows通知を出す
+
+[privacy]
+# LLMへ送信する前にマスクする正規表現（ボールト内の日誌は原文のまま保持される）
+# 例: redact_patterns = ["(株)〇〇商事", "案件[A-Z]-\\d+", "\\S+@\\S+\\.co\\.jp"]
+redact_patterns = []
+replacement = "[REDACTED]"
+
+[activitywatch]
+base_url = "http://localhost:5600"
+
+[aiwork]
+# Claude Codeのセッションログ（JSONL）から「AI作業の質」を集計する
+# 往復数・細切れセッション・ツールエラー・中断を検出し、改善提案の材料にする
+enabled = true
+claude_projects_dir = "~/.claude/projects"
+
+[llm]
+# "claude-code-cli"   : Claude Code CLI（要: https://claude.com/claude-code & ログイン済み）
+# "copilot-cli"       : GitHub Copilot CLI（要: npm install -g @github/copilot & ログイン済み）
+# "openai-compatible" : GitHub Models / Ollama などOpenAI互換API
+# "none"              : 改善提案をスキップ（ログ生成のみ）
+backend = "{backend}"
+# システムプロンプト: 同梱テンプレート名（daily_advisor / privacy_safe /
+# weekly_review / ai_work_deep_review）または自作プロンプトのファイルパス
+system_prompt = "daily_advisor"
+lookback_days = 7   # 傾向分析のために渡す過去日数
+retries = 2                # 一時エラー時の再試行回数
+retry_wait_seconds = 20    # 再試行までの待ち秒数
+fallback_to_local = true   # 指定バックエンド不可時に openai-compatible へ切替
+
+[llm.claude_code_cli]
+command = "claude"
+extra_args = []   # 例: ["--model", "haiku"]
+
+[llm.copilot_cli]
+command = "copilot"
+extra_args = []   # 例: ["--model", "claude-sonnet-4"]
+
+[llm.openai_compatible]
+# --- Ollama（完全ローカル・GPU不要、8Bモデルは16GB RAM推奨）---
+# model は setup が検出した実在モデル、またはプレースホルダ
+base_url = "http://localhost:11434/v1"
+model = "{model}"
+# --- GitHub Models（無料API）を使う場合は下記に差し替え ---
+# base_url = "https://models.github.ai/inference"
+# model = "openai/gpt-4o"
+# api_key_env に指定した環境変数へ models:read 権限のPATを設定
+api_key_env = "KAIZENLOG_API_KEY"
+timeout_seconds = 600
+
+# カテゴリ分類ルールの追加例（デフォルトルールより優先されます）
+# [[categories.rules]]
+# name = "AI作業"
+# ai = true
+# patterns = ["自社のAIツール名"]
+'''
+
+
+def _upsert_toml_assignment(text: str, key: str, value: str) -> str:
+    """先頭の `key = ...` 行を置換する。無ければ末尾に追記する。"""
+    pattern = re.compile(rf"(?m)^({re.escape(key)}\s*=\s*).*$")
+    if pattern.search(text):
+        return pattern.sub(rf'\1"{value}"', text, count=1)
+    return text.rstrip() + f'\n{key} = "{value}"\n'
+
+
+def write_config_file(
+    path: Path | str,
+    vault_dir: Path | str,
+    backend: str,
+    model: str,
+    merge: bool = False,
+) -> None:
+    """設定ファイルを原子的に書き込む。
+
+    merge=False またはファイル未作成時はフルテンプレートを書く。
+    merge=True かつ既存ファイルがあるときは vault_dir / backend / model だけ
+    キー単位で upsert し、categories.rules 等の追記を残す。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    vault_s = _toml_path_str(vault_dir)
+
+    if merge and path.is_file():
+        text = path.read_text(encoding="utf-8")
+        text = _upsert_toml_assignment(text, "vault_dir", vault_s)
+        text = _upsert_toml_assignment(text, "backend", backend)
+        text = _upsert_toml_assignment(text, "model", model)
+        atomic_write_text(path, text)
+        return
+
+    content = render_config_template(vault_dir=vault_dir, backend=backend, model=model)
+    atomic_write_text(path, content)
 
 
 def load_config(path: str | None = None) -> Config:

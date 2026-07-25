@@ -357,82 +357,6 @@ def _category_table_only(activity_md: str) -> str:
     return "\n".join(out)
 
 
-CONFIG_TEMPLATE = '''\
-# KaizenLog 設定ファイル
-# 置き場所: このファイルを %APPDATA%/kaizenlog/config.toml に置くか、
-#           環境変数 KAIZENLOG_CONFIG でパスを指定してください。
-
-[general]
-timezone = "Asia/Tokyo"
-vault_dir = 'C:/develop/obsidian/2026'   # Obsidianボールトのルート
-daily_notes_dir = "01 Daily Notes"
-experiments_dir = "03 Areas/Kaizen Experiments"   # カイゼン実験ノートの置き場所
-stats_dir = ".kaizenlog/stats"   # パターン検出用の日次統計JSON（ドットフォルダ=Obsidian非表示）
-logs_dir = ".kaizenlog/logs"     # 実行ログ（kaizenlog status で確認）
-memory_dir = "Kaizen/Memory"     # 提案の記録（Kaizen Memory、重複提案の防止に使用）
-auto_backfill_days = 3      # 毎晩の実行時に直近N日の欠損を自動補完（0で無効）
-log_retention_days = 90     # 実行ログの保持日数
-min_block_minutes = 3.0     # タイムラインに載せる最小ブロック長（分）
-session_gap_minutes = 5.0   # この分数以上空いたら別画面ブロック扱い
-
-[notifications]
-on_failure = true   # 夜間実行が失敗したときWindows通知を出す
-
-[privacy]
-# LLMへ送信する前にマスクする正規表現（ボールト内の日誌は原文のまま保持される）
-# 例: redact_patterns = ["(株)〇〇商事", "案件[A-Z]-\\d+", "\\S+@\\S+\\.co\\.jp"]
-redact_patterns = []
-replacement = "[REDACTED]"
-
-[activitywatch]
-base_url = "http://localhost:5600"
-
-[aiwork]
-# Claude Codeのセッションログ（JSONL）から「AI作業の質」を集計する
-# 往復数・細切れセッション・ツールエラー・中断を検出し、改善提案の材料にする
-enabled = true
-claude_projects_dir = "~/.claude/projects"
-
-[llm]
-# "claude-code-cli"   : Claude Code CLI（要: https://claude.com/claude-code & ログイン済み）
-# "copilot-cli"       : GitHub Copilot CLI（要: npm install -g @github/copilot & ログイン済み）
-# "openai-compatible" : GitHub Models / Ollama などOpenAI互換API
-# "none"              : 改善提案をスキップ（ログ生成のみ）
-backend = "copilot-cli"
-# システムプロンプト: 同梱テンプレート名（daily_advisor / privacy_safe /
-# weekly_review / ai_work_deep_review）または自作プロンプトのファイルパス
-system_prompt = "daily_advisor"
-lookback_days = 7   # 傾向分析のために渡す過去日数
-retries = 2                # 一時エラー時の再試行回数
-retry_wait_seconds = 20    # 再試行までの待ち秒数
-
-[llm.claude_code_cli]
-command = "claude"
-extra_args = []   # 例: ["--model", "haiku"]
-
-[llm.copilot_cli]
-command = "copilot"
-extra_args = []   # 例: ["--model", "claude-sonnet-4"]
-
-[llm.openai_compatible]
-# --- Ollama（完全ローカル・GPU不要、8Bモデルは16GB RAM推奨）---
-base_url = "http://localhost:11434/v1"
-model = "qwen3:8b"
-# --- GitHub Models（無料API）を使う場合は下記に差し替え ---
-# base_url = "https://models.github.ai/inference"
-# model = "openai/gpt-4o"
-# api_key_env に指定した環境変数へ models:read 権限のPATを設定
-api_key_env = "KAIZENLOG_API_KEY"
-timeout_seconds = 600
-
-# カテゴリ分類ルールの追加例（デフォルトルールより優先されます）
-# [[categories.rules]]
-# name = "AI作業"
-# ai = true
-# patterns = ["自社のAIツール名"]
-'''
-
-
 def _extract_intent(content: str) -> str | None:
     """手書きの計画欄（Today's Focus / Tasks）を取り出す。"""
     parts = []
@@ -576,12 +500,16 @@ def cmd_skill(cfg: Config, args: argparse.Namespace) -> int:
     return rc
 
 
-def cmd_init_config() -> None:
-    out = Path("kaizenlog.toml")
+def cmd_init_config(output: str | None = None) -> int:
+    from .config import default_config_path, write_config_file
+    out = Path(output).expanduser() if output else default_config_path()
     if out.exists():
-        raise SystemExit(f"{out} は既に存在します。上書きしたい場合は削除してから実行してください。")
-    out.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+        print(f"{out} は既に存在します。再構成は `kaizenlog setup` を使ってください。")
+        return 1
+    write_config_file(out, vault_dir=Path("."), backend="none", model="qwen3:8b", merge=False)
     print(f"✅ 設定ファイルの雛形を作成しました: {out.resolve()}")
+    print("次: kaizenlog setup")
+    return 0
 
 
 def _harden_console_encoding() -> None:
@@ -653,7 +581,8 @@ def main(argv: list[str] | None = None) -> int:
     blk.add_argument("--write", action="store_true",
                      help="ルールファイルの書き出しと効果測定実験の起票まで行う")
     blk.add_argument("--out", help="ルールファイルの出力先（省略時: <vault>/.kaizenlog/leechblock-options.txt）")
-    sub.add_parser("init-config")
+    init = sub.add_parser("init-config", help="設定ファイルの雛形を出力する")
+    init.add_argument("--output", help="出力先パス（省略時は AppData/XDG の config.toml）")
 
     args = parser.parse_args(argv)
 
@@ -666,8 +595,7 @@ def main(argv: list[str] | None = None) -> int:
                 pass
 
     if args.command == "init-config":
-        cmd_init_config()
-        return 0
+        return cmd_init_config(getattr(args, "output", None))
 
     try:
         cfg = load_config(args.config)
