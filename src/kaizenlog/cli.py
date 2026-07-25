@@ -32,7 +32,12 @@ from .advisor import (
     render_reader_advice,
 )
 from .advice_evidence import build_advice_evidence
-from .aiwork import render_aiwork_markdown, scan_sessions, scan_user_prompts
+from .aiwork import (
+    detect_retry_chains,
+    render_aiwork_markdown,
+    scan_sessions,
+    scan_user_prompts,
+)
 from .doctor import run_doctor
 from .memory import (
     append_entries,
@@ -120,10 +125,17 @@ def cmd_generate(cfg: Config, day: date) -> Path:
                               input_stats=input_stats)
 
     cc_sessions = []
+    day_retry_chains = []
+    retry_chain_count: int | None = None
     if cfg.aiwork.enabled:
         projects_dir = Path(cfg.aiwork.claude_projects_dir).expanduser()
         cc_sessions = scan_sessions(projects_dir, day_start, day_end)
-        aiwork_md = render_aiwork_markdown(cc_sessions, tz)
+        day_prompts = scan_user_prompts(projects_dir, day_start, day_end)
+        day_retry_chains = detect_retry_chains(day_prompts)
+        retry_chain_count = len(day_retry_chains)
+        aiwork_md = render_aiwork_markdown(
+            cc_sessions, tz, retry_chain_count=retry_chain_count
+        )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
 
@@ -142,6 +154,7 @@ def cmd_generate(cfg: Config, day: date) -> Path:
         cc_sessions,
         input_stats,
         activity_md=section,
+        retry_chains=day_retry_chains if cfg.aiwork.enabled else None,
     )
 
     # 実験の実測追記: running 全件 + adopted（deadline から30日以内のみ）
@@ -149,7 +162,10 @@ def cmd_generate(cfg: Config, day: date) -> Path:
     for exp in experiments:
         if not should_measure_experiment(exp, day):
             continue
-        value = compute_metric(exp.metric, summary, cc_sessions, input_stats)
+        value = compute_metric(
+            exp.metric, summary, cc_sessions, input_stats,
+            retry_chains=retry_chain_count,
+        )
         if value is None:
             print(f"⚠️  実験「{exp.title}」の指標 {exp.metric} は不明のためスキップしました")
             continue
@@ -178,6 +194,7 @@ def cmd_generate(cfg: Config, day: date) -> Path:
     proposal_day = day - timedelta(days=1)
     judged = judge_entries(
         memory_entries, proposal_day, summary, cc_sessions, input_stats, day,
+        retry_chains=retry_chain_count,
     )
     if judged:
         append_entries(cfg.memory_path, judged)

@@ -103,6 +103,7 @@ def judge_entries(
     cc_sessions: list[AISession],
     input_stats: InputStats | None,
     judged_day: date,
+    retry_chains: int | None = None,
 ) -> list[MemoryEntry]:
     """提案日のエントリを判定し、差分 MemoryEntry だけを返す。
 
@@ -119,7 +120,9 @@ def judge_entries(
         if parsed is None:
             continue
         metric, op, target_value = parsed
-        value = compute_metric(metric, summary, cc_sessions, input_stats)
+        value = compute_metric(
+            metric, summary, cc_sessions, input_stats, retry_chains=retry_chains
+        )
         if value is None:
             continue
         met = target_met(value, op, target_value)

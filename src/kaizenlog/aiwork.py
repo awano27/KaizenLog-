@@ -11,7 +11,13 @@ import json
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
+from difflib import SequenceMatcher
 from pathlib import Path
+
+# リトライ連鎖: 「ほぼ同文の再送」を捕まえる。promptmine の 0.6 より高いのは
+# 言い直し・言い換えクラスタではなく、短時間のほぼ同一依頼を対象にするため。
+_RETRY_WINDOW_MINUTES = 30
+_RETRY_SIMILARITY = 0.85
 
 # ユーザーがツール実行を拒否/中断したときに tool_result に入る典型文言
 _INTERRUPT_MARKERS = (
@@ -214,6 +220,64 @@ class UserPrompt:
     text: str
 
 
+@dataclass
+class RetryChain:
+    """短時間にほぼ同文で再依頼されたプロンプト列。"""
+
+    project: str
+    prompts: list[UserPrompt]  # 時系列順、2件以上
+
+    @property
+    def length(self) -> int:
+        return len(self.prompts)
+
+
+def detect_retry_chains(
+    prompts: list[UserPrompt],
+    window_minutes: int = _RETRY_WINDOW_MINUTES,
+    similarity: float = _RETRY_SIMILARITY,
+) -> list[RetryChain]:
+    """同一 project 内のほぼ同文・短時間再送をチェーンとして検出する。
+
+    各プロンプトは進行中チェーンの末尾とだけ比較する（全ペア比較はしない）。
+    window_minutes ちょうどは連結、超えたら分断。
+    """
+    # 遅延 import: promptmine → aiwork.UserPrompt の循環を避ける
+    from .promptmine import normalize
+
+    # プロジェクトごとの進行中チェーン（末尾と比較）
+    open_chains: dict[str, list[UserPrompt]] = {}
+    completed: list[RetryChain] = []
+
+    for p in prompts:
+        current = open_chains.get(p.project)
+        if current is None:
+            open_chains[p.project] = [p]
+            continue
+        last = current[-1]
+        delta_min = (p.timestamp - last.timestamp).total_seconds() / 60.0
+        if delta_min < 0:
+            # 時刻逆行は安全側で新規チェーン
+            if len(current) >= 2:
+                completed.append(RetryChain(project=p.project, prompts=list(current)))
+            open_chains[p.project] = [p]
+            continue
+        ratio = SequenceMatcher(
+            None, normalize(last.text), normalize(p.text)
+        ).ratio()
+        if delta_min <= window_minutes and ratio >= similarity:
+            current.append(p)
+        else:
+            if len(current) >= 2:
+                completed.append(RetryChain(project=p.project, prompts=list(current)))
+            open_chains[p.project] = [p]
+
+    for project, current in open_chains.items():
+        if len(current) >= 2:
+            completed.append(RetryChain(project=project, prompts=list(current)))
+    return completed
+
+
 def scan_user_prompts(
     projects_dir: Path, start: datetime, end: datetime, min_chars: int = 8
 ) -> list[UserPrompt]:
@@ -276,9 +340,15 @@ def _fmt_minutes(minutes: float) -> str:
 
 
 def render_aiwork_markdown(
-    sessions: list[AISession], tz: tzinfo, max_rows: int = 15
+    sessions: list[AISession],
+    tz: tzinfo,
+    max_rows: int = 15,
+    retry_chain_count: int = 0,
 ) -> str:
-    """「AI作業の質」セクションのMarkdownを生成する。セッションが無ければ空文字。"""
+    """「AI作業の質」セクションのMarkdownを生成する。セッションが無ければ空文字。
+
+    細切れ（2往復以下）は中立の観測値。摩擦の主指標はリトライ連鎖。
+    """
     if not sessions:
         return ""
 
@@ -298,10 +368,11 @@ def render_aiwork_markdown(
     lines.append("")
     lines.append(
         f"セッション: {len(sessions)}回 / ユーザー発話: {total_turns}回"
-        f"（平均 {avg_turns:.1f}回/セッション、2往復以下の細切れ: {fragmented}回）"
+        f"（平均 {avg_turns:.1f}回/セッション、2往復以下: {fragmented}回）"
     )
     lines.append(
         f"ツールエラー: {tool_errors}回 / ユーザー中断・拒否: {interruptions}回"
+        f" / リトライ連鎖: {retry_chain_count}回"
         f" / 出力トークン: {output_tokens:,}"
     )
     if top_tools:

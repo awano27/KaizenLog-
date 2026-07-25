@@ -12,7 +12,7 @@ import json
 from datetime import date, timedelta
 from pathlib import Path
 
-from .aiwork import AISession
+from .aiwork import AISession, RetryChain
 from .focus import InputStats
 from .report import DailySummary
 from .vault import atomic_write_text
@@ -33,16 +33,26 @@ def build_stats(
     cc_sessions: list[AISession],
     input_stats: InputStats | None = None,
     activity_md: str | None = None,
+    retry_chains: list[RetryChain] | None = None,
 ) -> dict:
     projects: dict[str, dict] = {}
     for s in cc_sessions:
         p = projects.setdefault(
-            s.project, {"sessions": 0, "turns": 0, "errors": 0, "fragmented": 0}
+            s.project,
+            {"sessions": 0, "turns": 0, "errors": 0, "fragmented": 0, "retry_chains": 0},
         )
         p["sessions"] += 1
         p["turns"] += s.user_turns
         p["errors"] += s.tool_errors
         p["fragmented"] += 1 if s.is_fragmented else 0
+
+    chains = retry_chains or []
+    for chain in chains:
+        p = projects.setdefault(
+            chain.project,
+            {"sessions": 0, "turns": 0, "errors": 0, "fragmented": 0, "retry_chains": 0},
+        )
+        p["retry_chains"] = p.get("retry_chains", 0) + 1
 
     stats = {
         "version": 1,
@@ -71,6 +81,9 @@ def build_stats(
             "fragmented": sum(1 for s in cc_sessions if s.is_fragmented),
             "tool_errors": sum(s.tool_errors for s in cc_sessions),
             "interruptions": sum(s.interruptions for s in cc_sessions),
+            # リトライ連鎖（摩擦の一次指標）。旧 stats には無い → 読み手は 0/欠落を許容
+            "retry_chains": len(chains),
+            "retry_prompts": sum(c.length for c in chains),
             "projects": projects,
         },
     }
@@ -94,13 +107,19 @@ def write_stats(
     cc_sessions: list[AISession],
     input_stats: InputStats | None = None,
     activity_md: str | None = None,
+    retry_chains: list[RetryChain] | None = None,
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
     atomic_write_text(
         path,
-        json.dumps(build_stats(day, summary, cc_sessions, input_stats, activity_md),
-                   ensure_ascii=False, indent=1),
+        json.dumps(
+            build_stats(
+                day, summary, cc_sessions, input_stats, activity_md, retry_chains
+            ),
+            ensure_ascii=False,
+            indent=1,
+        ),
     )
     return path
 

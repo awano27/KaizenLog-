@@ -78,15 +78,28 @@ def test_routine_not_detected_different_hours():
     assert detect_routines(stats) == []
 
 
-def test_ai_friction_by_fragmentation():
+def test_ai_friction_fragmentation_alone_is_not_friction():
+    # 細切れ（2往復以下）単独は中立。摩擦シグナルなしでは検出しない。
     stats = [
         _day_stats(d, ai_projects={"ai-news": {"sessions": 3, "turns": 4,
-                                               "errors": 0, "fragmented": 2}})
+                                               "errors": 0, "fragmented": 2,
+                                               "retry_chains": 0}})
+        for d in _days(4)
+    ]
+    assert detect_ai_friction(stats) == []
+
+
+def test_ai_friction_fragmentation_with_errors():
+    stats = [
+        _day_stats(d, ai_projects={"ai-news": {"sessions": 3, "turns": 4,
+                                               "errors": 1, "fragmented": 2,
+                                               "retry_chains": 0}})
         for d in _days(4)
     ]
     out = detect_ai_friction(stats)
     assert len(out) == 1
     assert "ai-news" in out[0].title
+    assert "摩擦を伴う短セッション" in out[0].evidence
 
 
 def test_ai_friction_by_errors():
@@ -161,4 +174,4 @@ def test_build_stats_aggregates_ai_projects():
     s = build_stats(date(2026, 7, 5), summary, sessions)
     assert s["ai_activity_blocks"] == summary.ai_activity_blocks
     assert s["ai"]["projects"]["ai-news"] == {
-        "sessions": 2, "turns": 6, "errors": 2, "fragmented": 1}
+        "sessions": 2, "turns": 6, "errors": 2, "fragmented": 1, "retry_chains": 0}

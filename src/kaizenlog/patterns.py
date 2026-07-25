@@ -118,26 +118,50 @@ def detect_routines(
 
 
 def detect_ai_friction(stats: list[dict]) -> list[PatternCandidate]:
-    """特定プロジェクトでAI作業の摩擦（細切れ・エラー）が慢性化していないか。"""
+    """特定プロジェクトでAI作業の摩擦が慢性化していないか。
+
+    2往復以下のセッション数（fragmented）は中立観測であり、単独では摩擦にしない。
+    エラー・中断・リトライ連鎖を伴う場合だけ摩擦候補とする。
+    """
     stats = _dedupe_by_day(stats)
-    fragmented_days: dict[str, int] = defaultdict(int)
+    # 細切れ + (エラー or 中断 or リトライ) を伴う日だけ数える
+    friction_short_days: dict[str, int] = defaultdict(int)
     error_total: dict[str, int] = defaultdict(int)
+    retry_total: dict[str, int] = defaultdict(int)
     session_total: dict[str, int] = defaultdict(int)
     for day in stats:
-        for project, p in day.get("ai", {}).get("projects", {}).items():
-            session_total[project] += p.get("sessions", 0)
-            error_total[project] += p.get("errors", 0)
-            if p.get("fragmented", 0) > 0:
-                fragmented_days[project] += 1
+        ai = day.get("ai") or {}
+        day_interruptions = int(ai.get("interruptions") or 0)
+        for project, p in (ai.get("projects") or {}).items():
+            if not isinstance(p, dict):
+                continue
+            session_total[project] += int(p.get("sessions") or 0)
+            errors = int(p.get("errors") or 0)
+            retries = int(p.get("retry_chains") or 0)
+            error_total[project] += errors
+            retry_total[project] += retries
+            fragmented = int(p.get("fragmented") or 0)
+            companion = (
+                errors > 0
+                or retries > 0
+                or day_interruptions > 0
+            )
+            # fragmented 単独は摩擦にしない（成功した短セッションと区別）
+            if fragmented > 0 and companion:
+                friction_short_days[project] += 1
 
     out = []
     need = _threshold(len(stats))
     for project in sorted(session_total, key=lambda p: -session_total[p]):
         reasons = []
-        if fragmented_days[project] >= need:
-            reasons.append(f"細切れセッションが{fragmented_days[project]}日発生")
+        if friction_short_days[project] >= need:
+            reasons.append(
+                f"摩擦を伴う短セッションが{friction_short_days[project]}日発生"
+            )
         if error_total[project] >= 5:
             reasons.append(f"ツールエラー計{error_total[project]}回")
+        if retry_total[project] >= 3:
+            reasons.append(f"リトライ連鎖計{retry_total[project]}回")
         if not reasons:
             continue
         out.append(
@@ -147,7 +171,7 @@ def detect_ai_friction(stats: list[dict]) -> list[PatternCandidate]:
                 evidence="、".join(reasons) + f"（{len(stats)}日間）",
                 suggestion=(
                     "そのリポジトリのCLAUDE.mdにビルド/テスト手順・前提を明文化する、"
-                    "頻出依頼をスキル化する、細切れ依頼をタスク単位にまとめる"
+                    "頻出依頼をスキル化する、リトライが起きる依頼をタスク単位にまとめる"
                 ),
             )
         )

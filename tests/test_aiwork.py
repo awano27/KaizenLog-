@@ -155,7 +155,8 @@ def test_render_markdown(tmp_path):
     md = render_aiwork_markdown(sessions, TZ)
     assert "### 🧠 AI作業の質（Claude Code）" in md
     assert "セッション: 1回" in md
-    assert "細切れ: 1回" in md
+    assert "2往復以下: 1回" in md
+    assert "リトライ連鎖: 0回" in md
     assert "ツールエラー: 1回" in md
     assert "Bash×1" in md
     assert "myproj" in md

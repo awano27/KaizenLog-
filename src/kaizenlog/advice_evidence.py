@@ -307,10 +307,15 @@ def build_advice_evidence(
     tool_errors = int(_number(ai_telemetry.get("tool_errors"))) if ai_stats_valid else 0
     interruptions = int(_number(ai_telemetry.get("interruptions"))) if ai_stats_valid else 0
     if ai_stats_valid and telemetry_sessions:
+        # retry_chains は新フィールド。旧 stats では欠落 → 文言に含めない
+        retry_raw = ai_telemetry.get("retry_chains")
+        retry_part = ""
+        if isinstance(retry_raw, (int, float)) and not isinstance(retry_raw, bool):
+            retry_part = f" / リトライ連鎖 {int(retry_raw)}回"
         lines.append(
             f"- [F5] Claude Codeテレメトリ: セッション {telemetry_sessions}回 / "
             f"2往復以下 {fragmented}回 / ツールエラー {tool_errors}回 / "
-            f"中断・拒否 {interruptions}回。"
+            f"中断・拒否 {interruptions}回{retry_part}。"
         )
     elif ai_stats_valid:
         lines.append(

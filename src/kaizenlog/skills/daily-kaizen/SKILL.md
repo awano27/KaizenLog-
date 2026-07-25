@@ -33,7 +33,8 @@ allowed-tools: "Read Glob Grep Edit"
 - `[F2]`: `by_category` の上位カテゴリと時間
 - `[F3]`: `input.focus_blocks`、`focus_minutes`、`active_input_minutes`
 - `[F4]`: `ai_activity_blocks`（旧statsだけはAIカテゴリのblock数から導出）。会話数にしない
-- `[F5]`: `ai.sessions`、`fragmented`、`tool_errors`、`interruptions`。項目がなければ測定不能
+- `[F5]`: `ai.sessions`、`fragmented`（中立の短セッション数）、`tool_errors`、
+  `interruptions`、`retry_chains`（リトライ連鎖）。項目がなければ測定不能
 - `[F6]`: `by_app` のブラウザ時間と `by_site`。サイト別合計は部分観測として扱う
 - `[F7]`: 娯楽・私用の直接計測値。無ければ「定量根拠なし」とする
 - `[F8]`: 直近の有効日3日以上（各日60分以上）のカテゴリ変更/時の中央値との比較

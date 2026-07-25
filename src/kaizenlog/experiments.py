@@ -32,6 +32,7 @@ METRIC_DESCRIPTIONS = {
     "ai_sessions": "AIツールの画面アクティビティブロック数（旧名・互換用）",
     "ai_cc_sessions": "Claude Codeセッション数",
     "ai_fragmented_sessions": "2往復以下の細切れClaude Codeセッション数",
+    "ai_retry_chains": "リトライ連鎖数（30分以内のほぼ同文の再依頼）",
     "ai_tool_errors": "Claude Codeのツールエラー回数",
     "ai_interruptions": "Claude Codeのユーザー中断・拒否回数",
     "ai_avg_turns": "Claude Codeセッションの平均往復数",
@@ -95,6 +96,7 @@ def compute_metric(
     summary: DailySummary,
     cc_sessions: list[AISession],
     input_stats: InputStats | None = None,
+    retry_chains: int | None = None,
 ) -> float | None:
     """対象日の指標値を計算する。未知の指標・データ不足はNone。"""
     if metric in ("focus_blocks", "focus_minutes", "input_keypresses"):
@@ -118,6 +120,11 @@ def compute_metric(
         return float(len(cc_sessions))
     if metric == "ai_fragmented_sessions":
         return float(sum(1 for s in cc_sessions if s.is_fragmented))
+    if metric == "ai_retry_chains":
+        # 未配線（aiwork 無効など）は未計測。0 は「計測したが連鎖なし」
+        if retry_chains is None:
+            return None
+        return float(retry_chains)
     if metric == "ai_tool_errors":
         return float(sum(s.tool_errors for s in cc_sessions))
     if metric == "ai_interruptions":
@@ -140,6 +147,7 @@ def metric_from_stats(metric: str, stats: dict) -> float | None:
       ai_activity_blocks / ai_sessions（トップレベルまたは互換）,
       ai_cc_sessions ← ai.sessions,
       ai_fragmented_sessions ← ai.fragmented,
+      ai_retry_chains ← ai.retry_chains（旧 stats は None）,
       ai_tool_errors ← ai.tool_errors,
       ai_interruptions ← ai.interruptions,
       category_minutes:<名> ← by_category,
@@ -168,6 +176,9 @@ def metric_from_stats(metric: str, stats: dict) -> float | None:
         return float(v) if isinstance(v, (int, float)) else None
     if metric == "ai_fragmented_sessions":
         v = ai.get("fragmented")
+        return float(v) if isinstance(v, (int, float)) else None
+    if metric == "ai_retry_chains":
+        v = ai.get("retry_chains")
         return float(v) if isinstance(v, (int, float)) else None
     if metric == "ai_tool_errors":
         v = ai.get("tool_errors")
