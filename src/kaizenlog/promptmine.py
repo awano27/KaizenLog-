@@ -66,7 +66,11 @@ def cluster_prompts(
             best = PromptCluster(representative=norm, example=p.text)
             clusters.append(best)
         best.count += 1
-        best.projects.add(p.project)
+        # ソース付きラベル（例: vault (codex)）でクラスタ見出しに内訳を出す
+        label = p.project
+        if getattr(p, "source", None) and p.source != "claude-code":
+            label = f"{p.project} ({p.source})"
+        best.projects.add(label)
         # タイムスタンプはUTC。UTCのまま日付を取ると日本の夕方〜深夜の依頼が
         # 別日に割れて「◯日間で反復」の判定（提案の強さ）がずれる
         best.days.add(p.timestamp.astimezone().date().isoformat())
@@ -90,8 +94,8 @@ def render_prompt_report(
     header = f"# 💬 プロンプト資産化レポート（過去{days}日・依頼{len(prompts)}件）\n"
     if not prompts:
         return header + (
-            "\nClaude Codeの依頼が見つかりませんでした。"
-            "`[aiwork] claude_projects_dir` の設定を確認してください。\n"
+            "\n構造化AIテレメトリの依頼が見つかりませんでした。"
+            "`[aiwork] claude_projects_dir` / `codex_sessions_dir` を確認してください。\n"
         )
     clusters = [c for c in cluster_prompts(prompts) if c.count >= min_count]
     clusters.sort(key=lambda c: -c.count)

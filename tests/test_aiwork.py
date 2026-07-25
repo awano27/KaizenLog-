@@ -153,7 +153,8 @@ def test_render_markdown(tmp_path):
     sessions = scan_sessions(tmp_path, DAY_START, DAY_END)
 
     md = render_aiwork_markdown(sessions, TZ)
-    assert "### 🧠 AI作業の質（Claude Code）" in md
+    assert "### 🧠 AI作業の質" in md
+    assert "claude-code" in md
     assert "セッション: 1回" in md
     assert "2往復以下: 1回" in md
     assert "リトライ連鎖: 0回" in md

@@ -198,7 +198,7 @@ def build_advice_evidence(
         "- [L5] サイト別時間はブラウザwatcherが取得できた範囲だけで、統計では0.1分単位に"
         "丸められる。既知ブラウザの前景時間に対するカバレッジを必ず併記する。",
         "- [L6] AIの発話数・往復数・エラー・中断を判断できるのは、明示されたAIテレメトリ"
-        "（現在はClaude Code）が存在する場合だけ。画面滞在時間から推定しない。",
+        "（Claude Code / Codex CLI 等）が存在する場合だけ。画面滞在時間から推定しない。",
         "- [L7] 過去中央値は60分以上記録された日が3日以上ある場合だけ示す。"
         "通常範囲からの差であり、良し悪しや因果を証明しない。",
         (
@@ -312,19 +312,34 @@ def build_advice_evidence(
         retry_part = ""
         if isinstance(retry_raw, (int, float)) and not isinstance(retry_raw, bool):
             retry_part = f" / リトライ連鎖 {int(retry_raw)}回"
+        # ソース内訳（ai.sources）があれば付記
+        sources = ai_telemetry.get("sources")
+        source_part = ""
+        if isinstance(sources, dict) and sources:
+            bits = []
+            for name, bucket in sorted(sources.items()):
+                if isinstance(bucket, dict):
+                    n = bucket.get("sessions")
+                    if isinstance(n, (int, float)):
+                        bits.append(f"{name} {int(n)}回")
+            if bits:
+                source_part = f"（内訳: {' / '.join(bits)}）"
         lines.append(
-            f"- [F5] Claude Codeテレメトリ: セッション {telemetry_sessions}回 / "
+            f"- [F5] 構造化AIテレメトリ: セッション {telemetry_sessions}回{source_part} / "
             f"2往復以下 {fragmented}回 / ツールエラー {tool_errors}回 / "
             f"中断・拒否 {interruptions}回{retry_part}。"
         )
     elif ai_stats_valid:
         lines.append(
-            "- [F5] 統計に記録されたClaude Codeテレメトリは0件（利用ゼロとは限らない）。"
-            "ChatGPT、Cursor、Copilotを含むAI会話の発話数・往復数は判断不能。"
+            "- [F5] 統計に記録された構造化AIテレメトリは0件（利用ゼロとは限らない）。"
+            "明示されたAIテレメトリ（Claude Code / Codex CLI 等）以外の"
+            "会話の発話数・往復数は判断不能。"
         )
     else:
         lines.append(
-            "- [F5] 構造化AIテレメトリ欄なし。AI会話の発話数・往復数・品質は判断不能。"
+            "- [F5] 構造化AIテレメトリ欄なし。"
+            "明示されたAIテレメトリ（Claude Code / Codex CLI 等）の範囲外の"
+            "発話数・往復数・品質は判断不能。"
         )
 
     by_site_value = stats.get("by_site")

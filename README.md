@@ -17,7 +17,7 @@ ActivityWatch ──REST API──> kaizenlog generate ──> 01 Daily Notes/YY
 ```
 
 - **収集はActivityWatchに委譲**: 実績ある収集エンジンをそのまま使い、本ツールは「分類→Md日誌→LLM分析」に集中
-- **AI Work Telemetry (v0.2)**: Claude Codeがローカルに残すセッションログ（`~/.claude/projects/**/*.jsonl`）を解析し、**AI作業の"質"**（往復数・細切れセッション・ツールエラー・中断/拒否・トークン量）を日誌に記録。LLMはこの指標を使って「依頼の粒度を上げる」「CLAUDE.mdを整備する」「プランモードを使う」といった具体的な改善提案を行う
+- **AI Work Telemetry (v0.2+)**: Claude Code（`~/.claude/projects/**/*.jsonl`）と Codex CLI（`~/.codex/sessions/**/rollout-*.jsonl`、`[aiwork] codex_sessions_dir`）の構造化ログをアダプタ層で解析し、**AI作業の"質"**（往復数・リトライ連鎖・ツールエラー・中断/拒否・トークン量）を日誌に記録。LLMはこの指標を使って「依頼の粒度を上げる」「CLAUDE.mdを整備する」「プランモードを使う」といった具体的な改善提案を行う
 - **計画vs実績の差分分析 (v0.3)**: デイリーノートに手書きした「Today's Focus」「Tasks」を自動で拾い、計画と実際の時間配分のズレ・未達の要因をLLMが分析する
 - **週次のエージェント深掘り分析 (v0.3)**: 同梱の `/weekly-kaizen` スキル（`src/kaizenlog/skills/weekly-kaizen/`、`kaizenlog skill install` で配置）を使うと、Claude Codeが週1回、7日分のログ・提案の追跡結果・繰り返しパターンを分析して週次レビューノートを自動作成する
 - **Kaizen実験ループ (v0.4)**: 改善提案を「言いっぱなし」にせず、**検証可能な実験**として追跡する。`kaizenlog experiment new` で仮説・指標・目標・期限つきの実験ノートを起票すると、毎晩の `generate` が実測値を自動追記し、目標達成を✅/❌で判定。LLMは実行中の実験と実測値を見た上で提案する（重複提案の防止・進捗コメント）。期限切れの実験は週次レビューが採用/棄却を判定し、一覧はObsidian Basesダッシュボード（`templates/Kaizen Experiments.base`）で見られる
@@ -197,7 +197,8 @@ kaizenlog block --days 14 --write  # ルールファイル書き出し + 効果�
 - [x] **v1.2 — 運用強化パック**（`doctor` / `status` / `backfill` / 失敗通知 / LLMリトライ / `--dry-run`）
 - [x] **v1.3 — Product Ready**（Claude Code一級対応・スキル同梱と`skill install`・Kaizen Memory/Action Ledger・プライバシーレダクション・CI）
 - [x] ブラウザ拡張watcher（aw-watcher-web）連携でURL粒度の分析 ＋ 入力watcher（aw-watcher-input）連携で集中ブロック計測
-- [ ] Cursor / Copilot CLI などClaude Code以外のAIツールログ対応
+- [x] **Codex CLI テレメトリ**（`aiwork_codex` アダプタ）
+- [ ] Cursor / Copilot CLI などその他AIツールログ対応
 - [ ] [screenpipe](https://github.com/mediar-ai/screenpipe) 連携（OCRで画面内容まで分析）
 
 ## 開発

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 # リトライ連鎖: 「ほぼ同文の再送」を捕まえる。promptmine の 0.6 より高いのは
 # 言い直し・言い換えクラスタではなく、短時間のほぼ同一依頼を対象にするため。
@@ -43,6 +44,7 @@ class AISession:
     # usage重複排除用: 1つのAPI応答が複数のJSONL行（thinking/text/tool_use毎）に
     # 分かれて記録され、各行が同じusageを繰り返し持つ
     seen_message_ids: set[str] = field(default_factory=set)
+    source: str = "claude-code"  # テレメトリアダプタ ID
 
     @property
     def minutes(self) -> float:
@@ -200,6 +202,7 @@ def scan_sessions(
                             project=_project_name(record, path),
                             start=ts,
                             end=ts,
+                            source="claude-code",
                         )
                     _update_session(sessions[sid], record, ts)
         except OSError:
@@ -218,6 +221,7 @@ class UserPrompt:
     timestamp: datetime
     project: str
     text: str
+    source: str = "claude-code"
 
 
 @dataclass
@@ -326,12 +330,87 @@ def scan_user_prompts(
                     if _is_command_wrapper(text):
                         continue
                     out.append(
-                        UserPrompt(timestamp=ts, project=_project_name(record, path), text=text)
+                        UserPrompt(
+                            timestamp=ts,
+                            project=_project_name(record, path),
+                            text=text,
+                            source="claude-code",
+                        )
                     )
         except OSError:
             continue
     out.sort(key=lambda p: p.timestamp)
     return out
+
+
+@runtime_checkable
+class TelemetryAdapter(Protocol):
+    """AI作業テレメトリのソース抽象。"""
+
+    name: str  # "claude-code" | "codex"
+
+    def scan_sessions(
+        self, day_start: datetime, day_end: datetime
+    ) -> list[AISession]: ...
+
+    def scan_user_prompts(
+        self, start: datetime, end: datetime, min_chars: int = 8
+    ) -> list[UserPrompt]: ...
+
+
+@dataclass
+class ClaudeCodeAdapter:
+    """Claude Code の ~/.claude/projects JSONL アダプタ。"""
+
+    projects_dir: Path
+    name: str = "claude-code"
+
+    def scan_sessions(
+        self, day_start: datetime, day_end: datetime
+    ) -> list[AISession]:
+        return scan_sessions(self.projects_dir, day_start, day_end)
+
+    def scan_user_prompts(
+        self, start: datetime, end: datetime, min_chars: int = 8
+    ) -> list[UserPrompt]:
+        return scan_user_prompts(self.projects_dir, start, end, min_chars=min_chars)
+
+
+def available_adapters(cfg) -> list[TelemetryAdapter]:
+    """設定とディレクトリ存在から有効なテレメトリアダプタを返す。"""
+    adapters: list[TelemetryAdapter] = []
+    if not getattr(cfg, "aiwork", None) or not cfg.aiwork.enabled:
+        return adapters
+    claude_dir = Path(cfg.aiwork.claude_projects_dir).expanduser()
+    if claude_dir.is_dir():
+        adapters.append(ClaudeCodeAdapter(claude_dir))
+    codex_dir = Path(
+        getattr(cfg.aiwork, "codex_sessions_dir", "~/.codex/sessions")
+    ).expanduser()
+    if codex_dir.is_dir():
+        from .aiwork_codex import CodexAdapter
+
+        adapters.append(CodexAdapter(codex_dir))
+    return adapters
+
+
+def collect_ai_telemetry(
+    adapters: list[TelemetryAdapter],
+    day_start: datetime,
+    day_end: datetime,
+) -> tuple[list[AISession], list[UserPrompt]]:
+    """全アダプタのセッション・プロンプトをマージして時系列ソートする。"""
+    sessions: list[AISession] = []
+    prompts: list[UserPrompt] = []
+    for adapter in adapters:
+        try:
+            sessions.extend(adapter.scan_sessions(day_start, day_end))
+            prompts.extend(adapter.scan_user_prompts(day_start, day_end))
+        except OSError:
+            continue
+    sessions.sort(key=lambda s: s.start)
+    prompts.sort(key=lambda p: p.timestamp)
+    return sessions, prompts
 
 
 def _fmt_minutes(minutes: float) -> str:
@@ -363,11 +442,16 @@ def render_aiwork_markdown(
         all_tools.update(s.tool_counts)
     top_tools = ", ".join(f"{name}×{n}" for name, n in all_tools.most_common(5))
 
+    by_source: Counter = Counter(s.source or "claude-code" for s in sessions)
+    source_bits = " / ".join(
+        f"{name} {count}" for name, count in sorted(by_source.items())
+    )
+
     lines: list[str] = []
-    lines.append("### 🧠 AI作業の質（Claude Code）")
+    lines.append("### 🧠 AI作業の質")
     lines.append("")
     lines.append(
-        f"セッション: {len(sessions)}回 / ユーザー発話: {total_turns}回"
+        f"セッション: {len(sessions)}回（{source_bits}） / ユーザー発話: {total_turns}回"
         f"（平均 {avg_turns:.1f}回/セッション、2往復以下: {fragmented}回）"
     )
     lines.append(
@@ -386,6 +470,8 @@ def render_aiwork_markdown(
         start = s.start.astimezone(tz).strftime("%H:%M")
         end = s.end.astimezone(tz).strftime("%H:%M")
         project = s.project.replace("|", "\\|")
+        if (s.source or "claude-code") != "claude-code":
+            project = f"{project} ({s.source})"
         lines.append(
             f"| {start}-{end} | {project} | {s.user_turns} "
             f"| {sum(s.tool_counts.values())} | {s.tool_errors} | {s.interruptions} |"

@@ -54,6 +54,42 @@ def build_stats(
         )
         p["retry_chains"] = p.get("retry_chains", 0) + 1
 
+    # ソース別内訳（合算値は互換のため ai 直下に維持）
+    sources: dict[str, dict] = {}
+    for s in cc_sessions:
+        src = s.source or "claude-code"
+        bucket = sources.setdefault(
+            src,
+            {
+                "sessions": 0,
+                "fragmented": 0,
+                "tool_errors": 0,
+                "interruptions": 0,
+                "retry_chains": 0,
+            },
+        )
+        bucket["sessions"] += 1
+        bucket["fragmented"] += 1 if s.is_fragmented else 0
+        bucket["tool_errors"] += s.tool_errors
+        bucket["interruptions"] += s.interruptions
+    # リトライ連鎖はプロンプト側の source が無い場合があるため、
+    # チェーン先頭プロンプトの source があれば割当、無ければ合算のみ
+    for chain in chains:
+        src = "claude-code"
+        if chain.prompts and getattr(chain.prompts[0], "source", None):
+            src = chain.prompts[0].source or src
+        bucket = sources.setdefault(
+            src,
+            {
+                "sessions": 0,
+                "fragmented": 0,
+                "tool_errors": 0,
+                "interruptions": 0,
+                "retry_chains": 0,
+            },
+        )
+        bucket["retry_chains"] += 1
+
     stats = {
         "version": 1,
         "day": day.isoformat(),
@@ -85,6 +121,7 @@ def build_stats(
             "retry_chains": len(chains),
             "retry_prompts": sum(c.length for c in chains),
             "projects": projects,
+            "sources": sources,
         },
     }
     if input_stats is not None:

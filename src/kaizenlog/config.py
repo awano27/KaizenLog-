@@ -116,6 +116,7 @@ class LLMConfig:
 class AIWorkConfig:
     enabled: bool = True
     claude_projects_dir: str = "~/.claude/projects"
+    codex_sessions_dir: str = "~/.codex/sessions"
 
 
 @dataclass
@@ -278,6 +279,7 @@ base_url = "http://localhost:5600"
 # 往復数・細切れセッション・ツールエラー・中断を検出し、改善提案の材料にする
 enabled = true
 claude_projects_dir = "~/.claude/projects"
+codex_sessions_dir = "~/.codex/sessions"  # Codex CLI ロールアウトログ（無ければ無効）
 
 [llm]
 # "claude-code-cli"   : Claude Code CLI（要: https://claude.com/claude-code & ログイン済み）
@@ -396,6 +398,9 @@ def load_config(path: str | None = None) -> Config:
     cfg.aiwork.enabled = bool(aiwork.get("enabled", cfg.aiwork.enabled))
     cfg.aiwork.claude_projects_dir = aiwork.get(
         "claude_projects_dir", cfg.aiwork.claude_projects_dir
+    )
+    cfg.aiwork.codex_sessions_dir = aiwork.get(
+        "codex_sessions_dir", cfg.aiwork.codex_sessions_dir
     )
 
     cats = data.get("categories", {})

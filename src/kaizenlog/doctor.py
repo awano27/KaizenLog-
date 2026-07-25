@@ -208,13 +208,28 @@ def _check_aiwork(c: Check, cfg: Config) -> None:
     if not cfg.aiwork.enabled:
         c.warn("AI Work Telemetry: 無効（[aiwork] enabled = false）")
         return
-    projects = Path(cfg.aiwork.claude_projects_dir).expanduser()
-    if not projects.is_dir():
-        c.warn(f"Claude Codeログが見つかりません: {projects}"
-               "（Claude Code未使用なら問題ありません）")
-        return
-    count = sum(1 for _ in projects.rglob("*.jsonl"))
-    c.ok(f"Claude Codeログ: {projects}（セッションファイル{count}個）")
+    # アダプタごとの検出状況（未使用ソースは ➖ で案内）
+    claude = Path(cfg.aiwork.claude_projects_dir).expanduser()
+    if claude.is_dir():
+        # プロジェクト直下のディレクトリ数を概算（ファイル全走査は重い）
+        try:
+            proj_count = sum(1 for p in claude.iterdir() if p.is_dir())
+        except OSError:
+            proj_count = 0
+        c.ok(f"claude-code: {claude}（プロジェクト約{proj_count}件）")
+    else:
+        c.warn(f"➖ claude-code: {claude} が見つかりません（未使用なら問題なし）")
+
+    codex = Path(cfg.aiwork.codex_sessions_dir).expanduser()
+    if codex.is_dir():
+        try:
+            # 日付ディレクトリの有無だけ軽く確認
+            day_dirs = sum(1 for _ in codex.rglob("rollout-*.jsonl"))
+        except OSError:
+            day_dirs = 0
+        c.ok(f"codex: {codex}（ロールアウト約{day_dirs}件）")
+    else:
+        c.warn(f"➖ codex: {codex} が見つかりません（未使用なら問題なし）")
 
 
 def _check_history(c: Check, cfg: Config) -> None:

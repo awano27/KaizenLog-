@@ -30,7 +30,7 @@ METRIC_DESCRIPTIONS = {
     "total_active_minutes": "合計アクティブ時間（分）",
     "ai_activity_blocks": "AIツールの画面アクティビティブロック数",
     "ai_sessions": "AIツールの画面アクティビティブロック数（旧名・互換用）",
-    "ai_cc_sessions": "Claude Codeセッション数",
+    "ai_cc_sessions": "構造化テレメトリのセッション数（全ソース合計。旧: Claude Codeのみ）",
     "ai_fragmented_sessions": "2往復以下の細切れClaude Codeセッション数",
     "ai_retry_chains": "リトライ連鎖数（30分以内のほぼ同文の再依頼）",
     "ai_tool_errors": "Claude Codeのツールエラー回数",

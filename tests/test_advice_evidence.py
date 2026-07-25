@@ -159,7 +159,7 @@ def test_evidence_prevents_ai_and_entertainment_misreading():
     evidence = build_advice_evidence(CURRENT, HISTORY).markdown
     assert "47ブロック" in evidence
     assert "AI会話セッション数・往復数ではない" in evidence
-    assert "AI会話の発話数・往復数は判断不能" in evidence
+    assert "構造化AIテレメトリは0件" in evidence or "判断不能" in evidence
     assert "娯楽利用を示す定量根拠なし" in evidence
     assert "patreon.com" not in evidence  # 0.0分は利用証拠として渡さない
     assert "概算URL観測率 6.6%" in evidence

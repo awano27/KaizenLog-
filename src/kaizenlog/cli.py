@@ -33,10 +33,10 @@ from .advisor import (
 )
 from .advice_evidence import build_advice_evidence
 from .aiwork import (
+    available_adapters,
+    collect_ai_telemetry,
     detect_retry_chains,
     render_aiwork_markdown,
-    scan_sessions,
-    scan_user_prompts,
 )
 from .doctor import run_doctor
 from .memory import (
@@ -124,17 +124,16 @@ def cmd_generate(cfg: Config, day: date) -> Path:
     section = render_markdown(summary, tz, min_block_minutes=cfg.min_block_minutes,
                               input_stats=input_stats)
 
-    cc_sessions = []
+    ai_sessions = []
     day_retry_chains = []
     retry_chain_count: int | None = None
     if cfg.aiwork.enabled:
-        projects_dir = Path(cfg.aiwork.claude_projects_dir).expanduser()
-        cc_sessions = scan_sessions(projects_dir, day_start, day_end)
-        day_prompts = scan_user_prompts(projects_dir, day_start, day_end)
+        adapters = available_adapters(cfg)
+        ai_sessions, day_prompts = collect_ai_telemetry(adapters, day_start, day_end)
         day_retry_chains = detect_retry_chains(day_prompts)
         retry_chain_count = len(day_retry_chains)
         aiwork_md = render_aiwork_markdown(
-            cc_sessions, tz, retry_chain_count=retry_chain_count
+            ai_sessions, tz, retry_chain_count=retry_chain_count
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
@@ -144,14 +143,14 @@ def cmd_generate(cfg: Config, day: date) -> Path:
     print(f"✅ Activity Log を書き込みました: {path}")
     print(f"   合計 {summary.total_minutes:.0f}分 / {len(summary.blocks)}ブロック"
           f" / AI関連画面ブロック {summary.ai_activity_blocks}回"
-          f" / Claude Codeセッション {len(cc_sessions)}回")
+          f" / AIセッション {len(ai_sessions)}回")
 
     # パターン検出用の機械可読な統計を蓄積する
     write_stats(
         cfg.stats_path,
         day,
         summary,
-        cc_sessions,
+        ai_sessions,
         input_stats,
         activity_md=section,
         retry_chains=day_retry_chains if cfg.aiwork.enabled else None,
@@ -163,7 +162,7 @@ def cmd_generate(cfg: Config, day: date) -> Path:
         if not should_measure_experiment(exp, day):
             continue
         value = compute_metric(
-            exp.metric, summary, cc_sessions, input_stats,
+            exp.metric, summary, ai_sessions, input_stats,
             retry_chains=retry_chain_count,
         )
         if value is None:
@@ -193,7 +192,7 @@ def cmd_generate(cfg: Config, day: date) -> Path:
     memory_entries = load_entries(cfg.memory_path)
     proposal_day = day - timedelta(days=1)
     judged = judge_entries(
-        memory_entries, proposal_day, summary, cc_sessions, input_stats, day,
+        memory_entries, proposal_day, summary, ai_sessions, input_stats, day,
         retry_chains=retry_chain_count,
     )
     if judged:
@@ -527,8 +526,8 @@ def cmd_prompts(cfg: Config, days: int, end_day: date, min_count: int) -> None:
     tz = ZoneInfo(cfg.timezone)
     end = datetime.combine(end_day, time.min, tzinfo=tz) + timedelta(days=1)
     start = end - timedelta(days=days)
-    projects_dir = Path(cfg.aiwork.claude_projects_dir).expanduser()
-    prompts = scan_user_prompts(projects_dir, start, end)
+    adapters = available_adapters(cfg) if cfg.aiwork.enabled else []
+    _, prompts = collect_ai_telemetry(adapters, start, end)
     print(render_prompt_report(prompts, days=days, min_count=min_count))
 
 
