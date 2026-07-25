@@ -1,6 +1,11 @@
 # KaizenLog 設定ファイル
-# 置き場所: このファイルを %APPDATA%/kaizenlog/config.toml に置くか、
-#           環境変数 KAIZENLOG_CONFIG でパスを指定してください。
+#
+# 推奨: `kaizenlog setup` で対話的に生成する（検出優先・AppData 既定）。
+# 既定の置き場所: %APPDATA%/kaizenlog/config.toml（Windows）
+#                 $XDG_CONFIG_HOME/kaizenlog/config.toml または ~/.config/kaizenlog/config.toml
+# 手動: `kaizenlog init-config`（省略時は上記 AppData/XDG）/ `init-config --output PATH`
+# 上書きパス: 環境変数 KAIZENLOG_CONFIG または CLI の --config
+# setup は実在する LLM モデル id を書いてくれる（例の qwen3:8b が無い環境でも安全）。
 
 [general]
 timezone = "Asia/Tokyo"
@@ -68,6 +73,8 @@ extra_args = []   # 例: ["--model", "claude-sonnet-4"]
 # --- Ollama（完全ローカル・GPU不要、8Bモデルは16GB RAM推奨）---
 base_url = "http://localhost:11434/v1"
 model = "qwen3:8b"
+# thinkingモデルが本文生成前にcontextを使い切らないよう、通常の改善提案では無効化
+reasoning_effort = "none"   # none | low | medium | high
 # --- GitHub Models（無料API）を使う場合は下記に差し替え ---
 # base_url = "https://models.github.ai/inference"
 # model = "openai/gpt-4o"

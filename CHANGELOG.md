@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`kaizenlog setup`**: 対話式セットアップウィザード（ボールト / LLM / ActivityWatch / スキル / 日次タスクを検出優先で構成し、末尾で `doctor` を実行）
+- 設定の既定先を AppData/XDG（`%APPDATA%\kaizenlog\config.toml`）に変更。`init-config --output` で任意パスにも出力可能
+- `doctor` の ActivityWatch 接続失敗時に `kaizenlog setup` への修復案内。CWD 設定のみ使用時は AppData 移行を警告
+
 ## 1.5.0-rc1 (2026-07-20) — Watchers + 介入ループ + 信頼性強化（リリース候補）
 
 ### 記録の解像度（オプションwatcher）

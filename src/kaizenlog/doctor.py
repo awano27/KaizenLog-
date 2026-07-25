@@ -12,7 +12,7 @@ from pathlib import Path
 
 import requests
 
-from .config import Config, existing_config_candidates, find_config_file
+from .config import Config, default_config_path, existing_config_candidates, find_config_file
 from .runlog import load_runs
 
 
@@ -45,15 +45,27 @@ def _check_config(c: Check, config_path: str | None) -> None:
         # 夜間タスクは %APPDATA% の config.toml）。内容がズレていると
         # 「手動では正常なのに夜間だけ別ボールトに書く」事故になるため警告する。
         if not config_path:
+            app = default_config_path()
+            # CWD の設定だけ使っていて AppData/XDG が無い → 夜間タスクとズレやすい
+            if not app.is_file() and found.name in ("kaizenlog.toml", "config.toml"):
+                try:
+                    if found.resolve() != app.resolve():
+                        c.warn(
+                            f"作業ディレクトリの設定を使用中（推奨の AppData/XDG には未配置）: {found}。"
+                            f"`kaizenlog setup` で {app} へ移行してください"
+                        )
+                except OSError:
+                    pass
             others = [p for p in existing_config_candidates() if p.resolve() != found.resolve()]
             if others:
                 c.warn("他の場所にも設定ファイルがあります（現在は無視）: "
                        + ", ".join(str(p) for p in others)
                        + " — 作業ディレクトリが異なる実行（夜間タスク等）では"
-                         "そちらが使われる可能性があります。内容を同期するか片方を削除してください")
+                         "そちらが使われる可能性があります。内容を同期するか片方を削除してください。"
+                         " 修復: kaizenlog setup")
     else:
         c.warn("設定ファイルが見つかりません（デフォルト設定で動作中）。"
-               "`kaizenlog init-config` で作成してください")
+               "`kaizenlog setup` または `kaizenlog init-config` で作成してください")
 
 
 def _check_vault(c: Check, cfg: Config) -> None:
@@ -78,7 +90,8 @@ def _check_activitywatch(c: Check, cfg: Config) -> None:
         buckets = r.json()
     except requests.RequestException as e:
         c.error(f"ActivityWatch ({cfg.aw_base_url}) に接続できません: {e.__class__.__name__}。"
-                "起動しているか確認してください")
+                "起動しているか確認してください。"
+                " 修復: kaizenlog setup （または ActivityWatch を起動）")
         return
     types = {info.get("type") for info in buckets.values()}
     c.ok(f"ActivityWatch 応答あり（バケット{len(buckets)}個）")

@@ -34,22 +34,20 @@ ActivityWatch ──REST API──> kaizenlog generate ──> 01 Daily Notes/YY
 
 ## セットアップ
 
-### 1. ActivityWatch のインストール
-
-[公式サイト](https://activitywatch.net/downloads/)からWindows版をインストールして起動しておく（タスクトレイに常駐）。
-
-### 2. KaizenLog のインストール
+### 最短セットアップ
 
 ```powershell
 pipx install kaizenlog       # または pip install kaizenlog
-kaizenlog init-config        # kaizenlog.toml の雛形を生成
+kaizenlog setup              # 対話ウィザード（ボールト・LLM・AW・スキル・夜間タスク）
+kaizenlog doctor             # 環境診断
+kaizenlog run                # ActivityWatch 起動後に初回実行
 ```
 
-生成された `kaizenlog.toml` を編集して `%APPDATA%\kaizenlog\config.toml` に置く（最低限 `vault_dir` を自分のObsidianボールトに変更）。
+`setup` は `%APPDATA%\kaizenlog\config.toml` に設定を書き、検出できた LLM / ActivityWatch を優先して提案します。詳細手順・手動設定は [docs/USAGE.md](docs/USAGE.md) を参照。
 
-### 3. LLMバックエンドの設定
+### LLMバックエンド（参考）
 
-**自動フォールバック機構搭載** — 指定されたバックエンドが利用できない場合、自動的にローカル LLM（Ollama）にフォールバック。すべて失敗時のみエラー。
+**自動フォールバック機構** — 指定バックエンドが使えない場合はローカル LLM（Ollama）へ自動フォールバック。
 
 | バックエンド | 向いている人 | 準備 |
 | --- | --- | --- |
@@ -58,46 +56,17 @@ kaizenlog init-config        # kaizenlog.toml の雛形を生成
 | **Ollama**（自動フォールバック先） | 環境がない場合の自動選択肢 / 完全ローカル | `ollama pull qwen3:8b`（16GB RAM推奨、8GBなら `qwen3:4b`） |
 | **GitHub Models** | 無料APIで済ませたい人 | `models:read` 権限のPATを発行し環境変数 `KAIZENLOG_API_KEY` に設定 |
 
-**セットアップ不要の最小構成**（最初は Copilot CLI を試すが、なければ Ollama が起動していれば自動利用）:
-
-```toml
-# kaizenlog.toml
-[llm]
-backend = "copilot-cli"  # 見つからなければ自動的に Ollama を試す
-```
-
 いずれのバックエンドも**テキスト生成のみ**を行い、ノートへの書き込みは常にKaizenLogがマーカー区間に対して行います（LLMにファイルを直接触らせません）。
 
-### 4. 毎晩の自動実行
+### Claude Code連携（オプション・推奨）
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\register-task.ps1 -Time "21:30"
-```
-
-### 5. Claude Code連携（オプション・推奨）
-
-Claude Codeユーザーは2つの使い方を選べます（併用も可）：
-
-**方式A: スキル運用** — Claude Codeエージェントがボールト全体の文脈を読んで直接分析・追記する：
-
-```powershell
-kaizenlog skill install    # 同梱スキル3種を <vault>/.claude/skills/ に配置
+kaizenlog skill install    # 同梱スキル3種を <vault>/.claude/skills/ に配置（setup でも可）
 claude -p "/daily-kaizen"  # 日次: Activity Logを読み改善提案をマーカー区間に追記
 claude -p "/weekly-kaizen" # 週次: 7日分の傾向分析・週次レビュー作成
-# 週次の定期実行を登録:
-powershell -ExecutionPolicy Bypass -File scripts\register-task.ps1 -Weekly -VaultDir "C:\develop\obsidian\2026"
 ```
 
 `kaizenlog skill install` は既存スキルと差分がある場合は上書きせずdiffを表示します（`--force`で.bak退避後に上書き）。状態確認は `kaizenlog skill doctor`、一覧は `kaizenlog skill show`。
-
-**方式B: バックエンド運用** — `kaizenlog advise` の生成エンジンとしてClaude Codeを使う（書き込みはKaizenLog側）：
-
-```toml
-[llm]
-backend = "claude-code-cli"
-```
-
-方式Aはボールト文脈込みの深い提案、方式Bは決定的で監査しやすい運用（`--dry-run`で送信内容を事前確認可能）が利点です。
 
 ## 使い方
 

@@ -1,6 +1,47 @@
 # KaizenLog 使い方手順書
 
-Windowsの毎日の操作を自動記録し、Obsidianのデイリーノートに日誌として残し、LLMが改善提案（Kaizen）を行うツールのセットアップと日々の使い方です。所要時間は初期セットアップ約30分。
+Windowsの毎日の操作を自動記録し、Obsidianのデイリーノートに日誌として残し、LLMが改善提案（Kaizen）を行うツールのセットアップと日々の使い方です。所要時間は初期セットアップ約10〜30分。
+
+## 最短セットアップ（推奨）
+
+```powershell
+pipx install kaizenlog
+kaizenlog setup              # 対話ウィザード（検出優先・不足だけ質問）
+kaizenlog doctor
+kaizenlog run                # ActivityWatch 起動後
+```
+
+設定の既定先は **`%APPDATA%\kaizenlog\config.toml`**（Windows）です。CWD の `kaizenlog.toml` は移行期間のフォールバックです。
+
+### `kaizenlog setup` フラグ
+
+| フラグ | 意味 |
+| --- | --- |
+| `--config PATH` | 読み書きする設定パス（省略時は AppData/XDG） |
+| `--vault PATH` | Obsidian ボールトのパス |
+| `--yes` | 安全な既定提案を確認なしで採用（非対話向け） |
+| `--force` | 既に OK のフェーズも再確認 |
+| `--skip-aw` | ActivityWatch フェーズをスキップ |
+| `--skip-task` | 日次タスク登録をスキップ |
+| `--skip-skills` | スキル導入をスキップ |
+| `--install-aw` | 非対話でも winget で ActivityWatch 導入を許可 |
+| `--register-task` | 非対話でも日次タスク登録を許可 |
+| `--time HH:MM` | 日次タスク時刻（既定 `21:30`） |
+
+例（CI / スモーク）:
+
+```powershell
+kaizenlog setup --vault "C:\path\to\vault" --yes --skip-aw --skip-task --skip-skills
+```
+
+### `kaizenlog init-config`（互換・雛形のみ）
+
+```powershell
+kaizenlog init-config                 # 既定: AppData/XDG の config.toml
+kaizenlog init-config --output PATH   # 任意パスへ雛形を出力
+```
+
+既存ファイルは上書きしません。再構成は `kaizenlog setup` を使ってください。
 
 ## 全体像（何が毎日起きるか）
 
@@ -49,20 +90,23 @@ KaizenLogはClaude Codeを「LLMバックエンドの1つ」としても「自�
 
 ## Step 2: KaizenLog のインストール
 
-Obsidianボールトとは別の場所にクローンして構いません（`vault_dir`設定でボールトの場所を指定します）。PowerShellで:
-
 ```powershell
-git clone https://github.com/awano27/KaizenLog- kaizenlog
-cd kaizenlog
-pip install -e .
-kaizenlog --help    # ヘルプが出れば成功
+pipx install kaizenlog       # 推奨
+# 開発時: git clone → pip install -e .
+kaizenlog --help             # ヘルプが出れば成功
+kaizenlog setup              # 設定・依存の一括構成（推奨）
 ```
 
-## Step 3: 設定ファイルの作成
+開発用クローンから入れる場合は Obsidian ボールトとは別ディレクトリで構いません（`vault_dir` でボールトを指定）。
+
+## Step 3: 設定ファイル（手動が必要なとき）
+
+通常は `kaizenlog setup` で十分です。雛形だけ欲しい場合:
 
 ```powershell
-kaizenlog init-config          # カレントに kaizenlog.toml の雛形ができる
-notepad kaizenlog.toml         # 編集する
+kaizenlog init-config                 # %APPDATA%\kaizenlog\config.toml
+kaizenlog init-config --output PATH   # 任意パス
+# または環境変数 KAIZENLOG_CONFIG / CLI --config でパス指定
 ```
 
 最低限確認するのは2箇所:
@@ -73,13 +117,6 @@ vault_dir = 'C:/develop/obsidian/2026'   # あなたのボールトのパス
 
 [llm]
 backend = "copilot-cli"   # Step 4 で選んだものに合わせる
-```
-
-編集したら所定の場所に配置:
-
-```powershell
-mkdir $env:APPDATA\kaizenlog -Force
-copy kaizenlog.toml $env:APPDATA\kaizenlog\config.toml
 ```
 
 ## Step 4: LLMバックエンドの設定（4択から1つ）
@@ -124,9 +161,11 @@ backend = "openai-compatible"
 [llm.openai_compatible]
 base_url = "http://localhost:11434/v1"
 model = "qwen3:8b"
+reasoning_effort = "none"  # thinkingを無効化し、改善提案の本文を確実に返す
 ```
 
 > CPU推論は遅い（応答に数分）ですが夜間バッチなので問題ありません。
+> thinkingが必要な場合だけ `low`、`medium`、`high`へ変更してください。
 
 ### D. GitHub Models（無料API）
 
@@ -279,11 +318,12 @@ kaizenlog prompts --days 14   # 「5回/5日: ニュースを要約して… →
 | `kaizenlog prompts [--days N] [--min-count N]` | Claude Codeへの繰り返し依頼の発掘 |
 | `kaizenlog skill install [--vault PATH] [--force]` | Claude Codeスキル3種をボールトに配置（既存は上書きせずdiff案内） |
 | `kaizenlog skill show` / `skill doctor` | 同梱スキルの一覧／インストール状態の確認 |
+| `kaizenlog setup` | 対話式セットアップウィザード（導入の正規経路） |
 | `kaizenlog doctor` | 環境の一発診断（AW接続・LLM認証・パス等を✅/⚠️/❌で表示） |
 | `kaizenlog status` | 実行履歴の確認（最終成功・直近の失敗理由） |
 | `kaizenlog backfill [--days N]` | 欠損日の日誌・統計をまとめて補完 |
 | `kaizenlog advise --dry-run` | LLMに送る内容を送信せずに確認（監査用） |
-| `kaizenlog init-config` | 設定ファイルの雛形生成 |
+| `kaizenlog init-config [--output PATH]` | 設定ファイルの雛形生成（既定: AppData/XDG） |
 
 ## トラブルシューティング
 
@@ -291,7 +331,7 @@ kaizenlog prompts --days 14   # 「5回/5日: ニュースを要約して… →
 
 | 症状 | 対処 |
 | --- | --- |
-| `ActivityWatchに接続できません` | タスクトレイにAWがいるか確認。http://localhost:5600 が開くか確認 |
+| `ActivityWatchに接続できません` | タスクトレイにAWがいるか確認。http://localhost:5600 が開くか確認。修復: `kaizenlog setup` |
 | `ウィンドウウォッチャーのバケットが見つかりません` | AWを再起動。インストール直後は数分待つ |
 | `Claude Code CLI が見つかりません` | https://claude.com/claude-code の手順でインストール後、新しいPowerShellを開き直す |
 | `Claude Code CLI がエラーを返しました`＋認証切れの案内 | `claude` を対話起動して `/login` し直す |
