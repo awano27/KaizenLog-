@@ -28,6 +28,10 @@ class MemoryEntry:
     action: str
     status: str = "proposed"  # proposed | done | superseded
     done_date: str | None = None
+    # 翌日 generate による PASS 機械判定（旧 JSONL には無い → None）
+    verdict: str | None = None  # pass | fail
+    verdict_value: float | None = None
+    verdict_date: str | None = None  # 判定日 YYYY-MM-DD
 
 
 def _memory_file(memory_dir: Path) -> Path:
@@ -55,12 +59,20 @@ def load_entries(memory_dir: Path) -> list[MemoryEntry]:
         if not isinstance(d, dict) or "id" not in d:
             continue
         # 同一IDの後勝ち（ステータス更新は追記で表現する）
+        vv = d.get("verdict_value")
+        try:
+            verdict_value = float(vv) if vv is not None else None
+        except (TypeError, ValueError):
+            verdict_value = None
         entries[d["id"]] = MemoryEntry(
             id=d["id"],
             date=d.get("date", ""),
             action=d.get("action", ""),
             status=d.get("status", "proposed"),
             done_date=d.get("done_date"),
+            verdict=d.get("verdict"),
+            verdict_value=verdict_value,
+            verdict_date=d.get("verdict_date"),
         )
     return sorted(entries.values(), key=lambda e: e.id)
 
@@ -181,6 +193,7 @@ def update_statuses_from_note(
             continue
         entry = by_id.get(id_match.group(0))
         if entry and entry.status != "done":
+            # done 化しても verdict 系は消さない（判定結果を失わない）
             updated.append(
                 MemoryEntry(
                     id=entry.id,
@@ -188,6 +201,9 @@ def update_statuses_from_note(
                     action=entry.action,
                     status="done",
                     done_date=done_date.isoformat(),
+                    verdict=entry.verdict,
+                    verdict_value=entry.verdict_value,
+                    verdict_date=entry.verdict_date,
                 )
             )
     return updated
@@ -214,4 +230,56 @@ def summarize_for_prompt(
         lines.append("## 直近7日で完了したアクション（蒸し返さない）")
         for e in recent_done[-max_items:]:
             lines.append(f"- {e.id}: {e.action}")
+    return "\n".join(lines)
+
+
+def render_actions_section(
+    entries: list[MemoryEntry],
+    target_day: date,
+    note_content: str | None = None,
+) -> str | None:
+    """翌日ノート用「今日のアクション」転記 Markdown。
+
+    対象は proposed かつ提案日が target_day-7 〜 target_day-1。
+    0件なら None（既存セクションは消さない）。
+    note_content に同じ KZN の [x] があればチェック状態を保持する。
+    """
+    window_start = (target_day - timedelta(days=7)).isoformat()
+    window_end = (target_day - timedelta(days=1)).isoformat()
+    open_entries = [
+        e for e in entries
+        if e.status == "proposed" and window_start <= e.date <= window_end
+    ]
+    open_entries.sort(key=lambda e: e.id)
+    if not open_entries:
+        return None
+
+    checked_ids: set[str] = set()
+    if note_content:
+        for line in note_content.splitlines():
+            m = _CHECKBOX_RE.match(line)
+            if not m or m.group(2) not in ("x", "X"):
+                continue
+            id_match = ID_PATTERN.search(m.group(4))
+            if id_match:
+                checked_ids.add(id_match.group(0))
+
+    lines = [
+        "## 📌 今日のアクション",
+        "前日までの改善提案の未完了アクション。完了したらチェック",
+    ]
+    for e in open_entries:
+        mark = "x" if e.id in checked_ids else " "
+        try:
+            d = date.fromisoformat(e.date)
+            md = f"{d.month}/{d.day}"
+        except ValueError:
+            md = e.date
+        if e.verdict:
+            icon = "✅" if e.verdict == "pass" else "❌"
+            val = f"{e.verdict_value:g}" if e.verdict_value is not None else "?"
+            tag = f"{md}提案・判定 {icon} 実測{val}"
+        else:
+            tag = f"{md}提案"
+        lines.append(f"- [{mark}] {e.id}: {e.action}（{tag}）")
     return "\n".join(lines)

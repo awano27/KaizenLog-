@@ -24,6 +24,7 @@ def atomic_write_text(path: Path, content: str) -> None:
 
 ACTIVITY_MARKER = "kaizenlog:activity"
 ADVICE_MARKER = "kaizenlog:advice"
+ACTIONS_MARKER = "kaizenlog:actions"  # 朝の引き継ぎ（未完了アクション転記）
 
 
 def _start_tag(marker: str) -> str:

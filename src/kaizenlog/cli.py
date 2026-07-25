@@ -37,6 +37,7 @@ from .memory import (
     append_entries,
     assign_action_ids,
     load_entries,
+    render_actions_section,
     summarize_for_prompt,
     update_statuses_from_note,
 )
@@ -71,11 +72,18 @@ from .patterns import render_patterns_markdown
 from .report import render_markdown, summarize
 from .stats import activity_fingerprint, load_stats, missing_days, write_stats
 from .vault import (
+    ACTIONS_MARKER,
     ACTIVITY_MARKER,
     ADVICE_MARKER,
     DailyNoteStore,
+    atomic_write_text,
     extract_heading_section,
     extract_section,
+)
+from .verdict import (
+    apply_verdicts_to_advice_note,
+    judge_entries,
+    parse_pass_condition,
 )
 
 
@@ -139,7 +147,51 @@ def cmd_generate(cfg: Config, day: date) -> Path:
         met = record_measurement(exp, day, value)
         mark = "✅" if met else "❌"
         print(f"🧪 実験「{exp.title}」: {value:g}（目標 {exp.target_op} {exp.target_value:g} {mark}）")
+
+    # A1: 前日提案の PASS 機械判定 → Memory と前日ノートへ書き戻し
+    memory_entries = load_entries(cfg.memory_path)
+    proposal_day = day - timedelta(days=1)
+    judged = judge_entries(
+        memory_entries, proposal_day, summary, cc_sessions, input_stats, day,
+    )
+    if judged:
+        append_entries(cfg.memory_path, judged)
+        for entry in judged:
+            parsed = parse_pass_condition(entry.action)
+            if not parsed:
+                continue
+            metric, op, target_value = parsed
+            mark = "✅" if entry.verdict == "pass" else "❌"
+            print(
+                f"🧪 アクション判定: {entry.id} {mark}"
+                f"（実測 {entry.verdict_value:g} / 目標 {metric} {op} {target_value:g}）"
+            )
+        prev_note = store.read(proposal_day)
+        if prev_note is not None:
+            updated = apply_verdicts_to_advice_note(prev_note, judged)
+            if updated is not None:
+                atomic_write_text(store.path_for(proposal_day), updated)
+
+    # A2: 翌日ノートへ未完了アクションを転記（backfill で過去日を汚さない）
+    by_id = {e.id: e for e in memory_entries}
+    by_id.update({e.id: e for e in judged})
+    _write_actions_handoff(cfg, store, day, list(by_id.values()))
     return path
+
+
+def _write_actions_handoff(
+    cfg: Config, store: DailyNoteStore, day: date, entries: list,
+) -> None:
+    """target=day+1 が今日以降のときだけ ACTIONS セクションを書く。"""
+    today = datetime.now(ZoneInfo(cfg.timezone)).date()
+    target = day + timedelta(days=1)
+    if target < today:
+        return
+    section = render_actions_section(entries, target, store.read(target))
+    if not section:
+        return
+    path = store.write_section(target, ACTIONS_MARKER, section)
+    print(f"📌 今日のアクションを転記しました: {path}")
 
 
 def cmd_backfill(cfg: Config, days: int, end_day: date) -> int:
@@ -338,6 +390,10 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
     proposed_entries = [entry for entry in new_entries if entry.status == "proposed"]
     if proposed_entries:
         print("🆔 アクションID: " + ", ".join(e.id for e in proposed_entries))
+    # A2: ID 採番後の最新集合で翌日へ転記（dry_run ではここまで来ない）
+    merged = {e.id: e for e in effective_entries}
+    merged.update({e.id: e for e in new_entries})
+    _write_actions_handoff(cfg, store, day, list(merged.values()))
     return path
 
 

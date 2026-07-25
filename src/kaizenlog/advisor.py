@@ -496,8 +496,31 @@ def advice_contract_errors(
         )
         if not pass_value or not fail_value:
             errors.append(f"最小アクション{index}に翌日の PASS:/FAIL: 条件がありません")
-        elif not _is_measurable_condition(pass_value) or not _is_measurable_condition(fail_value):
-            errors.append(f"最小アクション{index}の PASS:/FAIL: は数値条件にしてください")
+        else:
+            # 機械構文らしい PASS は既知指標のみ自動判定対象。未知は新エラー。
+            # 自由文＋数値は従来どおり合格（人間判定のまま）。
+            from .verdict import is_known_metric, looks_like_machine_pass
+            if looks_like_machine_pass(pass_value):
+                metric_token = pass_value.split()[0] if pass_value.split() else ""
+                # "context_switches <= 40" → first token may include op if no space;
+                # looks_like requires metric op number with spaces around op optional
+                m_metric = re.match(r"^(\S+)\s*(?:<=|>=|<|>|==?)", pass_value.strip())
+                metric_name = m_metric.group(1) if m_metric else metric_token
+                if not is_known_metric(metric_name):
+                    errors.append(
+                        f"最小アクション{index}の PASS: 指標名が使用可能な指標にありません"
+                    )
+                if not _is_measurable_condition(fail_value):
+                    errors.append(
+                        f"最小アクション{index}の PASS:/FAIL: は数値条件にしてください"
+                    )
+            elif (
+                not _is_measurable_condition(pass_value)
+                or not _is_measurable_condition(fail_value)
+            ):
+                errors.append(
+                    f"最小アクション{index}の PASS:/FAIL: は数値条件にしてください"
+                )
         if re.search(r"KZN-\d{8}-\d+", action):
             errors.append(f"最小アクション{index}にモデル生成のKZN IDがあります")
         if not evidence_ctx.previous_day_available and "前日" in action:

@@ -54,7 +54,7 @@ allowed-tools: "Read Glob Grep Edit"
 （記録時間と良かった点を平易な日本語で1-3行。短時間ならデータ不足と明記）
 
 ### 明日試すこと
-- [ ] （15分以内に始める行動）｜PASS: 翌日の数値条件｜FAIL: 未達条件
+- [ ] （15分以内に始める行動）｜PASS: context_switches <= 40｜FAIL: context_switches > 40
 
 ### 計測上の注意
 （未計測の内容、比較不能、部分観測を1-3行）
@@ -78,5 +78,11 @@ allowed-tools: "Read Glob Grep Edit"
 - 通知を計測していない状態で通知オフを提案しない。AI会話未計測なら依頼方法を最適化しない
 - ブラウジングが30分未満ならURL watcher設定を改善アクションとして優先しない
 - 最小アクションは各1行にし、サブ見出しや追加チェックボックスを挟まない
+- PASS は可能な限り機械構文 `指標 演算子 数値`（例: `context_switches <= 40`、
+  `category_minutes:エンタメ <= 30`）。翌晩 `kaizenlog generate` が自動判定する。
+  指標: context_switches / total_active_minutes / ai_cc_sessions /
+  ai_fragmented_sessions / ai_tool_errors / ai_interruptions / ai_avg_turns /
+  focus_blocks / focus_minutes / input_keypresses /
+  category_minutes:<名> / site_minutes:<ドメイン>。測れない行動のみ自由文＋数値
 - `suggestions.jsonl` は読むだけ。書き込みは `kaizenlog advise` 側のID採番に任せる
 - 合計400〜800字程度に収める。長文化しない
