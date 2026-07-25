@@ -711,28 +711,32 @@ def _contract_repair_prompt(
     advice: str,
     errors: list[str],
 ) -> str:
+    """日次提案の修復プロンプト。回答は JSON オブジェクトのみを要求する。"""
     rendered_errors = "\n".join(f"- {error}" for error in errors)
-    allowed_ids = " ".join(evidence.fact_ids) or "なし"
-    repair_source = _sanitize_repair_source(advice)
+    allowed_ids = " ".join(sorted(evidence.fact_ids)) or "なし"
+    # JSON / Markdown どちらが来ても KZN と過剰な数字を薄める
+    repair_source = re.sub(r"KZN-\d{8}-\d+", "既存アクション", advice)
+    repair_source = re.sub(r"\d{2,}", "数値省略", repair_source)
     return (
         "# 出力契約の修正依頼\n"
         "前回の回答は保存条件を満たしませんでした。分析事実を増やしたり推測したりせず、"
-        "同じ内容を契約どおりに書き直してください。\n"
-        "回答本文だけを返し、説明やコードフェンスを付けないでください。\n"
+        "同じ内容を **JSON オブジェクトだけ** で書き直してください。\n"
+        "説明文・Markdown・コードフェンスは付けないでください。\n"
+        "\n## 必須スキーマ\n"
+        '{"plan_review": string|null, "proposals": [...], "actions": [...], '
+        '"ai_review": [...]}\n'
         "\n## 修正チェックリスト\n"
-        "- 必須見出しと件数を維持する\n"
-        "- 「今日の改善提案」と「AI作業の改善」は、各項目の番号と[F#]の数字だけを"
-        "残し、それ以外の算用数字を0個にする\n"
-        "- 観測回数・日数・時刻は言い換えるか省略し、数値は"
-        "「明日の最小アクション」の行動量とPASS/FAILだけに置く\n"
-        "- 各PASSと各FAILの両方を、算用数字または前日値との増減・同数比較で"
-        "翌日判定できる条件にする\n"
-        "- KZN IDはどの見出しにも書かない\n"
-        "- AI関連画面ブロックは会話数・セッション数・往復数ではない。否定する場合は"
-        "「ではない」または「測定不能」と明記する\n"
-        f"- 使用できる根拠IDは {allowed_ids} だけ\n\n"
+        "- proposals と actions は1〜3件かつ同数。ai_review は1〜2件\n"
+        "- fact_ids は F 番号（例: \"F3\"）。使用可能: "
+        f"{allowed_ids}\n"
+        "- interpretation / ai_review.text に算用数字を書かない"
+        "（観測値の再掲禁止）\n"
+        "- pass/fail は数値条件。pass は可能な限り "
+        "`指標 演算子 数値` の機械構文\n"
+        "- KZN ID と HTML コメントは禁止\n"
+        "- AI関連画面ブロックは会話数・セッション数・往復数ではない\n\n"
         f"## 違反\n{rendered_errors}\n\n"
-        "## 前回の回答（禁止された観測数値は除去済み）\n"
+        "## 前回の回答（一部マスク済み）\n"
         f"{repair_source}"
     )
 
@@ -782,19 +786,16 @@ def _assert_redaction_preserves_daily_protocol(
     prompt: str,
     evidence: AdviceEvidence,
 ) -> None:
-    """広すぎるマスク規則がF-IDや必須見出しを壊したら、送信前に明示失敗する。"""
+    """広すぎるマスク規則がF-IDやJSONキーを壊したら、送信前に明示失敗する。"""
     expected_ids = set(evidence.fact_ids)
     remaining_ids = set(_FACT_ID_RE.findall(prompt))
-    required_headings = (
-        "### 今日の改善提案",
-        "### 明日の最小アクション",
-        "### AI作業の改善",
-    )
+    # 構造化出力移行後は見出しではなく JSON スキーマキーが制御トークン
+    required_keys = ('"proposals"', '"actions"', '"ai_review"')
     if not expected_ids <= remaining_ids or any(
-        heading not in system_prompt for heading in required_headings
+        key not in system_prompt for key in required_keys
     ):
         raise AdvisorError(
-            "privacy.redact_patterns が改善提案の制御トークン（[F#] または必須見出し）"
+            "privacy.redact_patterns が改善提案の制御トークン（[F#] または JSON キー）"
             "までマスクしています。パターンを固有名詞へ限定してください。"
         )
 
@@ -848,22 +849,39 @@ def generate_advice(
         redactor,
         evidence,
     )
-    advice = generate_text(cfg, system_prompt, prompt)
-    errors = (
-        advice_contract_errors(advice, evidence_ctx)
-        if requires_daily_contract(cfg) else []
+    raw = generate_text(cfg, system_prompt, prompt)
+
+    # 日次プロンプト以外は従来どおり素通し
+    if not requires_daily_contract(cfg):
+        return f"## 🚀 Kaizen（AIからの改善提案）\n\n{raw}"
+
+    from .advice_format import (
+        parse_advice_json,
+        render_advice_markdown,
+        validate_advice,
     )
+
+    assert evidence_ctx is not None
+
+    def _try_parse_and_validate(text: str) -> tuple[dict | None, list[str]]:
+        try:
+            data = parse_advice_json(text)
+        except AdviceContractError as e:
+            return None, [str(e)]
+        return data, validate_advice(data, evidence_ctx)
+
+    data, errors = _try_parse_and_validate(raw)
     if errors:
-        # 小型ローカルモデルでも利用しやすいよう、形式違反だけは1回自動修復する。
+        # 形式違反は1回だけ JSON 修復を試みる（失敗後は L2 縮退保存が受ける）
         print(f"⚠️  出力契約違反を検出、1回だけ修復を試みます: {errors[0]}")
-        assert evidence_ctx is not None
-        repair_prompt = _contract_repair_prompt(evidence_ctx, advice, errors)
+        repair_prompt = _contract_repair_prompt(evidence_ctx, raw, errors)
         if redactor:
             repair_prompt = redactor(repair_prompt)
-        advice = generate_text(cfg, system_prompt, repair_prompt)
-        errors = advice_contract_errors(advice, evidence_ctx)
-    if errors:
+        raw = generate_text(cfg, system_prompt, repair_prompt)
+        data, errors = _try_parse_and_validate(raw)
+    if errors or data is None:
         raise AdviceContractError(
             "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errors)
         )
-    return f"## 🚀 Kaizen（AIからの改善提案）\n\n{advice}"
+    markdown = render_advice_markdown(data, evidence_ctx)
+    return f"## 🚀 Kaizen（AIからの改善提案）\n\n{markdown}"

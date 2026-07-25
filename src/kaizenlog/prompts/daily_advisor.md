@@ -38,20 +38,54 @@ PC作業ログを評価し、一般論ではなく「明日試し、翌日に合
 
 ## 出力契約
 
-次の見出し名をそのまま使います。サブ見出し、表、追加チェックボックスは使いません。
+回答は **JSON オブジェクトのみ**（フェンス・前置き・後置きテキストなし）。Markdown は
+KaizenLog が決定論的に組み立てます。
 
-- `### 計画と実績`: 計画がある場合のみ1〜3行。確認不能な項目は確認不能と書く。
-- `### 今日の改善提案`: 番号付きで1〜3件。各項目を「根拠 `[F#]` → 解釈 → 提案 → 翌日見る指標」の順で書く。観測済みの数値は再掲せず、`[F#]`だけを参照する。
-- `### 明日の最小アクション`: 提案と同じ件数・同じ順序で、1件を必ず1行にする。形式は
-  `- [ ] [F#] 15分以内に始める具体行動｜PASS: 指標 演算子 数値｜FAIL: 未達条件`
-  とする。対応する提案と同じ根拠IDを含める。KZN IDは書かない。
-  PASS は**可能な限り**機械構文 `指標 <= 数値`（例: `context_switches <= 40`、
-  `category_minutes:エンタメ <= 30`）で書く。この形式は翌晩に自動判定され ✅/❌ が記録される。
-  使用可能な指標: `context_switches` / `total_active_minutes` / `ai_cc_sessions` /
+```json
+{
+  "plan_review": "計画と実績の評価（1〜3行）または null",
+  "proposals": [
+    {
+      "fact_ids": ["F2"],
+      "interpretation": "解釈（観測数値を書かない）",
+      "proposal": "提案",
+      "next_metric": "翌日見る指標"
+    }
+  ],
+  "actions": [
+    {
+      "fact_ids": ["F2"],
+      "action": "15分以内に始める行動",
+      "pass": "context_switches <= 40",
+      "fail": "41回以上"
+    }
+  ],
+  "ai_review": [
+    {
+      "fact_ids": ["F5"],
+      "text": "AI作業の評価・改善（観測数値を書かない）"
+    }
+  ]
+}
+```
+
+### 件数と対応
+- `proposals` と `actions`: 各1〜3件かつ**同数**・同じ順序。`actions[i].fact_ids` は
+  対応する `proposals[i]` と少なくとも1つ共有する
+- `ai_review`: 1〜2件。必ず `F4` または `F5` を含む（入力に存在する場合）
+- `plan_review`: 計画が無ければ `null`。ある場合のみ1〜3行
+
+### フィールド規則
+- `fact_ids` は `"F3"` 形式（角括弧なし可）。入力の確定事実に存在する ID のみ
+- `interpretation` と `ai_review.text` に算用数字を書かない（観測値は F 本文が正）
+- `proposal` / `action` / `pass` / `fail` / `next_metric` は数字可
+- `pass` は**可能な限り**機械構文 `指標 演算子 数値`（例: `context_switches <= 40`、
+  `category_minutes:エンタメ <= 30`）。翌晩に自動判定される
+  使用可能指標: `context_switches` / `total_active_minutes` / `ai_cc_sessions` /
   `ai_fragmented_sessions` / `ai_tool_errors` / `ai_interruptions` / `ai_avg_turns` /
   `focus_blocks` / `focus_minutes` / `input_keypresses` /
-  `category_minutes:<カテゴリ名>` / `site_minutes:<ドメイン>`。
-  上記で測れない行動（例: ドキュメント整備）のみ、数値を含む自由文でよい。
-- `### AI作業の改善`: 1〜2件。必ず `[F4]` または `[F5]` を引用し、測定可能な範囲だけ評価する。観測数値は再掲しない。改善根拠がなければ、良かった点または計測不能を明記する。
-
-観測数値はコード生成済みの `[F#]` 本文だけを正とし、回答へ書き写しません。新しい数値は「明日の最小アクション」の行動量とPASS/FAIL、または「翌日」の目標だけに書きます。合計400〜900字程度に収めます。
+  `category_minutes:<カテゴリ名>` / `site_minutes:<ドメイン>`
+  測れない行動のみ、数値を含む自由文でよい
+- 全テキストフィールドに改行を入れない（`plan_review` のみ改行可）
+- KZN ID・HTML コメントは禁止
+- 全テキスト合計の目安: 400〜900字

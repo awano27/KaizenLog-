@@ -67,6 +67,46 @@ VALID_ADVICE = """### 今日の改善提案
 - [F5] 会話の往復数は測定不能なので、品質の良否は断定しない。
 """
 
+# generate_advice の日次経路は JSON を返す前提
+VALID_ADVICE_JSON = """{
+  "plan_review": null,
+  "proposals": [
+    {
+      "fact_ids": ["F3"],
+      "interpretation": "開始条件を固定して集中枠の再現性を試す",
+      "proposal": "始業時に集中枠を予定へ入れる",
+      "next_metric": "集中ブロック回数"
+    },
+    {
+      "fact_ids": ["F9"],
+      "interpretation": "開発とブラウジングの往来が上位なので確認事項をまとめる",
+      "proposal": "調査リンクをまとめて開く",
+      "next_metric": "同遷移の回数"
+    }
+  ],
+  "actions": [
+    {
+      "fact_ids": ["F3"],
+      "action": "始業時に集中枠を予定へ一件入れる",
+      "pass": "集中ブロック2回以上",
+      "fail": "1回以下"
+    },
+    {
+      "fact_ids": ["F9"],
+      "action": "調査リンクを開く前に三件まとめる",
+      "pass": "開発→ブラウジング1回以下",
+      "fail": "2回以上"
+    }
+  ],
+  "ai_review": [
+    {
+      "fact_ids": ["F5"],
+      "text": "会話の往復数は測定不能なので品質の良否は断定しない"
+    }
+  ]
+}
+"""
+
 MISSING_EVIDENCE_ADVICE = """### 今日の改善提案
 1. [F0] 当日の機械可読統計がないため、まず生成状態を確認する。
 
@@ -75,6 +115,33 @@ MISSING_EVIDENCE_ADVICE = """### 今日の改善提案
 
 ### AI作業の改善
 - [F5] AI会話の往復数と品質は測定不能なので断定しない。
+"""
+
+MISSING_EVIDENCE_JSON = """{
+  "plan_review": null,
+  "proposals": [
+    {
+      "fact_ids": ["F0"],
+      "interpretation": "当日の機械可読統計がないためまず生成状態を確認する",
+      "proposal": "統計生成を確認する",
+      "next_metric": "統計ファイルの有無"
+    }
+  ],
+  "actions": [
+    {
+      "fact_ids": ["F0"],
+      "action": "始業時に統計ファイルを一件確認する",
+      "pass": "1件確認",
+      "fail": "0件"
+    }
+  ],
+  "ai_review": [
+    {
+      "fact_ids": ["F5"],
+      "text": "AI会話の往復数と品質は測定不能なので断定しない"
+    }
+  ]
+}
 """
 
 SHORT_DAY_ADVICE = """### 今日の改善提案
@@ -524,7 +591,7 @@ def test_contract_rejects_independent_structural_violations(invalid, expected):
 
 def test_generate_advice_repairs_contract_once(monkeypatch):
     evidence = build_advice_evidence(CURRENT)
-    replies = iter(["形式違反", VALID_ADVICE])
+    replies = iter(["形式違反", VALID_ADVICE_JSON])
     calls = []
 
     def fake_generate(cfg, system, user):
@@ -533,26 +600,25 @@ def test_generate_advice_repairs_contract_once(monkeypatch):
 
     monkeypatch.setattr("kaizenlog.advisor.generate_text", fake_generate)
     result = generate_advice(LLMConfig(), "ログ", [], evidence=evidence)
-    assert result.endswith(VALID_ADVICE)
+    assert "## 🚀 Kaizen" in result
+    assert "### 明日の最小アクション" in result
     assert len(calls) == 2
     assert "出力契約の修正依頼" in calls[1]
-    assert "算用数字を0個" in calls[1]
-    assert "番号と[F#]の数字だけ" in calls[1]
+    assert "JSON" in calls[1]
+    assert "違反" in calls[1]
 
 
 def test_contract_repair_masks_observed_numbers_and_kzn_ids():
     evidence = build_advice_evidence(CURRENT)
-    invalid = VALID_ADVICE.replace(
-        "1. [F3]",
-        "1. [F3] 集中ブロックは47回（継続 KZN-20260721-003）。\n1. [F3]",
-        1,
+    invalid = (
+        '{"proposals":[{"interpretation":"集中ブロックは47回（継続 KZN-20260721-003）"}]}'
     )
 
     prompt = _contract_repair_prompt(evidence, invalid, ["観測数値を再掲しています"])
 
-    assert "47回" not in prompt
     assert "KZN-20260721-003" not in prompt
-    assert "数値省略回（継続 既存アクション）" in prompt
+    assert "既存アクション" in prompt
+    assert "数値省略" in prompt
 
 
 def test_contract_accepts_explicit_f4_non_session_statement():
@@ -595,7 +661,7 @@ def test_contract_does_not_treat_non_ai_fragmentation_as_ai_quality():
 
 def test_contract_repair_redacts_first_model_answer(monkeypatch):
     evidence = build_advice_evidence(CURRENT)
-    replies = iter(["SECRET invalid", VALID_ADVICE])
+    replies = iter(["SECRET invalid", VALID_ADVICE_JSON])
     calls = []
 
     def fake_generate(cfg, system, user):
@@ -628,9 +694,10 @@ def test_generate_advice_redacts_system_and_user(monkeypatch, tmp_path):
 
     def fake_generate(cfg, system, user):
         calls.append((system, user))
-        return VALID_ADVICE
+        return VALID_ADVICE_JSON
 
     monkeypatch.setattr("kaizenlog.advisor.generate_text", fake_generate)
+    # カスタムプロンプトは日次契約外（素通し）。マスクは prepare で適用される
     generate_advice(
         LLMConfig(system_prompt=str(custom)),
         "SECRET user log",
@@ -674,7 +741,7 @@ def test_generate_advice_keeps_positional_redactor_compatibility(monkeypatch):
 
     def fake_generate(cfg, system, user):
         captured.append(user)
-        return MISSING_EVIDENCE_ADVICE
+        return MISSING_EVIDENCE_JSON
 
     monkeypatch.setattr("kaizenlog.advisor.generate_text", fake_generate)
     # v1.5以前の呼び出し形: memoryの次（7番目）がredactor。
@@ -688,3 +755,16 @@ def test_generate_advice_keeps_positional_redactor_compatibility(monkeypatch):
         lambda value: value.replace("SECRET", "[MASKED]"),
     )
     assert captured and "SECRET" not in captured[0]
+
+
+def test_generate_advice_json_path_renders_markdown(monkeypatch):
+    monkeypatch.setattr(
+        "kaizenlog.advisor.generate_text", lambda *a, **k: VALID_ADVICE_JSON
+    )
+    result = generate_advice(
+        LLMConfig(), "ログ", [], evidence=build_advice_evidence(CURRENT, HISTORY)
+    )
+    assert result.startswith("## 🚀 Kaizen")
+    assert "### 今日の改善提案" in result
+    assert "- [ ] [F3]" in result
+    assert "PASS:" in result

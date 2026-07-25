@@ -207,12 +207,16 @@ def test_bundled_prompts_loadable():
         assert "会話セッション" in prompt
         assert "私用・娯楽" in prompt
         assert "タイムラインは抜粋" in prompt or "タイムラインとサイト別表は部分観測" in prompt
-        assert "PASS:" in prompt and "FAIL:" in prompt
+        # 構造化出力: pass/fail フィールドと機械構文の案内
+        assert '"pass"' in prompt or "pass" in prompt
+        assert "context_switches" in prompt
         assert "30分以上" not in prompt
 
 
 def test_resolve_system_prompt(tmp_path):
-    assert "明日の最小アクション" in resolve_system_prompt(LLMConfig())
+    prompt = resolve_system_prompt(LLMConfig())
+    assert '"proposals"' in prompt and '"actions"' in prompt
+    assert "JSON" in prompt
     custom = tmp_path / "my_prompt.md"
     custom.write_text("カスタムプロンプト", encoding="utf-8")
     assert resolve_system_prompt(LLMConfig(system_prompt=str(custom))) == "カスタムプロンプト"

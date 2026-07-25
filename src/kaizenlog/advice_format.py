@@ -1,0 +1,326 @@
+"""日次改善提案の構造化出力: JSON 検証 → 決定論的 Markdown レンダリング。
+
+LLM は JSON だけを返し、見出し・チェックボックス・PASS/FAIL 行は
+KaizenLog が組み立てる。下流の KZN 付与・verdict 解析と完全互換な
+Markdown を出力する。
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import Any
+
+from .advice_evidence import AdviceEvidence
+from .verdict import is_known_metric, looks_like_machine_pass
+
+# advisor とは循環 import になるため、AdviceContractError / 契約検証は関数内で遅延 import
+
+_FACT_TOKEN_RE = re.compile(r"^\[?F(\d+)\]?$")
+_NEWLINE_RE = re.compile(r"[\r\n]")
+_KZN_RE = re.compile(r"KZN-\d{8}")
+_DIGIT_RE = re.compile(r"\d")
+
+
+def _contract_error(msg: str):
+    from .advisor import AdviceContractError
+
+    return AdviceContractError(msg)
+
+
+def parse_advice_json(text: str) -> dict:
+    """LLM 応答から JSON オブジェクトを取り出す。
+
+    ```json フェンスや前後の説明文があっても、最初の { から対応する }
+    までを抽出する。失敗時は AdviceContractError。
+    """
+    if not text or not str(text).strip():
+        raise _contract_error("日次提案の JSON が空です")
+    raw = str(text).strip()
+    start = raw.find("{")
+    if start < 0:
+        raise _contract_error("日次提案の JSON オブジェクトが見つかりません")
+    # 対応する閉じ括弧を深さ数えで探す
+    depth = 0
+    end = -1
+    in_str = False
+    escape = False
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end < 0:
+        raise _contract_error("日次提案の JSON が閉じていません")
+    try:
+        data = json.loads(raw[start : end + 1])
+    except json.JSONDecodeError as e:
+        raise _contract_error(f"日次提案の JSON を解析できません: {e}") from e
+    if not isinstance(data, dict):
+        raise _contract_error("日次提案のトップレベルは JSON オブジェクトである必要があります")
+    return data
+
+
+def _norm_fact_id(token: str) -> str | None:
+    m = _FACT_TOKEN_RE.match(str(token).strip())
+    if not m:
+        return None
+    return f"[F{m.group(1)}]"
+
+
+def _as_str_list(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise _contract_error(f"{field} は非空の配列である必要があります")
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise _contract_error(f"{field} の要素は非空文字列である必要があります")
+        out.append(item.strip())
+    return out
+
+
+def _require_single_line(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise _contract_error(f"{field} は非空文字列である必要があります")
+    if _NEWLINE_RE.search(value):
+        raise _contract_error(f"{field} に改行を含めないでください")
+    return value.strip()
+
+
+def _check_no_kzn_or_marker(text: str, field: str) -> None:
+    if _KZN_RE.search(text):
+        raise _contract_error(f"{field} にモデル生成のKZN IDを含めないでください")
+    if "<!--" in text:
+        raise _contract_error(f"{field} にマーカー文字列を含めないでください")
+
+
+def _is_measurable(value: str) -> bool:
+    return bool(re.search(r"\d", value) or re.search(
+        r"(?:前日|前回|基準).{0,12}(?:比|より|同数|同水準|同じ)"
+        r"|(?:同数|同水準|同数値|増加|減少|上昇|低下|変化なし)",
+        value,
+    ))
+
+
+def validate_advice(data: dict, evidence: AdviceEvidence) -> list[str]:
+    """構造検証。違反メッセージのリスト（空なら合格）。"""
+    errors: list[str] = []
+    try:
+        _validate_advice_raise(data, evidence)
+    except Exception as e:
+        from .advisor import AdviceContractError
+
+        if isinstance(e, AdviceContractError):
+            errors.append(str(e))
+        else:
+            errors.append(str(e))
+        return errors
+
+    # 意味検証: 全テキストを結合して既存セマンティックガードを再利用
+    from .advisor import _semantic_contract_errors
+
+    joined = _join_text_fields(data)
+    errors.extend(_semantic_contract_errors(joined, evidence))
+    return errors
+
+
+def _join_text_fields(data: dict) -> str:
+    parts: list[str] = []
+    pr = data.get("plan_review")
+    if isinstance(pr, str):
+        parts.append(pr)
+    for key in ("proposals", "actions", "ai_review"):
+        items = data.get(key) or []
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for k, v in item.items():
+                if k == "fact_ids":
+                    continue
+                if isinstance(v, str):
+                    parts.append(v)
+    return "\n".join(parts)
+
+
+def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
+    if not isinstance(data, dict):
+        raise _contract_error("日次提案は JSON オブジェクトである必要があります")
+
+    proposals = data.get("proposals")
+    actions = data.get("actions")
+    ai_review = data.get("ai_review")
+    if not isinstance(proposals, list) or not isinstance(actions, list):
+        raise _contract_error("proposals と actions は配列である必要があります")
+    if not isinstance(ai_review, list):
+        raise _contract_error("ai_review は配列である必要があります")
+
+    if not 1 <= len(proposals) <= 3:
+        raise _contract_error("proposals は1〜3件にしてください")
+    if not 1 <= len(actions) <= 3:
+        raise _contract_error("actions は1〜3件にしてください")
+    if len(proposals) != len(actions):
+        raise _contract_error("proposals と actions の件数を1対1にしてください")
+    if len(proposals) > evidence.max_actions:
+        raise _contract_error(
+            f"当日のデータ量では改善アクションは最大{evidence.max_actions}件にしてください"
+        )
+    if not 1 <= len(ai_review) <= 2:
+        raise _contract_error("ai_review は1〜2件にしてください")
+
+    plan = data.get("plan_review")
+    if plan is not None:
+        if not isinstance(plan, str) or not plan.strip():
+            raise _contract_error("plan_review は null か非空文字列にしてください")
+        lines = [ln for ln in plan.splitlines() if ln.strip()]
+        if len(lines) > 3:
+            raise _contract_error("plan_review は1〜3行にしてください")
+        _check_no_kzn_or_marker(plan, "plan_review")
+
+    available = set(evidence.fact_ids)
+
+    def parse_facts(raw: Any, field: str) -> list[str]:
+        tokens = _as_str_list(raw, field)
+        facts: list[str] = []
+        for t in tokens:
+            n = _norm_fact_id(t)
+            if n is None:
+                raise _contract_error(f"{field} の根拠IDが不正です: {t!r}")
+            facts.append(n)
+        if not facts:
+            raise _contract_error(f"{field} に根拠IDがありません")
+        if available and not set(facts) <= available:
+            raise _contract_error(f"{field} が存在しない根拠IDを参照しています")
+        return facts
+
+    prop_facts_list: list[list[str]] = []
+    for i, item in enumerate(proposals, 1):
+        if not isinstance(item, dict):
+            raise _contract_error(f"proposals[{i}] はオブジェクトである必要があります")
+        facts = parse_facts(item.get("fact_ids"), f"proposals[{i}].fact_ids")
+        prop_facts_list.append(facts)
+        for key in ("interpretation", "proposal", "next_metric"):
+            val = _require_single_line(item.get(key), f"proposals[{i}].{key}")
+            _check_no_kzn_or_marker(val, f"proposals[{i}].{key}")
+        interp = item["interpretation"].strip()
+        if _DIGIT_RE.search(interp):
+            raise _contract_error(
+                f"proposals[{i}].interpretation に観測数値を書かないでください"
+            )
+
+    for i, item in enumerate(actions, 1):
+        if not isinstance(item, dict):
+            raise _contract_error(f"actions[{i}] はオブジェクトである必要があります")
+        facts = parse_facts(item.get("fact_ids"), f"actions[{i}].fact_ids")
+        if set(facts) & set(prop_facts_list[i - 1]) == set():
+            raise _contract_error(
+                f"actions[{i}] と proposals[{i}] の根拠IDが対応していません"
+            )
+        action = _require_single_line(item.get("action"), f"actions[{i}].action")
+        pass_v = _require_single_line(item.get("pass"), f"actions[{i}].pass")
+        fail_v = _require_single_line(item.get("fail"), f"actions[{i}].fail")
+        _check_no_kzn_or_marker(action, f"actions[{i}].action")
+        _check_no_kzn_or_marker(pass_v, f"actions[{i}].pass")
+        _check_no_kzn_or_marker(fail_v, f"actions[{i}].fail")
+        if not _is_measurable(pass_v) or not _is_measurable(fail_v):
+            raise _contract_error(
+                f"actions[{i}] の pass/fail は数値条件にしてください"
+            )
+        if looks_like_machine_pass(pass_v):
+            m = re.match(r"^(\S+)\s*(?:<=|>=|<|>|==?)", pass_v.strip())
+            metric = m.group(1) if m else pass_v.split()[0]
+            if not is_known_metric(metric):
+                raise _contract_error(
+                    f"actions[{i}] の pass: 指標名が使用可能な指標にありません"
+                )
+
+    ai_facts_all: set[str] = set()
+    for i, item in enumerate(ai_review, 1):
+        if not isinstance(item, dict):
+            raise _contract_error(f"ai_review[{i}] はオブジェクトである必要があります")
+        facts = parse_facts(item.get("fact_ids"), f"ai_review[{i}].fact_ids")
+        ai_facts_all.update(facts)
+        text = _require_single_line(item.get("text"), f"ai_review[{i}].text")
+        _check_no_kzn_or_marker(text, f"ai_review[{i}].text")
+        if _DIGIT_RE.search(text):
+            raise _contract_error(
+                f"ai_review[{i}].text に観測数値を書かないでください"
+            )
+
+    if available:
+        needed = {"[F4]", "[F5]"} & available
+        if needed and not (ai_facts_all & {"[F4]", "[F5]"}):
+            raise _contract_error(
+                "ai_review に AI根拠ID F4 または F5 がありません"
+            )
+
+
+def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
+    """検証済み JSON を現行契約互換の Markdown にレンダリングする。"""
+    from .advisor import AdvisorError, advice_contract_errors
+
+    # 念のため再検証（呼び出し側が validate 済みでも壊れを防ぐ）
+    errs = validate_advice(data, evidence)
+    if errs:
+        raise AdvisorError("renderer bug: invalid data passed to render: " + errs[0])
+
+    lines: list[str] = []
+    plan = data.get("plan_review")
+    if isinstance(plan, str) and plan.strip():
+        lines.append("### 計画と実績")
+        lines.append(plan.strip())
+        lines.append("")
+
+    lines.append("### 今日の改善提案")
+    for i, item in enumerate(data["proposals"], 1):
+        facts = " ".join(
+            x for x in (_norm_fact_id(f) for f in item["fact_ids"]) if x
+        )
+        lines.append(
+            f"{i}. {facts} {item['interpretation'].strip()}。"
+            f"{item['proposal'].strip()}。"
+            f"翌日見る指標: {item['next_metric'].strip()}"
+        )
+    lines.append("")
+
+    lines.append("### 明日の最小アクション")
+    for item in data["actions"]:
+        facts = " ".join(
+            x for x in (_norm_fact_id(f) for f in item["fact_ids"]) if x
+        )
+        # 先頭が [F#] で始まること（旧契約 ^\[F\d+\]\s 互換）
+        lines.append(
+            f"- [ ] {facts} {item['action'].strip()}"
+            f"｜PASS: {item['pass'].strip()}｜FAIL: {item['fail'].strip()}"
+        )
+    lines.append("")
+
+    lines.append("### AI作業の改善")
+    for item in data["ai_review"]:
+        facts = " ".join(
+            x for x in (_norm_fact_id(f) for f in item["fact_ids"]) if x
+        )
+        lines.append(f"- {facts} {item['text'].strip()}")
+
+    rendered = "\n".join(lines).rstrip() + "\n"
+
+    # レンダラのインバリアント: 旧 Markdown 契約を満たすこと
+    contract_errs = advice_contract_errors(rendered, evidence)
+    if contract_errs:
+        raise AdvisorError("renderer bug: " + "; ".join(contract_errs))
+    return rendered

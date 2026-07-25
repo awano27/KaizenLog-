@@ -6,6 +6,9 @@ allowed-tools: "Read Glob Grep Edit"
 
 # Daily Kaizen — 日次改善提案
 
+`kaizenlog advise` は JSON→レンダリング方式であり、本スキルの出力フォーマットは
+そのレンダリング結果と同一形式を保つこと。
+
 あなたはこのボールトのAIコラボレーターとして、今日の作業ログを分析し、
 デイリーノートに改善提案を追記する。
 

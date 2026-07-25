@@ -32,18 +32,15 @@
 
 ## 出力契約
 
-次の見出し名をそのまま使い、サブ見出し、表、追加チェックボックスは使いません。
+回答は **JSON オブジェクトのみ**（フェンス・前置き・後置きなし）。Markdown は KaizenLog が組み立てます。
 
-- `### 計画と実績`: 計画がある場合のみ1〜3行。
-- `### 今日の改善提案`: 番号付きで1〜3件。各項目を「根拠 `[F#]` → 解釈 → 提案 → 翌日見る指標」の順にする。観測済みの数値は再掲せず、`[F#]`だけを参照する。
-- `### 明日の最小アクション`: 提案と同じ件数・同じ順序で、各1行を
-  `- [ ] [F#] 15分以内に始める具体行動｜PASS: 指標 演算子 数値｜FAIL: 未達条件`
-  とする。対応する提案と同じ根拠IDを含め、KZN IDは書かない。
-  PASS は**可能な限り**機械構文（例: `context_switches <= 40`）で書く（翌晩に自動判定）。
-  指標: `context_switches` / `total_active_minutes` / `ai_cc_sessions` /
-  `ai_fragmented_sessions` / `ai_tool_errors` / `ai_interruptions` / `ai_avg_turns` /
-  `focus_blocks` / `focus_minutes` / `input_keypresses` /
-  `category_minutes:<カテゴリ名>` / `site_minutes:<ドメイン>`。測れない行動のみ自由文＋数値。
-- `### AI作業の改善`: 1〜2件。必ず `[F4]` または `[F5]` を引用し、観測できた範囲だけ述べる。観測数値は再掲しない。
+必須キー: `plan_review`（string|null）, `proposals`（1〜3）, `actions`（proposals と同数）,
+`ai_review`（1〜2）。各 proposal/action/ai_review に `fact_ids`（例: `["F3"]`）。
 
-観測数値はコード生成済みの `[F#]` 本文だけを正とし、回答へ書き写しません。新しい数値は「明日の最小アクション」の行動量とPASS/FAIL、または「翌日」の目標だけに書きます。合計400〜900字程度に収めます。
+- proposals[i] と actions[i] は根拠IDを共有。ai_review は F4 または F5 を含む
+- `interpretation` / `ai_review.text` に算用数字を書かない
+- `pass` は可能な限り機械構文（`context_switches <= 40` 等）。使用可能指標は
+  context_switches / total_active_minutes / ai_cc_sessions / ai_fragmented_sessions /
+  ai_tool_errors / ai_interruptions / ai_avg_turns / focus_blocks / focus_minutes /
+  input_keypresses / category_minutes:<名> / site_minutes:<ドメイン>
+- KZN ID・HTMLコメント禁止。全テキスト合計 400〜900字程度

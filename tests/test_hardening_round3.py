@@ -322,41 +322,21 @@ def test_command_only_session_excluded(tmp_path):
 def test_generate_advice_prints_repair_message(monkeypatch, capsys):
     from kaizenlog.advisor import generate_advice
     from kaizenlog.advice_evidence import build_advice_evidence
+    from tests.test_advice_evidence import CURRENT, HISTORY, VALID_ADVICE_JSON
 
     calls = {"n": 0}
 
     def fake_text(cfg, system, user):
         calls["n"] += 1
         if calls["n"] == 1:
-            return "invalid"
-        return """### 今日の改善提案
-1. [F1] 提案
-
-### 明日の最小アクション
-- [ ] [F1] 行動｜PASS: 1件｜FAIL: 0件
-
-### AI作業の改善
-- [F1] ok
-"""
+            return "invalid not json"
+        return VALID_ADVICE_JSON
 
     monkeypatch.setattr("kaizenlog.advisor.generate_text", fake_text)
-    # may still fail contract depending on evidence - just check first path prints
-    # Use empty evidence / backend that doesn't require full contract
-    cfg = LLMConfig(backend="none")
-    # requires_daily_contract might still apply - check advisor
-    from kaizenlog import advisor as adv
-
-    monkeypatch.setattr(adv, "requires_daily_contract", lambda c: True)
-    monkeypatch.setattr(
-        adv,
-        "advice_contract_errors",
-        lambda a, e=None: (["見出し不足"] if "改善提案" not in a else []),
+    out = generate_advice(
+        LLMConfig(), "log", [], evidence=build_advice_evidence(CURRENT, HISTORY)
     )
-    monkeypatch.setattr(adv, "prepare_advice_request", lambda *a, **k: ("sys", "user", MagicMock()))
-    monkeypatch.setattr(adv, "_contract_repair_prompt", lambda *a, **k: "repair")
-
-    out = generate_advice(cfg, "log", [])
     captured = capsys.readouterr().out
     assert "出力契約違反を検出" in captured
-    assert "見出し不足" in captured
     assert "🚀 Kaizen" in out
+    assert "### 明日の最小アクション" in out
