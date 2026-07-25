@@ -179,9 +179,50 @@ def install_all_skills(vault: Path, force: bool = False) -> list[tuple[str, str]
     return results
 
 
-def register_daily_task(time: str = "21:30") -> bool:
-    """Register daily scheduled task. Task 3/6 stub: always False."""
-    return False
+def _find_register_task_script() -> Path | None:
+    """Locate scripts/register-task.ps1 relative to package / repo root."""
+    here = Path(__file__).resolve()
+    # src/kaizenlog/setup.py → parents[2] = repo root
+    candidates = [
+        here.parents[i] / "scripts" / "register-task.ps1"
+        for i in range(1, min(5, len(here.parents)))
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def register_daily_task(time: str = "21:30", kaizenlog_exe: str | None = None) -> bool:
+    """Register daily KaizenLog task via scripts/register-task.ps1.
+
+    Returns False (graceful) if the script is missing or registration fails.
+    """
+    script = _find_register_task_script()
+    if script is None:
+        print(
+            "⚠️  scripts/register-task.ps1 が見つかりません。"
+            "リポジトリの scripts/register-task.ps1 を手動実行してください。"
+        )
+        return False
+
+    exe = kaizenlog_exe or shutil.which("kaizenlog") or (sys.argv[0] if sys.argv else None)
+    args = [
+        "powershell",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(script),
+        "-Time",
+        time,
+    ]
+    if exe:
+        args += ["-KaizenlogExe", str(exe)]
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
 
 
 def _resolve_vault(opts: SetupOptions, ui: SetupUI, config_path: Path) -> Path | None:

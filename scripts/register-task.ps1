@@ -19,6 +19,7 @@ param(
     [string]$WeeklyTime = "18:00",
     [string]$WeeklyTaskName = "KaizenLog Weekly",
     [string]$AutopilotTaskName = "KaizenLog Autopilot",
+    [string]$KaizenlogExe = "",
     [switch]$Unregister
 )
 
@@ -30,7 +31,11 @@ if ($Unregister) {
     exit 0
 }
 
-$kaizenlog = (Get-Command kaizenlog -ErrorAction SilentlyContinue).Source
+if ($KaizenlogExe) {
+    $kaizenlog = $KaizenlogExe
+} else {
+    $kaizenlog = (Get-Command kaizenlog -ErrorAction SilentlyContinue).Source
+}
 if (-not $kaizenlog) {
     Write-Error "kaizenlog コマンドが見つかりません。先に `pipx install kaizenlog` などでインストールしてください。"
     exit 1
