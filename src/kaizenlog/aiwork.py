@@ -83,6 +83,19 @@ def _project_name(record: dict, file_path: Path) -> str:
     return file_path.parent.name.split("-")[-1] or file_path.parent.name
 
 
+def _is_command_wrapper(text: str) -> bool:
+    """スラッシュコマンド等の XML ラッパー文か。
+
+    user_turns やプロンプト資産化に混ぜると往復数が水増しされる。
+    """
+    if not text:
+        return False
+    head = text.lstrip()[:40]
+    return text.lstrip().startswith("<") and (
+        "command-" in head or "local-command" in head
+    )
+
+
 def _update_session(session: AISession, record: dict, ts: datetime) -> None:
     session.start = min(session.start, ts)
     session.end = max(session.end, ts)
@@ -106,7 +119,8 @@ def _update_session(session: AISession, record: dict, ts: datetime) -> None:
             joined = " ".join(texts)
             if _is_interruption(joined):
                 session.interruptions += 1
-            elif joined.strip():
+            elif joined.strip() and not _is_command_wrapper(joined):
+                # コマンドラッパーはユーザー往復に数えない
                 session.user_turns += 1
 
     elif rtype == "assistant":
@@ -245,7 +259,7 @@ def scan_user_prompts(
                     ).strip()
                     if len(text) < min_chars or _is_interruption(text):
                         continue
-                    if text.startswith("<") and ("command-" in text[:40] or "local-command" in text[:40]):
+                    if _is_command_wrapper(text):
                         continue
                     out.append(
                         UserPrompt(timestamp=ts, project=_project_name(record, path), text=text)

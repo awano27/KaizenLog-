@@ -10,8 +10,9 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
+from statistics import median
 
 from .aiwork import AISession
 from .focus import InputStats
@@ -19,6 +20,9 @@ from .report import DailySummary
 from .vault import atomic_write_text, extract_section, upsert_section
 
 MEASUREMENTS_MARKER = "kaizenlog:measurements"
+
+# adopted 後も deadline からこの日数以内は定着監視のため計測を続ける
+_ADOPTED_MONITOR_DAYS = 30
 
 # 実験で追跡できる指標。値は (説明, 計算関数名) ではなく直接計算する。
 METRIC_DESCRIPTIONS = {
@@ -126,6 +130,137 @@ def compute_metric(
         category = metric.split(":", 1)[1].strip()
         return round(summary.by_category.get(category, 0.0), 1)
     return None
+
+
+def metric_from_stats(metric: str, stats: dict) -> float | None:
+    """日次統計 JSON（stats.write_stats 形式）から指標値を復元する。
+
+    対応:
+      context_switches, total_active_minutes,
+      ai_activity_blocks / ai_sessions（トップレベルまたは互換）,
+      ai_cc_sessions ← ai.sessions,
+      ai_fragmented_sessions ← ai.fragmented,
+      ai_tool_errors ← ai.tool_errors,
+      ai_interruptions ← ai.interruptions,
+      category_minutes:<名> ← by_category,
+      site_minutes:<域> ← by_site,
+      focus_blocks / focus_minutes / input_keypresses ← input（保存時のみ）
+
+    非対応（常に None）:
+      ai_avg_turns — セッション単位の往復平均は stats に再構成可能な形で残していない
+    """
+    if not isinstance(stats, dict):
+        return None
+    ai = stats.get("ai") if isinstance(stats.get("ai"), dict) else {}
+    inp = stats.get("input") if isinstance(stats.get("input"), dict) else {}
+
+    if metric == "context_switches":
+        v = stats.get("context_switches")
+        return float(v) if isinstance(v, (int, float)) else None
+    if metric == "total_active_minutes":
+        v = stats.get("total_minutes")
+        return float(v) if isinstance(v, (int, float)) else None
+    if metric in ("ai_activity_blocks", "ai_sessions"):
+        v = stats.get("ai_activity_blocks", stats.get("ai_sessions"))
+        return float(v) if isinstance(v, (int, float)) else None
+    if metric == "ai_cc_sessions":
+        v = ai.get("sessions")
+        return float(v) if isinstance(v, (int, float)) else None
+    if metric == "ai_fragmented_sessions":
+        v = ai.get("fragmented")
+        return float(v) if isinstance(v, (int, float)) else None
+    if metric == "ai_tool_errors":
+        v = ai.get("tool_errors")
+        return float(v) if isinstance(v, (int, float)) else None
+    if metric == "ai_interruptions":
+        v = ai.get("interruptions")
+        return float(v) if isinstance(v, (int, float)) else None
+    if metric == "ai_avg_turns":
+        # セッション別 user_turns が stats に無いため復元不能
+        return None
+    if metric.startswith("category_minutes:"):
+        cat = metric.split(":", 1)[1].strip()
+        by_cat = stats.get("by_category") if isinstance(stats.get("by_category"), dict) else {}
+        v = by_cat.get(cat)
+        return float(v) if isinstance(v, (int, float)) else 0.0
+    if metric.startswith("site_minutes:"):
+        site = metric.split(":", 1)[1].strip().lower()
+        by_site = stats.get("by_site") if isinstance(stats.get("by_site"), dict) else {}
+        # キーが小文字で保存されている想定。大小混在も拾う
+        v = by_site.get(site)
+        if v is None:
+            for k, val in by_site.items():
+                if str(k).lower() == site:
+                    v = val
+                    break
+        return float(v) if isinstance(v, (int, float)) else 0.0
+    if metric == "focus_blocks":
+        if not inp:
+            return None
+        v = inp.get("focus_blocks")
+        return float(v) if isinstance(v, (int, float)) else None
+    if metric == "focus_minutes":
+        if not inp:
+            return None
+        v = inp.get("focus_minutes")
+        return float(v) if isinstance(v, (int, float)) else None
+    if metric == "input_keypresses":
+        if not inp:
+            return None
+        v = inp.get("keypresses")
+        return float(v) if isinstance(v, (int, float)) else None
+    return None
+
+
+def baseline_median_from_stats(
+    stats_list: list[dict], metric: str, min_days: int = 3
+) -> float | None:
+    """開始前の日次統計から中央値 baseline を求める。日数不足は None。"""
+    values: list[float] = []
+    for s in stats_list:
+        v = metric_from_stats(metric, s)
+        if v is not None:
+            values.append(float(v))
+    if len(values) < min_days:
+        return None
+    return float(median(values))
+
+
+def should_measure_experiment(exp: Experiment, day: date) -> bool:
+    """generate が実測を追記する対象か。running 全件 + adopted は期限後30日以内のみ。"""
+    if exp.status == "running":
+        return True
+    if exp.status == "adopted" and exp.deadline is not None:
+        return day <= exp.deadline + timedelta(days=_ADOPTED_MONITOR_DAYS)
+    return False
+
+
+def detect_regressions(
+    experiments: list[Experiment],
+    window: int = 7,
+    as_of: date | None = None,
+) -> list[Experiment]:
+    """adopted 実験のうち、直近 window 日の実測が3点以上かつ過半数が未達なら退行。"""
+    as_of = as_of or date.today()
+    start = as_of - timedelta(days=window - 1)
+    out: list[Experiment] = []
+    for exp in experiments:
+        if exp.status != "adopted":
+            continue
+        recent = [
+            (d, v) for d, v in exp.measurements.items()
+            if start <= d <= as_of
+        ]
+        if len(recent) < 3:
+            continue
+        misses = sum(
+            1 for _, v in recent
+            if not target_met(v, exp.target_op, exp.target_value)
+        )
+        # 過半数（ちょうど半分は退行としない）
+        if misses * 2 > len(recent):
+            out.append(exp)
+    return out
 
 
 # ---- frontmatter（簡易パーサ。実験ノートは単純なスカラー値のみ使う） ----
@@ -264,7 +399,7 @@ tags: [type/kaizen-experiment]
 status: running
 metric: {metric}
 target: "{target}"
-baseline:
+baseline: {baseline}
 deadline: {deadline}
 ---
 
@@ -294,6 +429,7 @@ def create_experiment(
     today: date,
     deadline: date,
     hypothesis: str = "",
+    baseline: float | None = None,
 ) -> Path:
     parse_target(target)  # バリデーション
     experiments_dir.mkdir(parents=True, exist_ok=True)
@@ -301,12 +437,15 @@ def create_experiment(
     path = experiments_dir / f"EXP {today.isoformat()} {safe_title}.md"
     if path.exists():
         raise ExperimentError(f"同名の実験が既に存在します: {path}")
+    # 開始前 baseline を渡されたときだけ数値を書く（空欄は従来どおり後で埋める）
+    baseline_field = f"{baseline:g}" if baseline is not None else ""
     path.write_text(
         EXPERIMENT_TEMPLATE.format(
             title=title,
             today=today.isoformat(),
             metric=metric,
             target=target,
+            baseline=baseline_field,
             deadline=deadline.isoformat(),
             hypothesis=hypothesis or "（なぜこの変更が効くと考えるか）",
         ),

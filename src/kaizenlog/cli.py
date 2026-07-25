@@ -25,6 +25,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .advisor import (
+    AdviceContractError,
     AdvisorError,
     generate_advice,
     prepare_advice_request,
@@ -64,11 +65,16 @@ from .config import Config, ConfigError, load_config
 from .experiments import (
     METRIC_DESCRIPTIONS,
     ExperimentError,
+    baseline_median_from_stats,
     compute_metric,
     create_experiment,
+    detect_regressions,
     load_experiments,
+    metric_from_stats,
     record_measurement,
     render_experiments_context,
+    should_measure_experiment,
+    target_met,
 )
 from .patterns import render_patterns_markdown
 from .report import render_markdown, summarize
@@ -138,9 +144,10 @@ def cmd_generate(cfg: Config, day: date) -> Path:
         activity_md=section,
     )
 
-    # 実行中のカイゼン実験に対象日の実測値を追記する
-    for exp in load_experiments(cfg.experiments_path):
-        if exp.status not in ("running",):
+    # 実験の実測追記: running 全件 + adopted（deadline から30日以内のみ）
+    experiments = load_experiments(cfg.experiments_path)
+    for exp in experiments:
+        if not should_measure_experiment(exp, day):
             continue
         value = compute_metric(exp.metric, summary, cc_sessions, input_stats)
         if value is None:
@@ -149,6 +156,22 @@ def cmd_generate(cfg: Config, day: date) -> Path:
         met = record_measurement(exp, day, value)
         mark = "✅" if met else "❌"
         print(f"🧪 実験「{exp.title}」: {value:g}（目標 {exp.target_op} {exp.target_value:g} {mark}）")
+
+    # adopted の退行検知（再読込して最新 measurements を反映）
+    experiments = load_experiments(cfg.experiments_path)
+    for exp in detect_regressions(experiments, window=7, as_of=day):
+        recent = [
+            (d, v) for d, v in exp.measurements.items()
+            if day - timedelta(days=6) <= d <= day
+        ]
+        misses = sum(
+            1 for _, v in recent
+            if not target_met(v, exp.target_op, exp.target_value)
+        )
+        print(
+            f"⚠️  退行検知: 「{exp.title}」が採用後に目標未達"
+            f"（直近7日で{misses}/{len(recent)}日未達）。再実験を検討してください"
+        )
 
     # A1: 前日提案の PASS 機械判定 → Memory と前日ノートへ書き戻し
     memory_entries = load_entries(cfg.memory_path)
@@ -242,13 +265,18 @@ def cmd_block(cfg: Config, end_day: date, days: int, min_minutes: float,
     # 2) 効果測定のカイゼン実験を起票（毎晩の generate が自動計測）
     for rule in rules:
         title = f"介入 {rule.set_name.removeprefix('KZN: ')}"
+        baseline = _resolve_pre_start_baseline(cfg, rule.metric, end_day)
         try:
             path = create_experiment(
                 cfg.experiments_path, title, rule.metric, rule.target,
                 today=end_day, deadline=end_day + timedelta(days=14),
                 hypothesis=f"{rule.evidence}。LeechBlockの制限で目標まで下げられるはず。",
+                baseline=baseline,
             )
-            print(f"🧪 実験を起票: {path.name}（{rule.metric} {rule.target}）")
+            msg = f"🧪 実験を起票: {path.name}（{rule.metric} {rule.target}）"
+            if baseline is not None:
+                msg += f" / baseline {baseline:g}"
+            print(msg)
         except ExperimentError as e:
             print(f"⚠️  実験の起票をスキップ: {e}")
 
@@ -375,14 +403,20 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         print("（--dry-run のためLLMには送信していません。ノートも変更していません）")
         return None
 
-    advice_md = generate_advice(
-        cfg.llm, activity_md, recent,
-        intent=intent,
-        experiments=experiments_ctx or None,
-        memory=memory_ctx or None,
-        evidence=evidence_ctx,
-        redactor=redactor,
-    )
+    try:
+        advice_md = generate_advice(
+            cfg.llm, activity_md, recent,
+            intent=intent,
+            experiments=experiments_ctx or None,
+            memory=memory_ctx or None,
+            evidence=evidence_ctx,
+            redactor=redactor,
+        )
+    except AdviceContractError:
+        # 契約違反でも確定事実サマリーだけは残す（静かな失敗を防ぐ）。例外は再送出。
+        store.write_section(day, ADVICE_MARKER, _degraded_advice_section(evidence_ctx))
+        print("⚠️  出力契約を満たせなかったため縮退セクションを保存しました")
+        raise
     advice_md = render_reader_advice(advice_md, evidence_ctx)
     # 「明日試すこと」に安定ID（KZN-YYYYMMDD-NNN）を付与して記録する
     advice_md, new_entries = assign_action_ids(advice_md, day, effective_entries)
@@ -397,6 +431,21 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
     merged.update({e.id: e for e in new_entries})
     _write_actions_handoff(cfg, store, day, list(merged.values()))
     return path
+
+
+def _degraded_advice_section(evidence_ctx) -> str:
+    """契約違反時に ADVICE 区間へ書く縮退 Markdown（KZN/チェックボックスなし）。"""
+    lines = [
+        "## 🚀 Kaizen（AIからの改善提案）",
+        "",
+        "⚠️ 本日は提案の生成が出力契約を満たさず、保存できませんでした"
+        "（詳細は `kaizenlog status`）。",
+        "以下は当日の確定事実サマリーです。",
+    ]
+    md = getattr(evidence_ctx, "markdown", None) if evidence_ctx is not None else None
+    if md:
+        lines.extend(["", md])
+    return "\n".join(lines)
 
 
 def _category_table_only(activity_md: str) -> str:
@@ -466,10 +515,18 @@ def cmd_prompts(cfg: Config, days: int, end_day: date, min_count: int) -> None:
     print(render_prompt_report(prompts, days=days, min_count=min_count))
 
 
+def _resolve_pre_start_baseline(cfg: Config, metric: str, today: date) -> float | None:
+    """起票日の前日までの直近7日統計から中央値 baseline を求める（3日以上必要）。"""
+    prior_end = today - timedelta(days=1)
+    stats_list = load_stats(cfg.stats_path, days=7, end_day=prior_end)
+    return baseline_median_from_stats(stats_list, metric, min_days=3)
+
+
 def cmd_experiment_new(cfg: Config, args: argparse.Namespace) -> None:
     tz = ZoneInfo(cfg.timezone)
     today = datetime.now(tz).date()
     deadline = today + timedelta(days=args.days)
+    baseline = _resolve_pre_start_baseline(cfg, args.metric, today)
     try:
         path = create_experiment(
             cfg.experiments_path,
@@ -479,11 +536,22 @@ def cmd_experiment_new(cfg: Config, args: argparse.Namespace) -> None:
             today=today,
             deadline=deadline,
             hypothesis=args.hypothesis,
+            baseline=baseline,
         )
     except ExperimentError as e:
         raise SystemExit(f"❌ {e}")
     print(f"🧪 実験を起票しました: {path}")
     print(f"   指標: {args.metric} / 目標: {args.target} / 期限: {deadline.isoformat()}")
+    if baseline is not None:
+        prior_end = today - timedelta(days=1)
+        n_days = sum(
+            1
+            for s in load_stats(cfg.stats_path, days=7, end_day=prior_end)
+            if metric_from_stats(args.metric, s) is not None
+        )
+        print(f"📐 baseline: 直近{n_days}日の中央値 {baseline:g}（開始前実測）")
+    else:
+        print("   baseline: 開始前の統計が3日未満のため未設定（初回実測で埋まります）")
     print("   毎晩の kaizenlog generate が実測値を自動追記します。")
 
 

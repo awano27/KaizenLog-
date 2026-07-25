@@ -855,6 +855,7 @@ def generate_advice(
     )
     if errors:
         # 小型ローカルモデルでも利用しやすいよう、形式違反だけは1回自動修復する。
+        print(f"⚠️  出力契約違反を検出、1回だけ修復を試みます: {errors[0]}")
         assert evidence_ctx is not None
         repair_prompt = _contract_repair_prompt(evidence_ctx, advice, errors)
         if redactor:

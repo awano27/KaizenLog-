@@ -48,6 +48,9 @@ description: 直近1週間のKaizenLogアクティビティログとデイリー
    - 測定日の過半数で目標達成 → `status: adopted`（採用。習慣として定着したとみなす）
    - 達成率が低い → `status: rejected`（棄却。ノートのNotes欄に棄却理由を1-2行追記）
    `status: running` の実験は途中経過にコメントするだけで書き換えない。
+   **退行**: `status: adopted` のうち、直近7日の実測が3点以上ありその過半数が
+   目標未達のものは「今週の実験結果」に退行として記載し、frontmatter を
+   `status: running` に戻して `deadline` を今日+14日にする（再計測サイクルへ復帰）。
 
 5. **週次レビューノートの作成**: `01 Daily Notes/Weekly Reviews/YYYY-Www.md` に書く
    （フォルダがなければ作成）。既に存在する場合は全体を書き直してよい（このノートは
