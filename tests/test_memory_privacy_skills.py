@@ -182,6 +182,13 @@ def test_bundled_prompts_loadable():
         assert len(load_bundled_prompt(name)) > 100
     assert "計画と実績の差分" in load_bundled_prompt("daily_advisor")
     assert "[REDACTED]" in load_bundled_prompt("privacy_safe")
+    for name in ("daily_advisor", "privacy_safe"):
+        prompt = load_bundled_prompt(name)
+        assert "会話セッション" in prompt
+        assert "私用・娯楽" in prompt
+        assert "タイムラインは抜粋" in prompt or "タイムラインとサイト別表は部分観測" in prompt
+        assert "PASS:" in prompt and "FAIL:" in prompt
+        assert "30分以上" not in prompt
 
 
 def test_resolve_system_prompt(tmp_path):

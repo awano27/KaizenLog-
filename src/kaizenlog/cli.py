@@ -25,10 +25,10 @@ from zoneinfo import ZoneInfo
 
 from .advisor import (
     AdvisorError,
-    build_prompt,
     generate_advice,
-    resolve_system_prompt,
+    prepare_advice_request,
 )
+from .advice_evidence import build_advice_evidence
 from .aiwork import render_aiwork_markdown, scan_sessions, scan_user_prompts
 from .doctor import run_doctor
 from .memory import (
@@ -67,7 +67,7 @@ from .experiments import (
 )
 from .patterns import render_patterns_markdown
 from .report import render_markdown, summarize
-from .stats import load_stats, missing_days, write_stats
+from .stats import activity_fingerprint, load_stats, missing_days, write_stats
 from .vault import (
     ACTIVITY_MARKER,
     ADVICE_MARKER,
@@ -113,11 +113,18 @@ def cmd_generate(cfg: Config, day: date) -> Path:
     path = store.write_section(day, ACTIVITY_MARKER, section)
     print(f"✅ Activity Log を書き込みました: {path}")
     print(f"   合計 {summary.total_minutes:.0f}分 / {len(summary.blocks)}ブロック"
-          f" / AIセッション {summary.ai_sessions}回"
+          f" / AI関連画面ブロック {summary.ai_activity_blocks}回"
           f" / Claude Codeセッション {len(cc_sessions)}回")
 
     # パターン検出用の機械可読な統計を蓄積する
-    write_stats(cfg.stats_path, day, summary, cc_sessions, input_stats)
+    write_stats(
+        cfg.stats_path,
+        day,
+        summary,
+        cc_sessions,
+        input_stats,
+        activity_md=section,
+    )
 
     # 実行中のカイゼン実験に対象日の実測値を追記する
     for exp in load_experiments(cfg.experiments_path):
@@ -249,24 +256,63 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         past = store.read(scan_day)
         if past:
             status_updates.extend(update_statuses_from_note(past, entries, day))
+    # 同じIDが複数ノートに現れても更新は1件に畳む。チェック済みはユーザーが
+    # 既に確定した事実なので、新しいLLM提案の成否とは独立して永続化する。
+    status_updates = list({entry.id: entry for entry in status_updates}.values())
+    effective_by_id = {entry.id: entry for entry in entries}
+    effective_by_id.update({entry.id: entry for entry in status_updates})
+    effective_entries = sorted(effective_by_id.values(), key=lambda entry: entry.id)
     if status_updates and not dry_run:
-        # dry-runは「何も書き込まない」約束なので、検出結果の永続化は本実行のみ
         append_entries(cfg.memory_path, status_updates)
-        entries = load_entries(cfg.memory_path)
-        print(f"📗 完了アクションを記録しました: "
-              + ", ".join(e.id for e in status_updates))
-    memory_ctx = summarize_for_prompt(entries, day)
+        print("📗 完了アクションを記録しました: "
+              + ", ".join(entry.id for entry in status_updates))
+    memory_ctx = summarize_for_prompt(effective_entries, day)
+
+    # 人間向けMarkdownだけでは測定の意味が曖昧になるため、当日の統計JSONから
+    # 確定事実と測定限界を作り、ログ本文より優先するコンテキストとして渡す。
+    stats_history = load_stats(
+        cfg.stats_path, days=max(1, cfg.llm.lookback_days + 1), end_day=day
+    )
+    current_stats = next(
+        (item for item in reversed(stats_history) if item.get("day") == day.isoformat()),
+        None,
+    )
+    prior_stats = [item for item in stats_history if item.get("day") != day.isoformat()]
+    source_status = "missing"
+    if current_stats is not None:
+        stored_fingerprint = current_stats.get("activity_sha256")
+        if isinstance(stored_fingerprint, str):
+            if stored_fingerprint == activity_fingerprint(activity_md):
+                source_status = "verified"
+            else:
+                # 同日再生成の途中失敗などで日誌と統計が別runなら、古い統計を優先しない。
+                current_stats = None
+                source_status = "mismatch"
+        else:
+            source_status = "unverified"
+    evidence_ctx = build_advice_evidence(
+        current_stats,
+        prior_stats,
+        timezone=ZoneInfo(cfg.timezone),
+        source_status=source_status,
+    )
 
     redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
 
     if dry_run:
         # LLMに送る内容を送信せずに表示する（送信内容の監査用。マスク適用後を表示）
-        prompt = build_prompt(activity_md, recent, intent, experiments_ctx or None,
-                              memory_ctx or None)
-        if redactor:
-            prompt = redactor(prompt)
+        system_prompt, prompt, _ = prepare_advice_request(
+            cfg.llm,
+            activity_md,
+            recent,
+            intent,
+            experiments_ctx or None,
+            memory_ctx or None,
+            redactor,
+            evidence_ctx,
+        )
         print("===== system prompt =====")
-        print(resolve_system_prompt(cfg.llm))
+        print(system_prompt)
         print("===== user prompt =====")
         print(prompt)
         print("=====")
@@ -278,10 +324,11 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         intent=intent,
         experiments=experiments_ctx or None,
         memory=memory_ctx or None,
+        evidence=evidence_ctx,
         redactor=redactor,
     )
     # 「明日の最小アクション」に安定ID（KZN-YYYYMMDD-NNN）を付与して記録する
-    advice_md, new_entries = assign_action_ids(advice_md, day, entries)
+    advice_md, new_entries = assign_action_ids(advice_md, day, effective_entries)
     path = store.write_section(day, ADVICE_MARKER, advice_md)
     append_entries(cfg.memory_path, new_entries)
     print(f"✅ 改善提案を書き込みました: {path}")
@@ -323,7 +370,7 @@ memory_dir = "Kaizen/Memory"     # 提案の記録（Kaizen Memory、重複提�
 auto_backfill_days = 3      # 毎晩の実行時に直近N日の欠損を自動補完（0で無効）
 log_retention_days = 90     # 実行ログの保持日数
 min_block_minutes = 3.0     # タイムラインに載せる最小ブロック長（分）
-session_gap_minutes = 5.0   # この分数以上空いたら別セッション扱い
+session_gap_minutes = 5.0   # この分数以上空いたら別画面ブロック扱い
 
 [notifications]
 on_failure = true   # 夜間実行が失敗したときWindows通知を出す

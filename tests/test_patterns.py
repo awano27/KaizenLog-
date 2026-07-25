@@ -10,7 +10,7 @@ from kaizenlog.patterns import (
     render_patterns_markdown,
 )
 from kaizenlog.report import summarize
-from kaizenlog.stats import build_stats, load_stats, write_stats
+from kaizenlog.stats import activity_fingerprint, build_stats, load_stats, write_stats
 
 TZ = timezone.utc
 BASE = date(2026, 7, 1)
@@ -129,13 +129,16 @@ def test_stats_roundtrip(tmp_path):
     classified = Classifier(DEFAULT_RULES).classify_all(events)
     summary = summarize(date(2026, 7, 5), classified)
 
-    write_stats(tmp_path, date(2026, 7, 5), summary, [])
+    activity_md = "## 📊 Activity Log\n\nexample"
+    write_stats(tmp_path, date(2026, 7, 5), summary, [], activity_md=activity_md)
     loaded = load_stats(tmp_path, days=7, end_day=date(2026, 7, 8))
     assert len(loaded) == 1
     s = loaded[0]
     assert s["day"] == "2026-07-05"
     assert s["by_app"]["Code.exe"] == 30.0
     assert s["blocks"][0]["title"] == "main.py"
+    assert s["ai_activity_blocks"] == 0
+    assert s["activity_sha256"] == activity_fingerprint(activity_md)
     assert s["ai"]["sessions"] == 0
 
 
@@ -156,5 +159,6 @@ def test_build_stats_aggregates_ai_projects():
     classified = Classifier(DEFAULT_RULES).classify_all([])
     summary = summarize(date(2026, 7, 5), classified)
     s = build_stats(date(2026, 7, 5), summary, sessions)
+    assert s["ai_activity_blocks"] == summary.ai_activity_blocks
     assert s["ai"]["projects"]["ai-news"] == {
         "sessions": 2, "turns": 6, "errors": 2, "fragmented": 1}

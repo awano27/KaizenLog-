@@ -142,7 +142,7 @@ class Config:
     aiwork: AIWorkConfig = field(default_factory=AIWorkConfig)
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     min_block_minutes: float = 3.0  # タイムラインに載せる最小ブロック長
-    session_gap_minutes: float = 5.0  # この間隔以上空いたら別セッション扱い
+    session_gap_minutes: float = 5.0  # この間隔以上空いたら別画面ブロック扱い
     rules: list[dict] = field(default_factory=lambda: list(DEFAULT_RULES))
     llm: LLMConfig = field(default_factory=LLMConfig)
 

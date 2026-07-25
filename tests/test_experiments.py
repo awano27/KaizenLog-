@@ -62,6 +62,8 @@ def test_compute_metrics():
     s = _summary()
     assert compute_metric("context_switches", s, []) == 18.0
     assert compute_metric("total_active_minutes", s, []) == 300.0
+    assert compute_metric("ai_activity_blocks", s, []) == 4.0
+    assert compute_metric("ai_sessions", s, []) == 4.0  # 旧名も互換
     assert compute_metric("category_minutes:エンタメ", s, []) == 45.0
     assert compute_metric("category_minutes:存在しない", s, []) == 0.0
     assert compute_metric("ai_cc_sessions", s, []) == 0.0

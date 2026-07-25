@@ -39,7 +39,8 @@ def test_summarize_totals_and_ai():
     s = _summary()
     assert round(s.total_minutes) == 105
     assert round(s.by_category["AI作業"]) == 30
-    assert s.ai_sessions == 1  # 30分+10分は5分ギャップ以内なので1セッション
+    assert s.ai_activity_blocks == 1  # 30分+10分は5分ギャップ以内なので1画面ブロック
+    assert s.ai_sessions == 1  # 旧属性も互換のため維持
     assert s.context_switches == 3
 
 
@@ -54,8 +55,19 @@ def test_render_markdown_contains_sections():
     assert "## 📊 Activity Log" in md
     assert "### カテゴリ別" in md
     assert "🤖 AI作業の内訳" in md
+    assert "AI関連画面の前景ブロック数（推定）: 1回（会話数・往復数ではありません）" in md
+    assert "セッション数:" not in md
     assert "claude" in md
     assert "### タイムライン" in md
+
+
+def test_render_site_under_one_minute_is_not_zero():
+    summary = _summary()
+    summary.by_site = {"example.com": 0.2}
+    md = render_markdown(summary, TZ)
+    assert "| example.com | <1m |" in md
+    assert "| example.com | 0m |" not in md
+    assert "ブラウザ時間の完全な内訳ではありません" in md
 
 
 def test_summarize_overlapping_events_not_double_counted():

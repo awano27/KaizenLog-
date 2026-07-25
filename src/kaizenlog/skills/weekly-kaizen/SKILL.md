@@ -86,7 +86,8 @@ tags: [type/weekly-review]
    コマンドが使えればそれを使い、使えなければ既存の実験ノートと同じ
    frontmatter形式（title / date / tags: [type/kaizen-experiment] / status: running /
    metric / target / baseline（空欄） / deadline）で直接書く。
-   使える指標: context_switches, total_active_minutes, ai_sessions, ai_cc_sessions,
+   使える指標: context_switches, total_active_minutes, ai_activity_blocks,
+   ai_sessions（旧名・互換用）, ai_cc_sessions,
    ai_fragmented_sessions, ai_tool_errors, ai_interruptions, ai_avg_turns,
    category_minutes:<カテゴリ名>
 

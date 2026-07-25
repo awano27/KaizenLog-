@@ -24,7 +24,8 @@ MEASUREMENTS_MARKER = "kaizenlog:measurements"
 METRIC_DESCRIPTIONS = {
     "context_switches": "コンテキストスイッチ回数",
     "total_active_minutes": "合計アクティブ時間（分）",
-    "ai_sessions": "AIツールの利用セッション数（画面ベース）",
+    "ai_activity_blocks": "AIツールの画面アクティビティブロック数",
+    "ai_sessions": "AIツールの画面アクティビティブロック数（旧名・互換用）",
     "ai_cc_sessions": "Claude Codeセッション数",
     "ai_fragmented_sessions": "2往復以下の細切れClaude Codeセッション数",
     "ai_tool_errors": "Claude Codeのツールエラー回数",
@@ -107,8 +108,8 @@ def compute_metric(
         return float(summary.context_switches)
     if metric == "total_active_minutes":
         return round(summary.total_minutes, 1)
-    if metric == "ai_sessions":
-        return float(summary.ai_sessions)
+    if metric in ("ai_activity_blocks", "ai_sessions"):
+        return float(summary.ai_activity_blocks)
     if metric == "ai_cc_sessions":
         return float(len(cc_sessions))
     if metric == "ai_fragmented_sessions":

@@ -7,6 +7,7 @@ Markdownの日誌とは別に、機械可読な統計を `.kaizenlog/stats/YYYY-
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date, timedelta
 from pathlib import Path
@@ -21,11 +22,17 @@ def _round_minutes(d: dict[str, float]) -> dict[str, float]:
     return {k: round(v, 1) for k, v in d.items()}
 
 
+def activity_fingerprint(activity_md: str) -> str:
+    """Activityセクションと統計が同じ生成結果か確認する指紋。"""
+    return hashlib.sha256(activity_md.strip().encode("utf-8")).hexdigest()
+
+
 def build_stats(
     day: date,
     summary: DailySummary,
     cc_sessions: list[AISession],
     input_stats: InputStats | None = None,
+    activity_md: str | None = None,
 ) -> dict:
     projects: dict[str, dict] = {}
     for s in cc_sessions:
@@ -42,6 +49,9 @@ def build_stats(
         "day": day.isoformat(),
         "total_minutes": round(summary.total_minutes, 1),
         "context_switches": summary.context_switches,
+        # 旧名 ai_sessions は画面イベントをまとめたブロック数であり、会話数ではない。
+        # 新しい機械可読キーで意味を明示し、既存API/実験指標は互換のため維持する。
+        "ai_activity_blocks": summary.ai_activity_blocks,
         "by_category": _round_minutes(summary.by_category),
         "by_app": _round_minutes(summary.by_app),
         "by_site": _round_minutes(summary.by_site),
@@ -72,6 +82,8 @@ def build_stats(
             "focus_blocks": len(input_stats.focus_blocks),
             "focus_minutes": round(input_stats.focus_minutes, 1),
         }
+    if activity_md is not None:
+        stats["activity_sha256"] = activity_fingerprint(activity_md)
     return stats
 
 
@@ -81,12 +93,13 @@ def write_stats(
     summary: DailySummary,
     cc_sessions: list[AISession],
     input_stats: InputStats | None = None,
+    activity_md: str | None = None,
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
     atomic_write_text(
         path,
-        json.dumps(build_stats(day, summary, cc_sessions, input_stats),
+        json.dumps(build_stats(day, summary, cc_sessions, input_stats, activity_md),
                    ensure_ascii=False, indent=1),
     )
     return path

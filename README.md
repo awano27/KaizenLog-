@@ -23,6 +23,7 @@ ActivityWatch ──REST API──> kaizenlog generate ──> 01 Daily Notes/YY
 - **Kaizen実験ループ (v0.4)**: 改善提案を「言いっぱなし」にせず、**検証可能な実験**として追跡する。`kaizenlog experiment new` で仮説・指標・目標・期限つきの実験ノートを起票すると、毎晩の `generate` が実測値を自動追記し、目標達成を✅/❌で判定。LLMは実行中の実験と実測値を見た上で提案する（重複提案の防止・進捗コメント）。期限切れの実験は週次レビューが採用/棄却を判定し、一覧はObsidian Basesダッシュボード（`templates/Kaizen Experiments.base`）で見られる
 - **Claude Code連携が一級機能 (v1.3)**: `daily-kaizen` / `weekly-kaizen` / `kaizen-autopilot` の3スキルをパッケージに同梱し `kaizenlog skill install` で安全に配置（既存ファイルは上書きせずdiff案内）。LLMバックエンドにも `claude-code-cli`（ヘッドレス実行）を追加。プロンプトテンプレート4種（daily_advisor / weekly_review / ai_work_deep_review / privacy_safe）同梱で `[llm] system_prompt` から差し替え可能
 - **Kaizen Memory＋Action Ledger (v1.3)**: 提案アクションに安定ID（`KZN-YYYYMMDD-NNN`）を自動付与し `Kaizen/Memory/` に記録。デイリーノートでチェックを付けると完了として追跡され、LLMは過去の提案の記録を見て**同じ提案を繰り返さない**。提案は「今日の改善提案（根拠つき）／明日の最小アクション（チェックボックス）／AI作業の改善」の3セクション構成
+- **根拠駆動の改善提案**: 人間向けMarkdownより機械可読統計を優先し、AI画面ブロック≠会話数、ブラウジング≠娯楽、タイムライン＝抜粋などの測定限界をLLMへ明示。過去中央値と上位カテゴリ遷移も渡し、各提案を**根拠ID → 15分以内の行動 → 翌日のPASS/FAIL**に変換する。日次プロンプトの形式違反は1回自動修復し、それでも不正な回答はノートへ保存しない
 - **プライバシーレダクション (v1.3)**: `[privacy] redact_patterns`（正規表現）でLLM送信前に顧客名・案件名等をマスク。**日誌本体は原文のまま**、送信プロンプトだけがマスクされる。`advise --dry-run` でマスク後の送信内容を事前監査できる
 - **運用強化パック (v1.2)**: 無人の夜間実行を「静かな故障」から守る。全実行を記録する実行ログ＋`kaizenlog status`、失敗時のWindows通知、環境を一発診断する`kaizenlog doctor`、PCオフ日の日誌を自動で埋める欠損補完（`backfill`＋毎晩の自動キャッチアップ）、LLM一時エラーの自動リトライ、送信内容を事前確認できる`advise --dry-run`（監査用）
 - **日報ドラフトの自動生成 (v1.1)**: `kaizenlog report` が活動ログから**提出用の日報下書き**（【本日の業務】【成果・進捗】【明日の予定】【所感】）を生成。LLMで自然な文章に仕上げるモードと、LLM不要の事実ベースモード（`--no-llm`）の2択。エンタメやYouTube等の私的コンテンツは自動で除外。Tasksのチェック状態が成果・明日の予定に反映される
@@ -155,8 +156,8 @@ powershell -ExecutionPolicy Bypass -File scripts\register-task.ps1 -Autopilot -V
 | AI作業 | 1h25m | 21% |
 ...
 
-### 🤖 AI作業の内訳
-セッション数: 9回
+### 🤖 AI作業の内訳（画面分類による推定）
+AI関連画面の前景ブロック数（推定）: 9回（会話数・往復数ではありません）
 | ツール | 時間 |
 | --- | ---: |
 | claude | 52m |
@@ -171,10 +172,14 @@ powershell -ExecutionPolicy Bypass -File scripts\register-task.ps1 -Autopilot -V
 | 09:12-09:58 | ai-news | 8 | 14 | 2 | 0 |
 
 ## 🚀 Kaizen（AIからの改善提案）
-### 改善提案
-1. 14時台にClaudeとVS Codeを9回往復しています。プロンプトを...
-### AI活用の次の一手
-- 毎朝手動で行っているニュース要約は Copilot CLI のスケジュール実行に...
+### 今日の改善提案
+1. [F9] 開発→ブラウジングの遷移が最多です。調査リンクをまとめて開き、翌日は同遷移回数を確認します。
+
+### 明日の最小アクション
+- [ ] KZN-20260722-001: [F9] 調査前に開くリンクを3件まとめる｜PASS: 開発→ブラウジングが5回以下｜FAIL: 6回以上
+
+### AI作業の改善
+- [F5] Claude Codeで細切れ実行が記録されています。次回は関連依頼を1タスクにまとめます。
 ```
 
 ## カスタマイズ

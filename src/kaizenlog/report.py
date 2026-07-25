@@ -35,9 +35,16 @@ class DailySummary:
     by_app: dict[str, float]
     blocks: list[Block]
     ai_tool_minutes: dict[str, float]
+    # 後方互換のためフィールド名は維持する。値は会話セッション数ではなく、
+    # AI関連と分類された前景画面のactivity block数。
     ai_sessions: int
     context_switches: int  # カテゴリの切り替え回数
     by_site: dict[str, float] = field(default_factory=dict)  # ドメイン別（aw-watcher-web導入時のみ）
+
+    @property
+    def ai_activity_blocks(self) -> int:
+        """AI関連画面のactivity block数（会話数・往復数ではない）。"""
+        return self.ai_sessions
 
 
 def _sorted_events(classified: list[ClassifiedEvent]) -> list[ClassifiedEvent]:
@@ -131,6 +138,13 @@ def _fmt_minutes(minutes: float) -> str:
     return f"{h}h{m:02d}m" if h else f"{m}m"
 
 
+def _fmt_site_minutes(minutes: float) -> str:
+    """少量のサイト観測を「0分」と誤表示しない。"""
+    if 0 < minutes < 1:
+        return "<1m"
+    return _fmt_minutes(minutes)
+
+
 def _fmt_time(dt: datetime, tz: tzinfo) -> str:
     return dt.astimezone(tz).strftime("%H:%M")
 
@@ -177,20 +191,25 @@ def render_markdown(
 
     # サイト別（aw-watcher-web 導入時のみ）
     if summary.by_site:
-        lines.append("### 🌐 サイト別（上位10）")
+        lines.append("### 🌐 サイト別（watcher取得分・上位10）")
         lines.append("")
         lines.append("| サイト | 時間 |")
         lines.append("| --- | ---: |")
         for site, minutes in sorted(summary.by_site.items(), key=lambda x: -x[1])[:10]:
             site_escaped = site.replace("|", "\\|")
-            lines.append(f"| {site_escaped} | {_fmt_minutes(minutes)} |")
+            lines.append(f"| {site_escaped} | {_fmt_site_minutes(minutes)} |")
+        lines.append("")
+        lines.append("※ watcherが取得できた部分だけで、ブラウザ時間の完全な内訳ではありません。")
         lines.append("")
 
     # AI作業の詳細
     if summary.ai_tool_minutes:
-        lines.append("### 🤖 AI作業の内訳")
+        lines.append("### 🤖 AI作業の内訳（画面分類による推定）")
         lines.append("")
-        lines.append(f"セッション数: {summary.ai_sessions}回")
+        lines.append(
+            "AI関連画面の前景ブロック数（推定）: "
+            f"{summary.ai_activity_blocks}回（会話数・往復数ではありません）"
+        )
         lines.append("")
         lines.append("| ツール | 時間 |")
         lines.append("| --- | ---: |")

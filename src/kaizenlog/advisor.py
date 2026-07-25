@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -22,6 +23,7 @@ from typing import Callable
 
 import requests
 
+from .advice_evidence import AdviceEvidence, build_advice_evidence
 from .config import LLMConfig
 
 BUNDLED_PROMPTS = ("daily_advisor", "weekly_review", "ai_work_deep_review", "privacy_safe")
@@ -55,8 +57,12 @@ def build_prompt(
     intent: str | None = None,
     experiments: str | None = None,
     memory: str | None = None,
+    evidence: str | AdviceEvidence | None = None,
 ) -> str:
     parts: list[str] = []
+    if evidence:
+        parts.append(evidence.markdown if isinstance(evidence, AdviceEvidence) else evidence)
+        parts.append("\n\n")
     if intent:
         parts.append("# 本日の計画（ユーザーが手書きしたToday's Focus / Tasks）\n")
         parts.append(intent)
@@ -79,6 +85,10 @@ def build_prompt(
 
 class AdvisorError(RuntimeError):
     pass
+
+
+class AdviceContractError(AdvisorError):
+    """改善提案が保存可能な出力契約を満たさない。"""
 
 
 class BackendUnavailable(AdvisorError):
@@ -340,6 +350,321 @@ def generate_text(
     raise AdvisorError("すべてのLLMバックエンドに失敗しました:\n- " + "\n- ".join(failures))
 
 
+_FACT_ID_RE = re.compile(r"\[F\d+\]")
+_NUMBERED_ITEM_RE = re.compile(r"^\s*\d+[.)]\s+", re.MULTILINE)
+_ACTION_RE = re.compile(r"^\s*- \[ \]\s+(.+)$", re.MULTILINE)
+_ANY_CHECKBOX_RE = re.compile(r"^\s*- \[[ xX]\]\s+.+$", re.MULTILINE)
+
+
+def _coerce_evidence(evidence: AdviceEvidence | None) -> AdviceEvidence:
+    if isinstance(evidence, AdviceEvidence):
+        return evidence
+    if evidence is None:
+        return build_advice_evidence(None)
+    raise TypeError("evidence は AdviceEvidence で渡してください")
+
+
+def _level3_sections(markdown: str) -> dict[str, str]:
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in markdown.splitlines():
+        if line.startswith("### "):
+            current = line[4:].strip()
+            sections.setdefault(current, [])
+        elif current is not None:
+            sections[current].append(line)
+    return {name: "\n".join(lines).strip() for name, lines in sections.items()}
+
+
+def _numbered_items(section: str) -> list[str]:
+    matches = list(_NUMBERED_ITEM_RE.finditer(section))
+    return [
+        section[match.start(): matches[i + 1].start() if i + 1 < len(matches) else None].strip()
+        for i, match in enumerate(matches)
+    ]
+
+
+def advice_contract_errors(
+    advice: str,
+    evidence: AdviceEvidence | None = None,
+) -> list[str]:
+    """保存前に、根拠・行動・翌日判定が1対1で揃っているか検証する。"""
+    errors: list[str] = []
+    evidence_ctx = _coerce_evidence(evidence)
+    if "```" in advice or "~~~" in advice:
+        errors.append("日次回答をコードフェンスで囲まないでください")
+    headings = [
+        line[4:].strip()
+        for line in advice.splitlines()
+        if line.startswith("### ")
+    ]
+    allowed_headings = {"計画と実績", "今日の改善提案", "明日の最小アクション", "AI作業の改善"}
+    unexpected = sorted(set(headings) - allowed_headings)
+    if unexpected:
+        errors.append("許可されていない見出しがあります: " + "、".join(unexpected))
+    sections = _level3_sections(advice)
+    required = ("今日の改善提案", "明日の最小アクション", "AI作業の改善")
+    for heading in required:
+        if headings.count(heading) != 1:
+            errors.append(f"見出し「### {heading}」は1回だけ使用してください")
+        body = sections.get(heading, "")
+        if not body:
+            errors.append(f"必須見出し「### {heading}」がない、または空です")
+        elif any(line.lstrip().startswith("#") for line in body.splitlines()):
+            errors.append(f"「### {heading}」内にサブ見出しを置かないでください")
+    if headings.count("計画と実績") > 1:
+        errors.append("見出し「### 計画と実績」は最大1回にしてください")
+
+    improvements = _numbered_items(sections.get("今日の改善提案", ""))
+    if not 1 <= len(improvements) <= 3:
+        errors.append("「今日の改善提案」は番号付きで1〜3件にしてください")
+
+    actions = _ACTION_RE.findall(sections.get("明日の最小アクション", ""))
+    if not 1 <= len(actions) <= 3:
+        errors.append("「明日の最小アクション」は未チェックのチェックボックスで1〜3件にしてください")
+    if improvements and actions and len(improvements) != len(actions):
+        errors.append("改善提案と最小アクションの件数を1対1にしてください")
+    if len(_ANY_CHECKBOX_RE.findall(advice)) != len(actions):
+        errors.append("チェックボックスは「明日の最小アクション」の未チェック行だけにしてください")
+    errors.extend(_observed_value_restatement_errors(sections))
+
+    available_fact_ids = set(evidence_ctx.fact_ids)
+    if available_fact_ids:
+        cited_anywhere = set(_FACT_ID_RE.findall(advice))
+        if not cited_anywhere <= available_fact_ids:
+            errors.append("回答が存在しない根拠IDを参照しています")
+        for index, item in enumerate(improvements, 1):
+            cited = set(_FACT_ID_RE.findall(item))
+            if not cited:
+                errors.append(f"改善提案{index}に根拠ID [F#] がありません")
+            elif not cited <= available_fact_ids:
+                errors.append(f"改善提案{index}が存在しない根拠IDを参照しています")
+
+        ai_section = sections.get("AI作業の改善", "")
+        ai_ids = set(_FACT_ID_RE.findall(ai_section))
+        if ai_section and not ai_ids & {"[F4]", "[F5]"} & available_fact_ids:
+            errors.append("「AI作業の改善」にAI根拠ID [F4] または [F5] がありません")
+
+    for index, action in enumerate(actions, 1):
+        cited = set(_FACT_ID_RE.findall(action))
+        if available_fact_ids and not re.match(r"\[F\d+\]\s", action):
+            errors.append(f"最小アクション{index}は根拠ID [F#] から開始してください")
+        if available_fact_ids and not cited:
+            errors.append(f"最小アクション{index}に根拠ID [F#] がありません")
+        elif available_fact_ids and not cited <= available_fact_ids:
+            errors.append(f"最小アクション{index}が存在しない根拠IDを参照しています")
+        pass_position = action.find("PASS:")
+        fail_position = action.find("FAIL:")
+        pass_value = (
+            action[pass_position + len("PASS:"):fail_position].strip(" ｜|/\t")
+            if 0 <= pass_position < fail_position else ""
+        )
+        fail_value = (
+            action[fail_position + len("FAIL:"):].strip(" ｜|/\t")
+            if fail_position >= 0 else ""
+        )
+        if not pass_value or not fail_value:
+            errors.append(f"最小アクション{index}に翌日の PASS:/FAIL: 条件がありません")
+        elif not re.search(r"\d", pass_value) or not re.search(r"\d", fail_value):
+            errors.append(f"最小アクション{index}の PASS:/FAIL: は数値条件にしてください")
+        if re.search(r"KZN-\d{8}-\d+", action):
+            errors.append(f"最小アクション{index}にモデル生成のKZN IDがあります")
+
+        if index <= len(improvements) and available_fact_ids:
+            improvement_ids = set(_FACT_ID_RE.findall(improvements[index - 1]))
+            if improvement_ids and cited and not improvement_ids & cited:
+                errors.append(f"改善提案{index}と最小アクション{index}の根拠IDが対応していません")
+
+    errors.extend(_semantic_contract_errors(advice, evidence_ctx))
+
+    return errors
+
+
+def _has_uncertainty_language(sentence: str) -> bool:
+    return any(
+        phrase in sentence
+        for phrase in (
+            "ではない", "でない", "判断不能", "測定不能", "不明", "根拠なし",
+            "根拠がない", "断定しない", "意味しない", "とは限らない",
+        )
+    )
+
+
+def _observed_clause(sentence: str) -> str:
+    cutoffs = [
+        position for marker in ("明日", "翌日", "PASS:", "FAIL:")
+        if (position := sentence.find(marker)) >= 0
+    ]
+    return sentence[:min(cutoffs)] if cutoffs else sentence
+
+
+def _observed_value_restatement_errors(sections: dict[str, str]) -> list[str]:
+    """観測値はコード生成のF本文だけに置き、LLMには数値を再入力させない。"""
+    for heading in ("今日の改善提案", "AI作業の改善"):
+        for sentence in re.split(r"[。\n]", sections.get(heading, "")):
+            clause = _observed_clause(sentence)
+            without_ids = _FACT_ID_RE.sub("", clause)
+            without_numbering = re.sub(r"^\s*\d+[.)]\s*", "", without_ids)
+            if re.search(r"\d", without_numbering):
+                return [
+                    f"「### {heading}」では観測数値を再掲せず、根拠ID [F#] だけを参照してください"
+                ]
+    return []
+
+
+def _semantic_contract_errors(advice: str, evidence: AdviceEvidence) -> list[str]:
+    """今回の根本原因になった既知の禁止推論を決定論的に止める。"""
+    errors: list[str] = []
+    sentences = [part.strip() for part in re.split(r"[。\n]", advice) if part.strip()]
+
+    def is_measurement_instruction(clause: str) -> bool:
+        return (
+            bool(re.search(r"記録|計測|測定|確認|設定|目標|条件", clause))
+            and not bool(re.search(r"した|だった|発生した|実績", clause))
+        )
+
+    if not evidence.entertainment_observed:
+        entertainment_claim = re.compile(
+            r"(?:(?:娯楽|私用|エンタメ).{0,12}(?:利用|閲覧|視聴|浪費|費や|食い込|多い|発生)"
+            r"|ブラウジング.{0,12}(?:娯楽|私用))"
+        )
+        for sentence in sentences:
+            clause = _observed_clause(sentence)
+            if (
+                entertainment_claim.search(clause)
+                and not _has_uncertainty_language(clause)
+                and not is_measurement_instruction(clause)
+            ):
+                errors.append("エンタメ根拠がない日に娯楽・私用利用を断定しています")
+                break
+
+    if not evidence.ai_conversation_metrics_available:
+        numeric_ai_claim = re.compile(
+            r"(?:\d+(?:\.\d+)?\s*(?:回|件)?\s*(?:往復|発話|会話セッション)"
+            r"|(?:往復|発話|会話セッション)(?:数)?\s*(?:は|が|:|：)?\s*\d+)"
+        )
+        unsupported_ai_quality = re.compile(
+            r"(?:(?:会話|セッション|往復).{0,12}(?:多い|少ない|短い|長い|細切れ|過多|多発)"
+            r"|(?:細切れ|往復過多|会話品質|AI品質))"
+        )
+        for sentence in sentences:
+            clause = _observed_clause(sentence)
+            if (
+                (numeric_ai_claim.search(clause) or unsupported_ai_quality.search(clause))
+                and not _has_uncertainty_language(clause)
+                and not is_measurement_instruction(clause)
+            ):
+                errors.append("AI会話テレメトリがないのに回数・品質を断定しています")
+                break
+
+    if "[F4]" in evidence.fact_ids:
+        conversion = re.compile(r"会話|セッション|往復")
+        for sentence in sentences:
+            clause = _observed_clause(sentence)
+            if (
+                "[F4]" in clause
+                and "[F5]" not in clause
+                and conversion.search(clause)
+                and not _has_uncertainty_language(clause)
+                and not is_measurement_instruction(clause)
+            ):
+                errors.append("AI関連画面ブロック数を会話数・セッション数・往復数へ変換しています")
+                break
+
+    if "[F1]" in evidence.fact_ids:
+        unsupported_cause = re.compile(
+            r"(?:通知|割り込み|中断|(?:生産性|集中力).{0,6}(?:低下|下が|悪化))"
+        )
+        for sentence in sentences:
+            clause = _observed_clause(sentence)
+            if (
+                any(f"[F{fact_id}]" in clause for fact_id in (1, 8, 9))
+                and "[F5]" not in clause
+                and unsupported_cause.search(clause)
+                and not _has_uncertainty_language(clause)
+                and not is_measurement_instruction(clause)
+            ):
+                errors.append("カテゴリ変更回数を通知・割り込み・生産性低下へ変換しています")
+                break
+    return errors
+
+
+def _contract_repair_prompt(
+    evidence: AdviceEvidence,
+    advice: str,
+    errors: list[str],
+) -> str:
+    rendered_errors = "\n".join(f"- {error}" for error in errors)
+    return (
+        "# 出力契約の修正依頼\n"
+        "前回の回答は保存条件を満たしませんでした。分析事実を増やしたり推測したりせず、"
+        "同じ内容を契約どおりに書き直してください。\n\n"
+        f"## 使用できる根拠\n{evidence.markdown}\n\n"
+        f"## 違反\n{rendered_errors}\n\n"
+        f"## 前回の回答\n{advice}"
+    )
+
+
+def requires_daily_contract(cfg: LLMConfig) -> bool:
+    """日次フォーマットを約束する同梱プロンプトだけを厳格検証する。
+
+    weekly_review、ai_work_deep_review、自作プロンプトには別の出力契約があるため、
+    日次の見出しを強制すると既存のsystem_prompt差し替え機能を壊してしまう。
+    """
+    return (cfg.system_prompt or "daily_advisor") in {"daily_advisor", "privacy_safe"}
+
+
+def _assert_redaction_preserves_daily_protocol(
+    system_prompt: str,
+    prompt: str,
+    evidence: AdviceEvidence,
+) -> None:
+    """広すぎるマスク規則がF-IDや必須見出しを壊したら、送信前に明示失敗する。"""
+    expected_ids = set(evidence.fact_ids)
+    remaining_ids = set(_FACT_ID_RE.findall(prompt))
+    required_headings = (
+        "### 今日の改善提案",
+        "### 明日の最小アクション",
+        "### AI作業の改善",
+    )
+    if not expected_ids <= remaining_ids or any(
+        heading not in system_prompt for heading in required_headings
+    ):
+        raise AdvisorError(
+            "privacy.redact_patterns が改善提案の制御トークン（[F#] または必須見出し）"
+            "までマスクしています。パターンを固有名詞へ限定してください。"
+        )
+
+
+def prepare_advice_request(
+    cfg: LLMConfig,
+    today_md: str,
+    recent_summaries: list[str],
+    intent: str | None = None,
+    experiments: str | None = None,
+    memory: str | None = None,
+    redactor: Callable[[str], str] | None = None,
+    evidence: AdviceEvidence | None = None,
+) -> tuple[str, str, AdviceEvidence | None]:
+    """dry-runと本実行で完全に同じsystem/user promptを準備する。"""
+    daily_contract = requires_daily_contract(cfg)
+    evidence_ctx = (
+        _coerce_evidence(evidence)
+        if evidence is not None or daily_contract
+        else None
+    )
+    prompt = build_prompt(
+        today_md, recent_summaries, intent, experiments, memory, evidence_ctx
+    )
+    system_prompt = resolve_system_prompt(cfg)
+    if redactor:
+        prompt = redactor(prompt)
+        system_prompt = redactor(system_prompt)
+        if daily_contract and evidence_ctx is not None:
+            _assert_redaction_preserves_daily_protocol(system_prompt, prompt, evidence_ctx)
+    return system_prompt, prompt, evidence_ctx
+
+
 def generate_advice(
     cfg: LLMConfig,
     today_md: str,
@@ -348,9 +673,33 @@ def generate_advice(
     experiments: str | None = None,
     memory: str | None = None,
     redactor: Callable[[str], str] | None = None,
+    evidence: AdviceEvidence | None = None,
 ) -> str:
-    prompt = build_prompt(today_md, recent_summaries, intent, experiments, memory)
-    if redactor:
-        prompt = redactor(prompt)  # 送信プロンプトのみマスク。日誌本体は原文のまま
-    advice = generate_text(cfg, resolve_system_prompt(cfg), prompt)
+    system_prompt, prompt, evidence_ctx = prepare_advice_request(
+        cfg,
+        today_md,
+        recent_summaries,
+        intent,
+        experiments,
+        memory,
+        redactor,
+        evidence,
+    )
+    advice = generate_text(cfg, system_prompt, prompt)
+    errors = (
+        advice_contract_errors(advice, evidence_ctx)
+        if requires_daily_contract(cfg) else []
+    )
+    if errors:
+        # 小型ローカルモデルでも利用しやすいよう、形式違反だけは1回自動修復する。
+        assert evidence_ctx is not None
+        repair_prompt = _contract_repair_prompt(evidence_ctx, advice, errors)
+        if redactor:
+            repair_prompt = redactor(repair_prompt)
+        advice = generate_text(cfg, system_prompt, repair_prompt)
+        errors = advice_contract_errors(advice, evidence_ctx)
+    if errors:
+        raise AdviceContractError(
+            "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errors)
+        )
     return f"## 🚀 Kaizen（AIからの改善提案）\n\n{advice}"

@@ -13,7 +13,7 @@ memory_dir = "Kaizen/Memory"     # 提案の記録（Kaizen Memory、重複提�
 auto_backfill_days = 3      # 毎晩の実行時に直近N日の欠損を自動補完（0で無効）
 log_retention_days = 90     # 実行ログの保持日数
 min_block_minutes = 3.0     # タイムラインに載せる最小ブロック長（分）
-session_gap_minutes = 5.0   # この分数以上空いたら別セッション扱い
+session_gap_minutes = 5.0   # この分数以上空いたら別画面ブロック扱い
 
 [notifications]
 on_failure = true   # 夜間実行が失敗したときWindows通知を出す
