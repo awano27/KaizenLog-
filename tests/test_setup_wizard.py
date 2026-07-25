@@ -103,3 +103,34 @@ def test_setup_missing_vault_noninteractive_fails(tmp_path):
         ui=FakeUI([]),  # no path answers
     )
     assert code == 2
+
+
+def test_setup_install_aw_flag_calls_winget(tmp_path, monkeypatch):
+    vault = tmp_path / "v"
+    vault.mkdir()
+    cfg = tmp_path / "c.toml"
+    called = []
+    monkeypatch.setattr(
+        "kaizenlog.setup_detect.detect_llm",
+        lambda **k: __import__("kaizenlog.setup_detect", fromlist=["LlmDetection"]).LlmDetection(
+            None, None, None, "none", None
+        ),
+    )
+    monkeypatch.setattr(
+        "kaizenlog.setup_detect.detect_activitywatch",
+        lambda url: __import__("kaizenlog.setup_detect", fromlist=["AwDetection"]).AwDetection(False, None),
+    )
+    monkeypatch.setattr("kaizenlog.setup.try_winget_install_aw", lambda: called.append(1) or True)
+    monkeypatch.setattr("kaizenlog.setup.start_aw_and_wait", lambda url, exe=None, timeout=60: True)
+    monkeypatch.setattr("kaizenlog.setup_detect.is_task_registered", lambda name="KaizenLog Daily": True)
+    monkeypatch.setattr("kaizenlog.setup.run_doctor", lambda cfg, p=None: ("ok", False))
+
+    code = run_setup(
+        SetupOptions(
+            config_path=cfg, vault=vault, yes=True,
+            skip_aw=False, install_aw=True, skip_task=True, skip_skills=True,
+        ),
+        ui=FakeUI([]),
+    )
+    assert called == [1]
+    assert code == 0

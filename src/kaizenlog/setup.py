@@ -1,7 +1,10 @@
 """Setup wizard orchestration (detect → config → optional side effects → doctor)."""
 from __future__ import annotations
 
+import shutil
+import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -10,6 +13,7 @@ from . import setup_detect
 from .config import default_config_path, load_config, write_config_file
 from .doctor import run_doctor
 from .skill_manager import bundled_skill_names, install_skill
+from .setup_detect import find_aw_exe, probe_aw_api
 
 # Re-export for monkeypatch paths used by tests (kaizenlog.setup.run_doctor).
 __all__ = [
@@ -102,20 +106,67 @@ class ConsoleUI:
         return Path(raw).expanduser()
 
 
-# --- Stubs / thin wrappers (Task 4/5 fill in; keep monkeypatch targets) ---
+# --- Side-effect helpers (monkeypatch targets for tests) ---
+
+WINGET_AW_IDS = ("ActivityWatch.ActivityWatch",)
 
 
 def try_winget_install_aw() -> bool:
-    """Install ActivityWatch via winget. Task 3 stub: always False.
+    """Install ActivityWatch via winget (Windows only).
 
     Must only be called when opts.install_aw or interactive confirm —
     never on bare --yes alone.
     """
+    if sys.platform != "win32" or not shutil.which("winget"):
+        return False
+    for pkg in WINGET_AW_IDS:
+        try:
+            r = subprocess.run(
+                [
+                    "winget",
+                    "install",
+                    "-e",
+                    "--id",
+                    pkg,
+                    "--accept-package-agreements",
+                    "--accept-source-agreements",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if r.returncode == 0:
+                return True
+        except (OSError, subprocess.TimeoutExpired):
+            continue
     return False
 
 
-def start_aw_and_wait(url: str, exe: Path | str | None = None, timeout: float = 60) -> bool:
-    """Start AW and poll API until ready. Task 3 stub: always False."""
+def start_aw_and_wait(
+    base_url: str,
+    exe: Path | str | None = None,
+    timeout: float = 60,
+) -> bool:
+    """Start aw-qt if found and poll probe_aw_api until ready or timeout."""
+    path: Path | None
+    if exe is not None:
+        path = Path(exe)
+    else:
+        path = find_aw_exe()
+    if path is not None and path.is_file():
+        try:
+            subprocess.Popen(
+                [str(path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            pass
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if probe_aw_api(base_url):
+            return True
+        time.sleep(2)
     return False
 
 
@@ -216,6 +267,23 @@ def run_setup(opts: SetupOptions, ui: SetupUI | None = None) -> int:
         aw = setup_detect.detect_activitywatch(opts.aw_base_url)
         if aw.reachable:
             ui.print(f"✅ ActivityWatch 応答あり: {opts.aw_base_url}")
+        elif aw.exe_path is not None:
+            # Installed but not running — offer start (yes: start without winget)
+            ui.print(f"⚠️  ActivityWatch に接続できません: {opts.aw_base_url}")
+            do_start = opts.yes or ui.confirm(
+                "ActivityWatch を起動しますか？",
+                default=True,
+            )
+            if do_start:
+                ui.print("ActivityWatch を起動しています…")
+                if start_aw_and_wait(opts.aw_base_url, exe=aw.exe_path):
+                    ui.print("✅ ActivityWatch を起動しました")
+                else:
+                    ui.print("⚠️  ActivityWatch の起動確認に失敗しました")
+                    soft_fail = True
+            else:
+                ui.print("ActivityWatch 起動をスキップしました")
+                soft_fail = True
         else:
             ui.print(f"⚠️  ActivityWatch に接続できません: {opts.aw_base_url}")
             do_install = False
@@ -230,7 +298,7 @@ def run_setup(opts: SetupOptions, ui: SetupUI | None = None) -> int:
             if do_install:
                 ui.print("ActivityWatch のインストールを試行します…")
                 if try_winget_install_aw():
-                    if start_aw_and_wait(opts.aw_base_url, exe=aw.exe_path):
+                    if start_aw_and_wait(opts.aw_base_url, exe=None):
                         ui.print("✅ ActivityWatch を起動しました")
                     else:
                         ui.print("⚠️  ActivityWatch の起動確認に失敗しました")
