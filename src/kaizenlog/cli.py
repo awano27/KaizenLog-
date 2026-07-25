@@ -10,6 +10,7 @@
   kaizenlog backfill [--days N]            欠損日の日誌・統計をまとめて補完する
   kaizenlog status                         実行履歴（最終成功・直近の失敗）を表示
   kaizenlog doctor                         セットアップと環境の健全性を診断
+  kaizenlog setup                          対話式セットアップウィザード
   kaizenlog init-config                    設定ファイルの雛形を出力する
 """
 
@@ -583,6 +584,19 @@ def main(argv: list[str] | None = None) -> int:
     blk.add_argument("--out", help="ルールファイルの出力先（省略時: <vault>/.kaizenlog/leechblock-options.txt）")
     init = sub.add_parser("init-config", help="設定ファイルの雛形を出力する")
     init.add_argument("--output", help="出力先パス（省略時は AppData/XDG の config.toml）")
+    su = sub.add_parser("setup", help="対話式セットアップウィザード")
+    su.add_argument("--config", help="読み書きする設定パス（省略時は AppData/XDG）")
+    su.add_argument("--vault", help="Obsidian ボールトのパス")
+    su.add_argument("--yes", action="store_true", help="安全な既定提案を確認なしで採用")
+    su.add_argument("--force", action="store_true", help="OK 済みフェーズも再確認")
+    su.add_argument("--skip-aw", action="store_true", help="ActivityWatch フェーズをスキップ")
+    su.add_argument("--skip-task", action="store_true", help="タスク登録フェーズをスキップ")
+    su.add_argument("--skip-skills", action="store_true", help="スキル導入をスキップ")
+    su.add_argument("--install-aw", action="store_true",
+                    help="非対話でも winget で ActivityWatch 導入を許可")
+    su.add_argument("--register-task", action="store_true",
+                    help="非対話でも日次タスク登録を許可")
+    su.add_argument("--time", default="21:30", help="日次タスク時刻（既定 21:30）")
 
     args = parser.parse_args(argv)
 
@@ -596,6 +610,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init-config":
         return cmd_init_config(getattr(args, "output", None))
+
+    # setup bootstraps config — must not require load_config first
+    if args.command == "setup":
+        from .setup import SetupOptions, run_setup
+        # setup subparser has its own --config; top-level --config may also apply
+        cfg_arg = getattr(args, "config", None)
+        return run_setup(SetupOptions(
+            config_path=Path(cfg_arg).expanduser() if cfg_arg else None,
+            vault=Path(args.vault).expanduser() if args.vault else None,
+            yes=args.yes,
+            force=args.force,
+            skip_aw=args.skip_aw,
+            skip_task=args.skip_task,
+            skip_skills=args.skip_skills,
+            install_aw=args.install_aw,
+            register_task=args.register_task,
+            time=args.time,
+        ))
 
     try:
         cfg = load_config(args.config)
