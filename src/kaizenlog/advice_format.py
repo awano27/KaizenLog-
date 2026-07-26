@@ -363,7 +363,32 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
                 raise _contract_error(
                     f"actions[{i}] の pass: 指標名が使用可能な指標にありません"
                 )
-            # 実在検証: 未知カテゴリの偽PASS・未観測ドメインの入口ガード
+            # 実在検証: 未知カテゴリの偽PASS・未観測ドメイン・計測不能指標の入口ガード
+            # （計測不能な PASS を保存すると compute_metric=None で永久未判定になる）
+            _INPUT_PASS_METRICS = frozenset(
+                {"focus_blocks", "focus_minutes", "input_keypresses"}
+            )
+            _STRUCTURED_AI_PASS_METRICS = frozenset(
+                {
+                    "ai_cc_sessions",
+                    "ai_fragmented_sessions",
+                    "ai_retry_chains",
+                    "ai_tool_errors",
+                    "ai_interruptions",
+                    "ai_avg_turns",
+                }
+            )
+            if metric in _INPUT_PASS_METRICS and not evidence.input_metrics_available:
+                raise _contract_error(
+                    f"actions[{i}] の pass: {metric} は入力watcherが無いため計測不能です"
+                )
+            if (
+                metric in _STRUCTURED_AI_PASS_METRICS
+                and not evidence.structured_ai_metrics_available
+            ):
+                raise _contract_error(
+                    f"actions[{i}] の pass: {metric} は構造化AIテレメトリが無いため計測不能です"
+                )
             if metric.startswith("category_minutes:"):
                 cat = metric.split(":", 1)[1].strip()
                 known = evidence.known_categories
@@ -372,6 +397,10 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
                         f"actions[{i}] の pass: カテゴリ {cat!r} は設定に存在しません"
                     )
             if metric.startswith("site_minutes:"):
+                if not evidence.site_metrics_available:
+                    raise _contract_error(
+                        f"actions[{i}] の pass: site_minutes はブラウザwatcher統計が無いため計測不能です"
+                    )
                 site = metric.split(":", 1)[1].strip().lower()
                 # 提案日当日に観測されたドメインのみ（0分になった既知サイトの後日判定は
                 # 判定側の話。入口では「当日観測」を要求する）

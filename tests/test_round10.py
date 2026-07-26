@@ -324,6 +324,34 @@ def test_unobserved_site_pass_rejected_at_gate():
     assert any("観測" in e for e in errs)
 
 
+def test_focus_blocks_pass_rejected_without_input_watcher():
+    """入力watcher無し環境で focus_blocks PASS は契約違反（永久未判定防止）。"""
+    cats = known_category_names(DEFAULT_RULES)
+    stats = dict(CURRENT)
+    stats.pop("input", None)
+    evidence = build_advice_evidence(stats, HISTORY, known_categories=cats)
+    assert evidence.input_metrics_available is False
+    data = _valid_data()
+    data["actions"] = [data["actions"][0]]
+    data["proposals"] = [data["proposals"][0]]
+    data["actions"][0]["pass"] = "focus_blocks >= 1"
+    data["actions"][0]["fail"] = "0回"
+    errs = validate_advice(data, evidence)
+    assert any("focus_blocks" in e and "計測不能" in e for e in errs)
+
+
+def test_focus_blocks_pass_ok_with_input_watcher():
+    cats = known_category_names(DEFAULT_RULES)
+    evidence = build_advice_evidence(CURRENT, HISTORY, known_categories=cats)
+    assert evidence.input_metrics_available is True
+    data = _valid_data()
+    data["actions"] = [data["actions"][0]]
+    data["proposals"] = [data["proposals"][0]]
+    data["actions"][0]["pass"] = "focus_blocks >= 1"
+    data["actions"][0]["fail"] = "0回"
+    assert validate_advice(data, evidence) == []
+
+
 # ---- M4 ----
 
 def test_afk_flag_in_stats_and_l12():

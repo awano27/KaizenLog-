@@ -88,6 +88,7 @@ def log_run(
     now: datetime | None = None,
     *,
     notify_failed: bool = False,
+    note: str | None = None,
 ) -> None:
     now = now or datetime.now(timezone.utc)
     entry: dict = {
@@ -100,6 +101,8 @@ def log_run(
         entry["error"] = str(error)[:500]
     if notify_failed:
         entry["notify_failed"] = True
+    if note:
+        entry["note"] = str(note)[:500]
     _append_run_entry(logs_dir, entry, retention_days=retention_days, now=now)
 
 

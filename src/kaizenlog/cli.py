@@ -268,6 +268,18 @@ def cmd_generate(cfg: Config, day: date) -> Path:
         known_categories=known_cats,
     )
     print(bf.log_line())
+    # 無言スキップ可視化: コンソールに加え runlog にも1行（二次失敗は握り潰す）
+    try:
+        log_run(
+            cfg.logs_path,
+            "verdict_backfill",
+            ok=True,
+            duration_seconds=0.0,
+            note=bf.log_line(),
+            retention_days=cfg.log_retention_days,
+        )
+    except Exception:
+        pass
     if bf.judged:
         append_entries(cfg.memory_path, bf.judged)
         for entry in bf.judged:

@@ -35,6 +35,10 @@ class AdviceEvidence:
     # 提案日当日に観測されたサイト。None = ガード未適用
     observed_sites: frozenset[str] | None = None
     afk_watcher_available: bool = True
+    # PASS 入口: 環境で計測可能な指標だけ許可（永久未判定の偽保存を防ぐ）
+    input_metrics_available: bool = False  # focus_blocks / focus_minutes / input_keypresses
+    structured_ai_metrics_available: bool = False  # ai_cc_sessions 等（画面ブロック ai_activity は別）
+    site_metrics_available: bool = False  # by_site 統計が有効（web watcher 経路）
 
 
 def _evidence(
@@ -50,6 +54,9 @@ def _evidence(
     known_categories: frozenset[str] | None = None,
     observed_sites: frozenset[str] | None = None,
     afk_watcher_available: bool = True,
+    input_metrics_available: bool = False,
+    structured_ai_metrics_available: bool = False,
+    site_metrics_available: bool = False,
 ) -> AdviceEvidence:
     markdown = "\n".join(lines)
     return AdviceEvidence(
@@ -65,6 +72,9 @@ def _evidence(
         known_categories=known_categories,
         observed_sites=observed_sites,
         afk_watcher_available=afk_watcher_available,
+        input_metrics_available=input_metrics_available,
+        structured_ai_metrics_available=structured_ai_metrics_available,
+        site_metrics_available=site_metrics_available,
     )
 
 
@@ -555,11 +565,18 @@ def build_advice_evidence(
         )
 
     by_site_val = stats.get("by_site")
+    site_metrics_available = _valid_number_mapping(by_site_val)
     observed_sites = (
         frozenset(str(k).lower() for k in by_site_val)
         if isinstance(by_site_val, Mapping)
         else frozenset()
     )
+    # 入力 / 構造化AI: PASS 入口で計測不能指標を弾くため
+    input_metrics_available = _valid_count_fields(
+        stats.get("input"), ("focus_blocks", "focus_minutes", "active_input_minutes")
+    )
+    # セッション0でも「計測経路はある」→ 0 は正当。欄自体が無いときだけ不可
+    structured_ai_metrics_available = ai_stats_valid
 
     return _evidence(
         lines,
@@ -573,4 +590,7 @@ def build_advice_evidence(
         known_categories=cats,
         observed_sites=observed_sites,
         afk_watcher_available=afk_watcher_available,
+        input_metrics_available=input_metrics_available,
+        structured_ai_metrics_available=structured_ai_metrics_available,
+        site_metrics_available=site_metrics_available,
     )
