@@ -34,6 +34,7 @@ def build_stats(
     input_stats: InputStats | None = None,
     activity_md: str | None = None,
     retry_chains: list[RetryChain] | None = None,
+    afk_watcher_available: bool | None = None,
 ) -> dict:
     projects: dict[str, dict] = {}
     for s in cc_sessions:
@@ -149,6 +150,10 @@ def build_stats(
         }
     if activity_md is not None:
         stats["activity_sha256"] = activity_fingerprint(activity_md)
+    # AFK 欠測フラグ。旧 stats はキー無し → 読み手は true（従来挙動）とみなす。
+    # 判定・実験計測からの除外は本キー導入後も行わない（注記のみ。将来判断）。
+    if afk_watcher_available is not None:
+        stats["afk_watcher_available"] = bool(afk_watcher_available)
     return stats
 
 
@@ -160,6 +165,7 @@ def write_stats(
     input_stats: InputStats | None = None,
     activity_md: str | None = None,
     retry_chains: list[RetryChain] | None = None,
+    afk_watcher_available: bool | None = None,
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
@@ -167,7 +173,13 @@ def write_stats(
         path,
         json.dumps(
             build_stats(
-                day, summary, cc_sessions, input_stats, activity_md, retry_chains
+                day,
+                summary,
+                cc_sessions,
+                input_stats,
+                activity_md,
+                retry_chains,
+                afk_watcher_available=afk_watcher_available,
             ),
             ensure_ascii=False,
             indent=1,

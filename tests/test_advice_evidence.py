@@ -599,8 +599,9 @@ def test_generate_advice_repairs_contract_once(monkeypatch):
 
     monkeypatch.setattr("kaizenlog.advisor.generate_text", fake_generate)
     result = generate_advice(LLMConfig(), "ログ", [], evidence=evidence)
-    assert "## 🚀 Kaizen" in result
-    assert "### 明日の最小アクション" in result
+    assert result.outcome in ("ok", "repaired")
+    assert "## 🚀 Kaizen" in result.markdown
+    assert "### 明日の最小アクション" in result.markdown
     assert len(calls) == 2
     assert "出力契約の修正依頼" in calls[1]
     assert "JSON" in calls[1]
@@ -732,7 +733,7 @@ def test_custom_prompt_keeps_its_own_output_contract(monkeypatch, tmp_path):
         [],
         evidence=build_advice_evidence(CURRENT),
     )
-    assert result.endswith("自由形式の回答")
+    assert result.markdown.endswith("自由形式の回答")
 
 
 def test_generate_advice_keeps_positional_redactor_compatibility(monkeypatch):
@@ -763,7 +764,8 @@ def test_generate_advice_json_path_renders_markdown(monkeypatch):
     result = generate_advice(
         LLMConfig(), "ログ", [], evidence=build_advice_evidence(CURRENT, HISTORY)
     )
-    assert result.startswith("## 🚀 Kaizen")
-    assert "### 今日の改善提案" in result
-    assert "- [ ]" in result and "PASS:" in result
-    assert "[F3]" not in result  # U3: 表示から F-ID を外す
+    assert result.outcome == "ok"
+    assert result.markdown.startswith("## 🚀 Kaizen")
+    assert "### 今日の改善提案" in result.markdown
+    assert "- [ ]" in result.markdown and "PASS:" in result.markdown
+    assert "[F3]" not in result.markdown  # U3: 表示から F-ID を外す

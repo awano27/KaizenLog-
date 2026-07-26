@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
 from kaizenlog.advice_evidence import build_advice_evidence
 from kaizenlog.advice_format import (
+    normalize_advice_cardinality,
     parse_advice_json,
     render_advice_markdown,
     validate_advice,
@@ -94,6 +96,27 @@ def test_validate_count_mismatch():
     data["actions"] = data["actions"][:1]
     errs = validate_advice(data, _evidence())
     assert any("1対1" in e for e in errs)
+
+
+def test_normalize_cardinality_trims_ordered_pairs_to_short_day_limit():
+    data = _valid_data()
+    evidence = replace(_evidence(), max_actions=1)
+
+    normalized = normalize_advice_cardinality(data, evidence)
+
+    assert normalized is not data
+    assert normalized["proposals"] == data["proposals"][:1]
+    assert normalized["actions"] == data["actions"][:1]
+    assert validate_advice(normalized, evidence) == []
+
+
+def test_normalize_cardinality_keeps_semantic_validation_failures():
+    data = _valid_data()
+    data["actions"][0]["fact_ids"] = ["F9"]
+
+    normalized = normalize_advice_cardinality(data, _evidence())
+
+    assert any("根拠IDが対応" in e for e in validate_advice(normalized, _evidence()))
 
 
 def test_validate_unknown_fact():
@@ -214,7 +237,7 @@ def test_generate_advice_repairs_semantic_via_json(monkeypatch):
     )
     assert len(calls) == 2
     assert "会話数・セッション数・往復数へ変換" in calls[1] or "違反" in calls[1]
-    assert "### 明日の最小アクション" in result
+    assert "### 明日の最小アクション" in result.markdown
 
 
 # ---- render + roundtrip ----

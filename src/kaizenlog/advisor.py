@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Callable
@@ -89,6 +90,20 @@ class AdvisorError(RuntimeError):
 
 class AdviceContractError(AdvisorError):
     """改善提案が保存可能な出力契約を満たさない。"""
+
+    def __init__(self, message: str, violations: list[str] | None = None):
+        super().__init__(message)
+        # 種別分類用の短いメッセージ列（本文・プロンプトは載せない前提で呼び出し側がタグ化）
+        self.violations = list(violations) if violations else [str(message)]
+
+
+@dataclass
+class AdviceResult:
+    """generate_advice の戻り値。markdown と品質 outcome。"""
+
+    markdown: str
+    outcome: str = "ok"  # ok | repaired
+    violations: list[str] = field(default_factory=list)
 
 
 class BackendUnavailable(AdvisorError):
@@ -289,6 +304,8 @@ def _call_openai_compatible(cfg: LLMConfig, system_prompt: str, user_prompt: str
             {"role": "user", "content": user_prompt},
         ],
     }
+    if cfg.json_mode:
+        payload["response_format"] = {"type": "json_object"}
     try:
         r = requests.post(
             f"{cfg.base_url}/chat/completions",
@@ -497,38 +514,88 @@ def advice_contract_errors(
                 )
         if re.search(r"KZN-\d{8}-\d+", action):
             errors.append(f"最小アクション{index}にモデル生成のKZN IDがあります")
-        if not evidence_ctx.previous_day_available and "前日" in action:
-            errors.append(
-                f"最小アクション{index}は比較可能な前日データがないため前日比を使えません"
+        # evidence ゲート付き内容チェックは PASS 注記を剥がしてから（レンダラ由来ラベル誤爆防止）
+        errors.extend(
+            evidence_gated_action_errors(
+                _action_text_without_pass_annotation(action), index, evidence_ctx
             )
-        if "通知" in action:
-            errors.append(
-                f"最小アクション{index}は通知を計測していないため通知操作を根拠にできません"
-            )
-        if (
-            not evidence_ctx.ai_conversation_metrics_available
-            and re.search(
-                r"\bAI\b|ChatGPT|Claude|Copilot|プロンプト|メッセージ",
-                action,
-                re.IGNORECASE,
-            )
-            and re.search(r"まとめ|一括|往復|依頼内容", action)
-        ):
-            errors.append(
-                f"最小アクション{index}はAI会話を計測していないため依頼方法を最適化できません"
-            )
-        if (
-            not evidence_ctx.browser_sample_sufficient
-            and re.search(r"watcher|URL観測|拡張機能", action, re.IGNORECASE)
-        ):
-            errors.append(
-                f"最小アクション{index}はブラウザ実測が短いためwatcher設定を優先できません"
-            )
+        )
         # 改善提案とアクションの F-ID 対応は JSON 層で検証済み（表示文には F-ID 無し）
 
     errors.extend(_semantic_contract_errors(advice, evidence_ctx))
 
     return errors
+
+
+def _action_text_without_pass_annotation(action: str) -> str:
+    """アクション行の PASS セグメントから注記括弧を除去した走査用テキスト。"""
+    from .verdict import strip_pass_annotation
+
+    pass_position = action.find("PASS:")
+    fail_position = action.find("FAIL:")
+    if not (0 <= pass_position < fail_position):
+        return action
+    head = action[: pass_position + len("PASS:")]
+    # 全角｜区切りを落としてから注記 strip（末尾が ｜ だと括弧除去が効かない）
+    pass_value = action[pass_position + len("PASS:") : fail_position].strip(" ｜|/\t")
+    tail = action[fail_position:]
+    return f"{head} {strip_pass_annotation(pass_value)} {tail}"
+
+
+def evidence_gated_action_errors(
+    action_text: str,
+    index: int,
+    evidence: AdviceEvidence,
+) -> list[str]:
+    """evidence ゲート付きの内容チェック（JSON 層・Markdown 層で共有）。
+
+    意味系違反として AdviceContractError 経路へ送る（renderer bug にしない）。
+    """
+    errors: list[str] = []
+    if not evidence.previous_day_available and "前日" in action_text:
+        errors.append(
+            f"最小アクション{index}は比較可能な前日データがないため前日比を使えません"
+        )
+    if "通知" in action_text:
+        errors.append(
+            f"最小アクション{index}は通知を計測していないため通知操作を根拠にできません"
+        )
+    if (
+        not evidence.ai_conversation_metrics_available
+        and re.search(
+            r"\bAI\b|ChatGPT|Claude|Copilot|プロンプト|メッセージ",
+            action_text,
+            re.IGNORECASE,
+        )
+        and re.search(r"まとめ|一括|往復|依頼内容", action_text)
+    ):
+        errors.append(
+            f"最小アクション{index}はAI会話を計測していないため依頼方法を最適化できません"
+        )
+    if (
+        not evidence.browser_sample_sufficient
+        and re.search(r"watcher|URL観測|拡張機能", action_text, re.IGNORECASE)
+    ):
+        errors.append(
+            f"最小アクション{index}はブラウザ実測が短いためwatcher設定を優先できません"
+        )
+    return errors
+
+
+def collect_evidence_gated_errors(
+    advice: str, evidence: AdviceEvidence
+) -> list[str]:
+    """レンダ済み Markdown から evidence ゲート付きエラーだけを集める（分類用）。"""
+    sections = _level3_sections(advice)
+    actions = _ACTION_RE.findall(sections.get("明日の最小アクション", ""))
+    out: list[str] = []
+    for index, action in enumerate(actions, 1):
+        out.extend(
+            evidence_gated_action_errors(
+                _action_text_without_pass_annotation(action), index, evidence
+            )
+        )
+    return out
 
 
 def render_reader_advice(advice_md: str, evidence: AdviceEvidence) -> str:
@@ -808,7 +875,7 @@ def generate_advice(
     memory: str | None = None,
     redactor: Callable[[str], str] | None = None,
     evidence: AdviceEvidence | None = None,
-) -> str:
+) -> AdviceResult:
     system_prompt, prompt, evidence_ctx = prepare_advice_request(
         cfg,
         today_md,
@@ -823,9 +890,13 @@ def generate_advice(
 
     # 日次プロンプト以外は従来どおり素通し
     if not requires_daily_contract(cfg):
-        return f"## 🚀 Kaizen（AIからの改善提案）\n\n{raw}"
+        return AdviceResult(
+            markdown=f"## 🚀 Kaizen（AIからの改善提案）\n\n{raw}",
+            outcome="ok",
+        )
 
     from .advice_format import (
+        normalize_advice_cardinality,
         parse_advice_json,
         render_advice_markdown,
         validate_advice,
@@ -838,6 +909,7 @@ def generate_advice(
             data = parse_advice_json(text)
         except AdviceContractError as e:
             return None, [str(e)]
+        data = normalize_advice_cardinality(data, evidence_ctx)
         return data, validate_advice(data, evidence_ctx)
 
     def _repair_once(source: str, errs: list[str]) -> str:
@@ -849,6 +921,7 @@ def generate_advice(
 
     data, errors = _try_parse_and_validate(raw)
     repaired = False
+    first_errors = list(errors)
     if errors:
         # 形式違反は1回だけ JSON 修復を試みる（失敗後は L2 縮退保存が受ける）
         raw = _repair_once(raw, errors)
@@ -856,23 +929,35 @@ def generate_advice(
         data, errors = _try_parse_and_validate(raw)
     if errors or data is None:
         raise AdviceContractError(
-            "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errors)
+            "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errors),
+            violations=errors or first_errors,
         )
     try:
         markdown = render_advice_markdown(data, evidence_ctx)
     except AdviceContractError as e:
         # validate 通過後でもレンダ側で意味違反が残るケース → 未修復なら1回だけ再試行
         if repaired:
-            raise
+            raise AdviceContractError(str(e), violations=e.violations or first_errors) from e
         err_list = [line.lstrip("- ").strip() for line in str(e).splitlines() if line.strip()]
         # 先頭の説明行を除き違反リストを渡す
         if err_list and "保存条件" in err_list[0]:
             err_list = err_list[1:] or [str(e)]
         raw = _repair_once(raw, err_list)
+        repaired = True
         data, errors = _try_parse_and_validate(raw)
         if errors or data is None:
             raise AdviceContractError(
-                "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errors)
+                "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errors),
+                violations=errors or err_list,
             )
         markdown = render_advice_markdown(data, evidence_ctx)
-    return f"## 🚀 Kaizen（AIからの改善提案）\n\n{markdown}"
+        return AdviceResult(
+            markdown=f"## 🚀 Kaizen（AIからの改善提案）\n\n{markdown}",
+            outcome="repaired",
+            violations=err_list,
+        )
+    return AdviceResult(
+        markdown=f"## 🚀 Kaizen（AIからの改善提案）\n\n{markdown}",
+        outcome="repaired" if repaired else "ok",
+        violations=first_errors if repaired else [],
+    )

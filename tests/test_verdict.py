@@ -337,7 +337,7 @@ def test_generate_verdict_and_actions_handoff(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cli_mod,
         "collect_day",
-        lambda *a, **k: [],
+        lambda *a, **k: ([], True),
     )
     monkeypatch.setattr(cli_mod, "collect_input", lambda *a, **k: None)
 
@@ -442,7 +442,7 @@ def test_backfill_day_does_not_write_actions(tmp_path, monkeypatch):
     )
     cfg.aiwork.enabled = False
 
-    monkeypatch.setattr(cli_mod, "collect_day", lambda *a, **k: [])
+    monkeypatch.setattr(cli_mod, "collect_day", lambda *a, **k: ([], True))
     monkeypatch.setattr(cli_mod, "collect_input", lambda *a, **k: None)
 
     class FakeSummary:

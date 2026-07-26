@@ -13,7 +13,7 @@ from pathlib import Path
 import requests
 
 from .config import Config, default_config_path, existing_config_candidates, find_config_file
-from .runlog import load_runs
+from .runlog import consecutive_bad_advise_outcomes, load_runs
 
 
 class Check:
@@ -251,6 +251,24 @@ def _check_history(c: Check, cfg: Config) -> None:
                 f"{last.get('error', '')[:120]}（詳細は `kaizenlog status`）")
 
 
+def _check_advise_health(c: Check, cfg: Config) -> None:
+    """縮退/失敗の連続を検知（ヘルスレジャー）。"""
+    runs = load_runs(cfg.logs_path)
+    n = consecutive_bad_advise_outcomes(runs)
+    if n >= 2:
+        c.error(
+            f"提案が連続して縮退しています（{n}回連続）。"
+            "LLM出力が契約に合っていません（詳細は `kaizenlog status`）"
+        )
+    elif n == 1:
+        c.warn(
+            "直近の提案が縮退または失敗しました。"
+            "連続する場合は LLM / プロンプトを確認してください"
+        )
+    else:
+        c.ok("提案ヘルス: 縮退の連続なし")
+
+
 def run_doctor(cfg: Config, config_path: str | None = None) -> tuple[str, bool]:
     """全チェックを実行し、(レポート文字列, エラー有無) を返す。"""
     c = Check()
@@ -260,5 +278,6 @@ def run_doctor(cfg: Config, config_path: str | None = None) -> tuple[str, bool]:
     _check_llm(c, cfg)
     _check_aiwork(c, cfg)
     _check_history(c, cfg)
+    _check_advise_health(c, cfg)
     verdict = "\n❌ 修正が必要な項目があります。" if c.has_error else "\n✅ すべて正常です。"
     return "\n".join(c.lines) + verdict, c.has_error

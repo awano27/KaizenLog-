@@ -17,10 +17,11 @@ def notify(
     icon: str = "Warning",
     duration_ms: int = 10000,
 ) -> bool:
-    """トースト風バルーン通知を出す。
+    """トースト風バルーン通知を出す。成功時 True、失敗時 False。
 
     icon: SystemIcons 名（Warning / Information / Error 等）
     既存の失敗通知は icon=Warning のまま。
+    例外は外へ漏らさない（通知失敗で本処理を落とさない）。
     """
     if sys.platform != "win32":
         return False
@@ -46,11 +47,11 @@ def notify(
         "Start-Sleep -Seconds 6; $n.Dispose()"
     )
     try:
-        subprocess.run(
+        completed = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
             timeout=30,
         )
-        return True
+        return completed.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False

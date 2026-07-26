@@ -7,6 +7,7 @@ Markdown を出力する。
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import re
 from typing import Any
@@ -73,6 +74,25 @@ def parse_advice_json(text: str) -> dict:
     if not isinstance(data, dict):
         raise _contract_error("日次提案のトップレベルは JSON オブジェクトである必要があります")
     return data
+
+
+def normalize_advice_cardinality(data: dict, evidence: AdviceEvidence) -> dict:
+    """順序を保ったまま提案とアクションを安全な同数へ切り詰める。
+
+    内容や根拠IDは変更せず、後段の validate_advice が全契約を再検証する。
+    空配列や配列以外は正規化せず、従来どおり検証エラーに委ねる。
+    """
+    normalized = deepcopy(data)
+    proposals = normalized.get("proposals")
+    actions = normalized.get("actions")
+    if not isinstance(proposals, list) or not proposals:
+        return normalized
+    if not isinstance(actions, list) or not actions:
+        return normalized
+    pair_count = min(len(proposals), len(actions), evidence.max_actions)
+    normalized["proposals"] = proposals[:pair_count]
+    normalized["actions"] = actions[:pair_count]
+    return normalized
 
 
 def _norm_fact_id(token: str) -> str | None:
@@ -272,6 +292,17 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
         if len(lines) > 3:
             raise _contract_error("plan_review は1〜3行にしてください")
         _check_no_kzn_or_marker(plan, "plan_review")
+        # 見出し・チェックボックス・フェンスは Markdown 契約を壊す（JSON 層で拒否）
+        for ln in plan.splitlines():
+            s = ln.strip()
+            if s.startswith("#"):
+                raise _contract_error("plan_review に Markdown 見出しを含めないでください")
+            if s.startswith("- ["):
+                raise _contract_error(
+                    "plan_review にチェックボックス行を含めないでください"
+                )
+            if s.startswith("```") or s.startswith("~~~"):
+                raise _contract_error("plan_review にコードフェンスを含めないでください")
 
     available = set(evidence.fact_ids)
 
@@ -322,13 +353,39 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
             raise _contract_error(
                 f"actions[{i}] の pass/fail は数値条件にしてください"
             )
-        if looks_like_machine_pass(pass_v):
-            m = re.match(r"^(\S+)\s*(?:<=|>=|<|>|==?)", pass_v.strip())
-            metric = m.group(1) if m else pass_v.split()[0]
+        from .verdict import strip_pass_annotation
+
+        pass_core = strip_pass_annotation(pass_v)
+        if looks_like_machine_pass(pass_core):
+            m = re.match(r"^(\S+)\s*(?:<=|>=|<|>|==?)", pass_core.strip())
+            metric = m.group(1) if m else pass_core.split()[0]
             if not is_known_metric(metric):
                 raise _contract_error(
                     f"actions[{i}] の pass: 指標名が使用可能な指標にありません"
                 )
+            # 実在検証: 未知カテゴリの偽PASS・未観測ドメインの入口ガード
+            if metric.startswith("category_minutes:"):
+                cat = metric.split(":", 1)[1].strip()
+                known = evidence.known_categories
+                if known is not None and cat not in known:
+                    raise _contract_error(
+                        f"actions[{i}] の pass: カテゴリ {cat!r} は設定に存在しません"
+                    )
+            if metric.startswith("site_minutes:"):
+                site = metric.split(":", 1)[1].strip().lower()
+                # 提案日当日に観測されたドメインのみ（0分になった既知サイトの後日判定は
+                # 判定側の話。入口では「当日観測」を要求する）
+                sites = evidence.observed_sites
+                if sites is not None and site not in sites:
+                    raise _contract_error(
+                        f"actions[{i}] の pass: サイト {site!r} は当日観測されていません"
+                    )
+        # evidence ゲート付き内容チェック（注記付与前の生フィールド）
+        from .advisor import evidence_gated_action_errors
+
+        scan = f"{action} {pass_core} {fail_v}"
+        for msg in evidence_gated_action_errors(scan, i, evidence):
+            raise _contract_error(msg)
 
     ai_facts_all: set[str] = set()
     for i, item in enumerate(ai_review, 1):
@@ -390,10 +447,10 @@ def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
 
     lines.append("### 明日の最小アクション")
     for item in data["actions"]:
-        pass_raw = item["pass"].strip()
+        # LLM が自前注記を付けていても1段に正規化してからラベルを付ける
+        core = strip_pass_annotation(item["pass"].strip())
         note = ""
-        if looks_like_machine_pass(pass_raw):
-            core = strip_pass_annotation(pass_raw)
+        if looks_like_machine_pass(core):
             m = re.match(r"^(\S+)\s*(?:<=|>=|<|>|==?)", core)
             if m:
                 label = metric_display_label(m.group(1))
@@ -401,7 +458,7 @@ def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
                     note = f"（{label}）"
         lines.append(
             f"- [ ] {item['action'].strip()}"
-            f"｜PASS: {pass_raw}{note}｜FAIL: {item['fail'].strip()}"
+            f"｜PASS: {core}{note}｜FAIL: {item['fail'].strip()}"
         )
     lines.append("")
 
@@ -412,12 +469,15 @@ def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
     rendered = "\n".join(lines).rstrip() + "\n"
 
     # レンダラのインバリアント: 旧 Markdown 契約を満たすこと。
-    # 意味違反のみなら AdviceContractError（修復・L2 縮退へ）。
+    # 意味違反・evidence ゲート付き内容チェック → AdviceContractError（修復・L2 縮退へ）。
     # 構造エラーが混じる場合だけ renderer bug。
+    from .advisor import collect_evidence_gated_errors
+
     contract_errs = advice_contract_errors(rendered, evidence)
     if contract_errs:
-        semantic_errs = _semantic_contract_errors(rendered, evidence)
-        if set(contract_errs) <= set(semantic_errs):
+        semantic_errs = set(_semantic_contract_errors(rendered, evidence))
+        semantic_errs.update(collect_evidence_gated_errors(rendered, evidence))
+        if set(contract_errs) <= semantic_errs:
             raise AdviceContractError(
                 "LLMの改善提案が保存条件を満たしませんでした:\n- "
                 + "\n- ".join(contract_errs)

@@ -30,6 +30,11 @@ class AdviceEvidence:
     max_actions: int
     previous_day_available: bool
     browser_sample_sufficient: bool
+    # None = 入口ガード未適用（後方互換）。非 None なら集合外は契約違反
+    known_categories: frozenset[str] | None = None
+    # 提案日当日に観測されたサイト。None = ガード未適用
+    observed_sites: frozenset[str] | None = None
+    afk_watcher_available: bool = True
 
 
 def _evidence(
@@ -42,6 +47,9 @@ def _evidence(
     max_actions: int = 1,
     previous_day_available: bool = False,
     browser_sample_sufficient: bool = False,
+    known_categories: frozenset[str] | None = None,
+    observed_sites: frozenset[str] | None = None,
+    afk_watcher_available: bool = True,
 ) -> AdviceEvidence:
     markdown = "\n".join(lines)
     return AdviceEvidence(
@@ -54,6 +62,9 @@ def _evidence(
         max_actions=max_actions,
         previous_day_available=previous_day_available,
         browser_sample_sufficient=browser_sample_sufficient,
+        known_categories=known_categories,
+        observed_sites=observed_sites,
+        afk_watcher_available=afk_watcher_available,
     )
 
 
@@ -177,6 +188,7 @@ def build_advice_evidence(
     *,
     timezone: tzinfo | None = None,
     source_status: str = "unverified",
+    known_categories: Sequence[str] | frozenset[str] | None = None,
 ) -> AdviceEvidence:
     """LLMがログの意味を取り違えないための根拠コンテキストを作る。
 
@@ -218,6 +230,11 @@ def build_advice_evidence(
         _valid_nonnegative_number(stats.get("total_minutes"))
         and _valid_nonnegative_number(stats.get("context_switches"))
     )
+    cats = (
+        frozenset(str(c) for c in known_categories)
+        if known_categories is not None
+        else None
+    )
     if not stats or invalid_stats:
         reason = (
             "当日統計とActivity Logの指紋が不一致"
@@ -231,7 +248,7 @@ def build_advice_evidence(
             "- [F4] AI関連画面アクティビティの機械可読統計なし。時間・ブロック数は測定不能。",
             "- [F5] 構造化AIテレメトリの機械可読統計なし。発話数・往復数・品質は測定不能。",
         ])
-        return _evidence(lines)
+        return _evidence(lines, known_categories=cats)
 
     blocks_value = stats.get("blocks")
     blocks_valid = isinstance(blocks_value, list)
@@ -241,8 +258,16 @@ def build_advice_evidence(
     switch_rate = _switch_rate(stats)
     rate_text = f" / 1時間あたり {_fmt(switch_rate)}回" if switch_rate is not None else ""
     block_count_text = f"{len(blocks)}件" if blocks_valid else "測定不能"
+    # 旧 stats はキー欠損 → true（従来どおり正常値扱い）
+    afk_ok = stats.get("afk_watcher_available")
+    afk_watcher_available = True if afk_ok is None else bool(afk_ok)
+    f1_note = (
+        ""
+        if afk_watcher_available
+        else "（AFK未計測のため離席時間を含む可能性）"
+    )
     lines.append(
-        f"- [F1] 合計アクティブ時間 {_fmt(total_minutes)}分 / "
+        f"- [F1] 合計アクティブ時間 {_fmt(total_minutes)}分{f1_note} / "
         f"activity block {block_count_text} / カテゴリ変更 {context_switches}回{rate_text}。"
     )
 
@@ -500,6 +525,10 @@ def build_advice_evidence(
         reader_notes.append(
             "比較可能な前日の記録がないため、前日比ではなく絶対値で翌日の合否を判定します。"
         )
+    if not afk_watcher_available:
+        reader_notes.append(
+            "AFKウォッチャーが無いため、合計時間は離席を含む可能性があります。"
+        )
     if not reader_notes:
         reader_notes.append("現時点で、追加の計測上の注意はありません。")
 
@@ -518,6 +547,19 @@ def build_advice_evidence(
             "- [L11] ブラウジング実測が30分未満。URL watcher設定を改善課題として"
             "優先しない。"
         )
+    if not afk_watcher_available:
+        # 判定・実験からの除外は行わない（注記のみ。スコープは将来判断）
+        lines.append(
+            "- [L12] AFK未計測のため合計時間・カテゴリ時間は過大の可能性"
+            "（離席時間を含む）。"
+        )
+
+    by_site_val = stats.get("by_site")
+    observed_sites = (
+        frozenset(str(k).lower() for k in by_site_val)
+        if isinstance(by_site_val, Mapping)
+        else frozenset()
+    )
 
     return _evidence(
         lines,
@@ -528,4 +570,7 @@ def build_advice_evidence(
         max_actions=max_actions,
         previous_day_available=previous_day_available,
         browser_sample_sufficient=browser_sample_sufficient,
+        known_categories=cats,
+        observed_sites=observed_sites,
+        afk_watcher_available=afk_watcher_available,
     )

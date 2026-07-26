@@ -34,8 +34,36 @@
 
 回答は **JSON オブジェクトのみ**（フェンス・前置き・後置きなし）。Markdown は KaizenLog が組み立てます。
 
-必須キー: `plan_review`（string|null）, `proposals`（1〜3）, `actions`（proposals と同数）,
-`ai_review`（1〜2）。各 proposal/action/ai_review に `fact_ids`（例: `["F3"]`）。
+```json
+{
+  "plan_review": "計画と実績の評価（1〜3行）または null",
+  "proposals": [
+    {
+      "fact_ids": ["F2"],
+      "interpretation": "解釈（観測数値を書かない）",
+      "proposal": "提案",
+      "next_metric": "翌日見る指標"
+    }
+  ],
+  "actions": [
+    {
+      "fact_ids": ["F2"],
+      "action": "15分以内に始める行動",
+      "pass": "context_switches <= 40",
+      "fail": "41回以上"
+    }
+  ],
+  "ai_review": [
+    {
+      "fact_ids": ["F5"],
+      "text": "AI作業の評価・改善（観測数値を書かない）"
+    }
+  ]
+}
+```
+
+必須キー: `"plan_review"`（string|null）, `"proposals"`（1〜3）, `"actions"`（proposals と同数）,
+`"ai_review"`（1〜2）。各 proposal/action/ai_review に `"fact_ids"`（例: `["F3"]`）。
 
 - proposals[i] と actions[i] は根拠IDを共有。ai_review は F4 または F5 を含む
 - `interpretation` / `ai_review.text` に算用数字を書かない

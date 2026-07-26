@@ -10,6 +10,13 @@ from .collector import ActivityEvent
 OTHER_CATEGORY = "その他"
 
 
+def known_category_names(rule_dicts: list[dict]) -> frozenset[str]:
+    """ルール定義 + その他 のカテゴリ名集合（PASS 偽陽性ガード用）。"""
+    names = {str(rd["name"]) for rd in rule_dicts if isinstance(rd, dict) and "name" in rd}
+    names.add(OTHER_CATEGORY)
+    return frozenset(names)
+
+
 @dataclass
 class Rule:
     name: str

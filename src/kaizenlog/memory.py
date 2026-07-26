@@ -24,6 +24,8 @@ _CHECKBOX_RE = re.compile(r"^(\s*- \[)([ xX])(\]\s*)(.*)$")
 _DOSING_MIN_PROPOSED = 6
 _DOSING_DONE_RATE = 0.4
 _STATS_WINDOW_DAYS = 14
+# 📌 転記・done 検出の走査幅（提案日 target-N 〜 target-1）
+ACTIONS_HANDOFF_DAYS = 7
 
 
 @dataclass
@@ -128,6 +130,8 @@ def assign_action_ids(
         if e.date == day.isoformat() and e.status == "proposed"
     ]
     used_ids: set[str] = set()
+    # (line_index, checkbox match, action text) — ID 未付与の行
+    pending: list[tuple[int, re.Match[str], str]] = []
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith("#"):
@@ -147,11 +151,20 @@ def assign_action_ids(
         text = m.group(4).strip()
         if not text:
             continue
-        if text in same_day_actions:
+        pending.append((i, m, text))
+
+    # Pass 1: 全文一致の再利用を先に確定（used_ids を食い合わない）
+    remaining: list[tuple[int, re.Match[str], str]] = []
+    for i, m, text in pending:
+        if text in same_day_actions and same_day_actions[text] not in used_ids:
             reused_id = same_day_actions[text]
             used_ids.add(reused_id)
             lines[i] = f"{m.group(1)}{m.group(2)}{m.group(3)}{reused_id}: {text}"
             continue
+        remaining.append((i, m, text))
+
+    # Pass 2: 汎用再利用 → 新規採番
+    for i, m, text in remaining:
         reusable = next(
             (entry for entry in reusable_same_day if entry.id not in used_ids),
             None,
@@ -252,6 +265,9 @@ def compute_action_stats(
             continue
         if not (start <= e.date <= end):
             continue
+        # 再 advise で撤回された行は分母・判定から除外
+        if e.status not in ("proposed", "done"):
+            continue
         proposed += 1
         if e.status == "done":
             done += 1
@@ -292,6 +308,81 @@ def render_action_stats_line(stats: ActionStats) -> str:
         f"{label}: 提案 {stats.proposed}件 / 消化 {stats.done}件"
         f"（{_pct_label(stats.done_rate)}）/ 自動判定 {stats.judged}件"
         f" / PASS {stats.passed}件（{_pct_label(stats.pass_rate)}）"
+    )
+
+
+def open_actions_in_window(
+    entries: list[MemoryEntry],
+    target_day: date,
+    window_days: int = ACTIONS_HANDOFF_DAYS,
+) -> list[MemoryEntry]:
+    """提案日が target_day-window 〜 target_day-1 の proposed を新しい順で返す。"""
+    window_start = (target_day - timedelta(days=window_days)).isoformat()
+    window_end = (target_day - timedelta(days=1)).isoformat()
+    open_entries = [
+        e
+        for e in entries
+        if e.status == "proposed" and window_start <= e.date <= window_end
+    ]
+    open_entries.sort(key=lambda e: e.id, reverse=True)
+    return open_entries
+
+
+def format_today_action_line(entry: MemoryEntry) -> str:
+    """today 一覧の1行。ID は done へコピペできる完全形。"""
+    try:
+        d = date.fromisoformat(entry.date)
+        md = f"{d.month}/{d.day}"
+    except ValueError:
+        md = entry.date
+    if entry.verdict == "pass":
+        v = "✅PASS"
+    elif entry.verdict == "fail":
+        v = "❌FAIL"
+    else:
+        v = "     "
+    # 本文は1行に圧縮
+    action = " ".join(entry.action.split())
+    return f"{entry.id}  [{md}]  {v}  {action}"
+
+
+def resolve_action_id(
+    query: str, entries: list[MemoryEntry]
+) -> MemoryEntry | list[MemoryEntry] | None:
+    """done 用 ID 解決。
+
+    完全一致を最優先。部分一致は proposed の ID 末尾サフィックスのみ。
+    一意に定まらなければ候補リストを返し、呼び出し側が exit 1 する
+    （誤爆消化を防ぐ）。
+    """
+    q = (query or "").strip()
+    if not q:
+        return None
+    # 完全一致（status 問わず最新状態を entries から）
+    exact = [e for e in entries if e.id == q]
+    if exact:
+        # load_entries は後勝ちなので1件想定
+        return exact[-1]
+    proposed = [e for e in entries if e.status == "proposed"]
+    suffix_hits = [e for e in proposed if e.id.endswith(q)]
+    if len(suffix_hits) == 1:
+        return suffix_hits[0]
+    if len(suffix_hits) > 1:
+        return suffix_hits
+    return None
+
+
+def mark_entry_done(entry: MemoryEntry, done_date: date) -> MemoryEntry:
+    """status=done / done_date を付けた差分エントリ（追記型後勝ち用）。"""
+    return MemoryEntry(
+        id=entry.id,
+        date=entry.date,
+        action=entry.action,
+        status="done",
+        done_date=done_date.isoformat(),
+        verdict=entry.verdict,
+        verdict_value=entry.verdict_value,
+        verdict_date=entry.verdict_date,
     )
 
 
@@ -347,11 +438,11 @@ def render_actions_section(
 ) -> str | None:
     """翌日ノート用「今日のアクション」転記 Markdown。
 
-    対象は proposed かつ提案日が target_day-7 〜 target_day-1。
+    対象は proposed かつ提案日が target_day-ACTIONS_HANDOFF_DAYS 〜 target_day-1。
     0件なら None（既存セクションは消さない）。
     note_content に同じ KZN の [x] があればチェック状態を保持する。
     """
-    window_start = (target_day - timedelta(days=7)).isoformat()
+    window_start = (target_day - timedelta(days=ACTIONS_HANDOFF_DAYS)).isoformat()
     window_end = (target_day - timedelta(days=1)).isoformat()
     open_entries = [
         e for e in entries

@@ -9,19 +9,23 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, timedelta
+from pathlib import Path
 
 from .aiwork import AISession
 from .experiments import (
     METRIC_DESCRIPTIONS,
     ExperimentError,
     compute_metric,
+    metric_from_stats,
     parse_target,
     target_met,
 )
 from .focus import InputStats
-from .memory import ID_PATTERN, MemoryEntry
+from .memory import ACTIONS_HANDOFF_DAYS, ID_PATTERN, MemoryEntry
 from .report import DailySummary
+from .stats import load_stats
 from .vault import ADVICE_MARKER
 
 # プレースホルダキー自体は指標名として採用しない
@@ -96,8 +100,8 @@ def parse_pass_condition(action_text: str) -> tuple[str, str, float] | None:
 def strip_pass_annotation(pass_value: str) -> str:
     """PASS 値末尾の全角/半角括弧注記を除去する。
 
-    ネストした括弧（例: （エンタメの時間（分）））も外側1組ごと剥がす。
-    既にノートへ書かれた旧注記との互換用。
+    ネスト・二重注記（LLM 自前注記＋レンダラ注記）も、末尾の括弧ペアが
+    無くなるまで繰り返し剥がす。
     """
     s = pass_value.strip()
 
@@ -115,8 +119,13 @@ def strip_pass_annotation(pass_value: str) -> str:
                     return text[:i].rstrip()
         return text
 
-    s = _strip_trailing_pair(s, "（", "）")
-    s = _strip_trailing_pair(s, "(", ")")
+    # 二重注記: （A）（B）や （A（B）） を順に落とす
+    while True:
+        prev = s
+        s = _strip_trailing_pair(s, "（", "）")
+        s = _strip_trailing_pair(s, "(", ")")
+        if s == prev:
+            break
     return s.strip()
 
 
@@ -133,6 +142,7 @@ def judge_entries(
     input_stats: InputStats | None,
     judged_day: date,
     retry_chains: int | None = None,
+    known_categories: set[str] | frozenset[str] | None = None,
 ) -> list[MemoryEntry]:
     """提案日のエントリを判定し、差分 MemoryEntry だけを返す。
 
@@ -145,12 +155,20 @@ def judge_entries(
     for entry in entries:
         if entry.date != proposal:
             continue
+        # 同日再 advise で撤回された行は判定しない（統計・通知の汚染防止）
+        if entry.status not in ("proposed", "done"):
+            continue
         parsed = parse_pass_condition(entry.action)
         if parsed is None:
             continue
         metric, op, target_value = parsed
         value = compute_metric(
-            metric, summary, cc_sessions, input_stats, retry_chains=retry_chains
+            metric,
+            summary,
+            cc_sessions,
+            input_stats,
+            retry_chains=retry_chains,
+            known_categories=known_categories,
         )
         if value is None:
             continue
@@ -177,6 +195,131 @@ def judge_entries(
             )
         )
     return out
+
+
+@dataclass
+class BackfillResult:
+    judged: list[MemoryEntry]
+    judged_count: int
+    skipped_no_stats: int
+    skipped_unsupported: int
+    skipped_none: int
+
+    @property
+    def skipped_total(self) -> int:
+        return self.skipped_no_stats + self.skipped_unsupported + self.skipped_none
+
+    def log_line(self) -> str:
+        return (
+            f"verdict backfill: judged {self.judged_count}, "
+            f"skipped {self.skipped_total} "
+            f"(no-stats {self.skipped_no_stats}, "
+            f"unsupported {self.skipped_unsupported}, "
+            f"none {self.skipped_none})"
+        )
+
+
+def measure_day_for_entry(entry: MemoryEntry) -> date | None:
+    """判定に使う測定日。
+
+    done_date あり → done_date + 1日（行動の効果を測る）。
+    無し → 提案日 + 1日（提案の妥当性）。不正日付は None。
+    """
+    if entry.done_date:
+        try:
+            return date.fromisoformat(entry.done_date) + timedelta(days=1)
+        except ValueError:
+            pass
+    try:
+        return date.fromisoformat(entry.date) + timedelta(days=1)
+    except ValueError:
+        return None
+
+
+def backfill_verdicts(
+    entries: list[MemoryEntry],
+    stats_dir: Path,
+    as_of: date,
+    *,
+    window_days: int = ACTIONS_HANDOFF_DAYS,
+    known_categories: set[str] | frozenset[str] | None = None,
+) -> BackfillResult:
+    """verdict 未設定かつ提案日が as_of から window 内のエントリを後追い判定。
+
+    実測は保存済み stats の metric_from_stats のみ（ai_avg_turns 等は非対応でスキップ）。
+    測定日の stats が無ければスキップ（次回 generate で再試行）。
+    """
+    window_start = (as_of - timedelta(days=window_days)).isoformat()
+    # as_of 当日提案は測定日が明日になるので対象外（window は提案日）
+    window_end = (as_of - timedelta(days=1)).isoformat()
+    result = BackfillResult([], 0, 0, 0, 0)
+    # stats キャッシュ（day iso → dict | None missing）
+    stats_cache: dict[str, dict | None] = {}
+
+    def load_day(d: date) -> dict | None:
+        key = d.isoformat()
+        if key not in stats_cache:
+            loaded = load_stats(stats_dir, 1, d)
+            stats_cache[key] = loaded[0] if loaded else None
+        return stats_cache[key]
+
+    for entry in entries:
+        if entry.verdict in ("pass", "fail"):
+            continue
+        if entry.status not in ("proposed", "done"):
+            continue
+        if not entry.date or not (window_start <= entry.date <= window_end):
+            continue
+        parsed = parse_pass_condition(entry.action)
+        if parsed is None:
+            continue
+        metric, op, target_value = parsed
+        measure_day = measure_day_for_entry(entry)
+        if measure_day is None or measure_day > as_of:
+            # 測定日が未来ならまだ測れない
+            continue
+        stats = load_day(measure_day)
+        if stats is None:
+            result.skipped_no_stats += 1
+            continue
+        value = metric_from_stats(metric, stats, known_categories=known_categories)
+        if value is None:
+            # ai_avg_turns 等 stats 非対応、または未知カテゴリ
+            if metric == "ai_avg_turns" or metric.startswith("focus_") or metric == "input_keypresses":
+                result.skipped_unsupported += 1
+            elif metric.startswith("category_minutes:") and known_categories is not None:
+                cat = metric.split(":", 1)[1].strip()
+                if cat not in known_categories:
+                    result.skipped_none += 1
+                else:
+                    result.skipped_unsupported += 1
+            else:
+                result.skipped_unsupported += 1
+            continue
+        met = target_met(value, op, target_value)
+        verdict = "pass" if met else "fail"
+        judged_day = measure_day.isoformat()
+        if (
+            entry.verdict == verdict
+            and entry.verdict_date == judged_day
+            and entry.verdict_value is not None
+            and math.isclose(entry.verdict_value, value, rel_tol=1e-9, abs_tol=1e-9)
+        ):
+            continue
+        result.judged.append(
+            MemoryEntry(
+                id=entry.id,
+                date=entry.date,
+                action=entry.action,
+                status=entry.status,
+                done_date=entry.done_date,
+                verdict=verdict,
+                verdict_value=value,
+                verdict_date=judged_day,
+            )
+        )
+        result.judged_count += 1
+    return result
 
 
 def format_verdict_suffix(entry: MemoryEntry) -> str:

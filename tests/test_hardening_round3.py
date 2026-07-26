@@ -338,5 +338,6 @@ def test_generate_advice_prints_repair_message(monkeypatch, capsys):
     )
     captured = capsys.readouterr().out
     assert "出力契約違反を検出" in captured
-    assert "🚀 Kaizen" in out
-    assert "### 明日の最小アクション" in out
+    assert out.outcome == "repaired"
+    assert "🚀 Kaizen" in out.markdown
+    assert "### 明日の最小アクション" in out.markdown

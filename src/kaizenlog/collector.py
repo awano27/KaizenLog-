@@ -272,10 +272,12 @@ def _bucket_browser_app_re(bucket_id: str) -> re.Pattern | None:
 
 def collect_day(
     client: ActivityWatchClient, day_start: datetime, day_end: datetime
-) -> list[ActivityEvent]:
+) -> tuple[list[ActivityEvent], bool]:
     """1日分のアクティブなウィンドウイベントを取得する。
 
-    AFKウォッチャーが無い環境では、ウィンドウイベントをそのまま使う。
+    戻り値: (events, afk_watcher_available)
+    AFKウォッチャーが無い環境では、ウィンドウイベントをそのまま使い
+    afk_watcher_available=False（合計時間が離席を含み過大になりうる）。
     aw-watcher-web（ブラウザ拡張）が導入されていれば、ブラウザ時間を
     タブURL粒度に分割して返す。
     """
@@ -288,7 +290,8 @@ def collect_day(
         )
 
     afk_bucket, afk_raw = _pick_busiest_bucket(client, "afkstatus", day_start, day_end)
-    if afk_bucket is None or not afk_raw:
+    afk_watcher_available = bool(afk_bucket is not None and afk_raw)
+    if not afk_watcher_available:
         # AFKウォッチャーが無い/データが無い日はウィンドウイベントをそのまま採用する
         intervals = [(day_start, day_end)]
     else:
@@ -297,11 +300,11 @@ def collect_day(
         # 丸一日分の活動として誤計上される（不在の日ほど活動が多く見える）
         intervals = active_intervals(afk_raw)
         if not intervals:
-            return []
+            return [], True
     # 深夜を跨ぐイベントの二重カウントを防ぐため、常に日の範囲へクリップする
     intervals = _clip_intervals_to_day(intervals, day_start, day_end)
     if not intervals:
-        return []
+        return [], afk_watcher_available
     events = clip_to_active(window_raw, intervals)
 
     # ブラウザごとのwebバケットを、そのブラウザのウィンドウ時間にだけ合成する
@@ -310,7 +313,7 @@ def collect_day(
         if web_raw:
             events = enrich_with_web(events, web_raw,
                                      app_re=_bucket_browser_app_re(web_bucket))
-    return events
+    return events, afk_watcher_available
 
 
 def collect_input(

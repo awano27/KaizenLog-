@@ -77,6 +77,21 @@ def test_openai_payload_disables_reasoning_by_default(monkeypatch):
     assert captured["json"]["reasoning_effort"] == "none"
 
 
+def test_openai_payload_enables_json_object_mode_only_when_configured(monkeypatch):
+    captured = {}
+    resp = _FakeResp({"choices": [{"message": {"content": '{"ok": true}'}}]})
+
+    def post(*args, **kwargs):
+        captured["json"] = kwargs["json"]
+        return resp
+
+    monkeypatch.setattr("kaizenlog.advisor.requests.post", post)
+    cfg = LLMConfig(json_mode=True)
+
+    assert _call_openai_compatible(cfg, "sys", "user") == '{"ok": true}'
+    assert captured["json"]["response_format"] == {"type": "json_object"}
+
+
 # ---- advisor: Claude CLIのJSONエラー封筒をノートに書かない ----
 
 def _fake_run(stdout="", stderr="", returncode=0):
@@ -236,7 +251,9 @@ def test_fully_afk_day_yields_no_events():
             "a": [_raw(T0, 480, {"status": "afk"})],  # AFKデータはあるが全て離席
         },
     )
-    assert collect_day(client, day_start, day_end) == []
+    events, afk_ok = collect_day(client, day_start, day_end)
+    assert events == []
+    assert afk_ok is True
 
 
 def test_no_afk_data_still_falls_back_to_full_day():
@@ -245,8 +262,9 @@ def test_no_afk_data_still_falls_back_to_full_day():
         {"w": {"type": "currentwindow"}, "a": {"type": "afkstatus"}},
         {"w": [_raw(T0, 60, {"app": "code.exe", "title": "main.py"})], "a": []},
     )
-    events = collect_day(client, day_start, day_end)
+    events, afk_ok = collect_day(client, day_start, day_end)
     assert len(events) == 1
+    assert afk_ok is False  # AFK バケット空
 
 
 # ---- promptmine: 日本語文がパス正規化で丸呑みされない ----
@@ -331,6 +349,15 @@ def test_config_loads_openai_reasoning_effort(tmp_path):
         encoding="utf-8",
     )
     assert load_config(str(p)).llm.reasoning_effort == "low"
+
+
+def test_config_loads_openai_json_mode(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text(
+        '[llm.openai_compatible]\njson_mode = true\n',
+        encoding="utf-8",
+    )
+    assert load_config(str(p)).llm.json_mode is True
 
 
 def test_config_rejects_invalid_openai_reasoning_effort(tmp_path):

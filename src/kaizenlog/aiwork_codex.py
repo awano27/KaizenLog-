@@ -9,13 +9,16 @@
   - ツールは function_call / custom_tool_call（Claude の tool_use とは別名）
   - ユーザー発話は event_msg/user_message（response_item/message role=user も存在）
   - 中断は event_msg/turn_aborted
-  - トークンは event_msg/token_count.info.total_token_usage（累積。最大値を採用）
+  - トークンは event_msg/token_count.info.total_token_usage（累積）
+  - 日跨ぎは「ウィンドウ前の最大累積」を base とし当日差分のみ計上
+  - 同一 session_id の複数 rollout はカウンタを加算マージ（resume 対応）
 """
 
 from __future__ import annotations
 
 import json
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -78,6 +81,68 @@ def _tool_output_is_error(output: object) -> bool:
     return False
 
 
+@dataclass
+class _SessionAccum:
+    """同一 session_id を複数ファイルからマージするための中間状態。"""
+
+    session_id: str
+    project: str = "unknown"
+    start: datetime | None = None
+    end: datetime | None = None
+    user_turns: int = 0
+    tool_counts: Counter = field(default_factory=Counter)
+    tool_errors: int = 0
+    interruptions: int = 0
+    # api_calls は形式が混在すると二重になるため系統を分ける。
+    # response_item/message が1件でもあればそちらを採用（構造化ログ優先）。
+    api_calls_response_item: int = 0
+    api_calls_event_msg: int = 0
+    has_response_item_assistant: bool = False
+    # 累積トークン: ウィンドウ前の最大を base、窓内最大 − base が当日分
+    token_base: int | None = None
+    token_peak: int | None = None
+    models: set[str] = field(default_factory=set)
+    touched: bool = False
+
+    def add_token(self, ts: datetime, ot: int, day_start: datetime, day_end: datetime) -> None:
+        if ts < day_start:
+            self.token_base = ot if self.token_base is None else max(self.token_base, ot)
+        elif day_start <= ts < day_end:
+            self.token_peak = ot if self.token_peak is None else max(self.token_peak, ot)
+
+    def day_output_tokens(self) -> int:
+        if self.token_peak is None:
+            return 0
+        if self.token_base is None:
+            return self.token_peak
+        return max(0, self.token_peak - self.token_base)
+
+    def api_calls(self) -> int:
+        if self.has_response_item_assistant:
+            return self.api_calls_response_item
+        return self.api_calls_event_msg
+
+    def to_session(self) -> AISession | None:
+        if not self.touched or self.start is None or self.end is None:
+            return None
+        if self.user_turns <= 0 and self.interruptions <= 0:
+            return None
+        return AISession(
+            session_id=self.session_id,
+            project=self.project,
+            start=self.start,
+            end=self.end,
+            user_turns=self.user_turns,
+            tool_counts=self.tool_counts,
+            tool_errors=self.tool_errors,
+            interruptions=self.interruptions,
+            api_calls=self.api_calls(),
+            output_tokens=self.day_output_tokens(),
+            models=set(self.models),
+            source="codex",
+        )
+
+
 class CodexAdapter:
     """Codex CLI の ~/.codex/sessions ロールアウト JSONL アダプタ。"""
 
@@ -91,16 +156,18 @@ class CodexAdapter:
     ) -> list[AISession]:
         if not self.sessions_dir.is_dir():
             return []
-        sessions: dict[str, AISession] = {}
+        accums: dict[str, _SessionAccum] = {}
         for folder in _codex_day_dirs(self.sessions_dir, day_start, day_end):
             for path in folder.glob("rollout-*.jsonl"):
                 try:
-                    self._ingest_file(path, day_start, day_end, sessions)
+                    self._ingest_file(path, day_start, day_end, accums)
                 except OSError:
                     continue
-        result = [
-            s for s in sessions.values() if s.user_turns > 0 or s.interruptions > 0
-        ]
+        result: list[AISession] = []
+        for acc in accums.values():
+            session = acc.to_session()
+            if session is not None:
+                result.append(session)
         result.sort(key=lambda s: s.start)
         return result
 
@@ -124,23 +191,25 @@ class CodexAdapter:
         path: Path,
         day_start: datetime,
         day_end: datetime,
-        sessions: dict[str, AISession],
+        accums: dict[str, _SessionAccum],
     ) -> None:
-        session_id = path.stem
+        # ファイル名 stem を仮 ID。session_meta で上書きし、同 sid はマージする
+        file_sid = path.stem
+        session_id = file_sid
         project = "unknown"
         model: str | None = None
-        # トークンは累積値の最大を採用（token_count が複数回出る）
-        max_output_tokens = 0
-        # セッション境界内で day フィルタされたイベントだけを集計
-        touched = False
-        user_turns = 0
-        tool_counts: Counter = Counter()
-        tool_errors = 0
-        interruptions = 0
-        api_calls = 0
-        start: datetime | None = None
-        end: datetime | None = None
-        models: set[str] = set()
+        # このファイル内で触った ID（meta 後に確定した sid）
+        active_sid = file_sid
+
+        def acc_for(sid: str) -> _SessionAccum:
+            if sid not in accums:
+                accums[sid] = _SessionAccum(session_id=sid, project=project)
+            a = accums[sid]
+            if a.project == "unknown" and project != "unknown":
+                a.project = project
+            if model:
+                a.models.add(model)
+            return a
 
         with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -161,79 +230,74 @@ class CodexAdapter:
                     sid = payload.get("session_id") or payload.get("id")
                     if isinstance(sid, str) and sid:
                         session_id = sid
+                        active_sid = sid
                     project = _project_from_cwd(payload.get("cwd"))
+                    a = acc_for(active_sid)
+                    if project != "unknown":
+                        a.project = project
                     continue
                 if top == "turn_context":
                     if isinstance(payload.get("model"), str) and payload["model"]:
                         model = payload["model"]
-                        models.add(model)
+                        acc_for(active_sid).models.add(model)
                     if project == "unknown":
                         project = _project_from_cwd(payload.get("cwd"))
+                        if project != "unknown":
+                            acc_for(active_sid).project = project
                     continue
-                if ts is None or not (day_start <= ts < day_end):
+                if ts is None:
                     continue
-                touched = True
-                start = ts if start is None else min(start, ts)
-                end = ts if end is None else max(end, ts)
+
+                # トークンは窓外でも base 用に読む（前日ディレクトリの累積）
+                if top == "event_msg" and payload.get("type") == "token_count":
+                    info = payload.get("info")
+                    if isinstance(info, dict):
+                        total = info.get("total_token_usage")
+                        if isinstance(total, dict):
+                            ot = total.get("output_tokens")
+                            if isinstance(ot, (int, float)):
+                                acc_for(active_sid).add_token(
+                                    ts, int(ot), day_start, day_end
+                                )
+
+                if not (day_start <= ts < day_end):
+                    continue
+
+                a = acc_for(active_sid)
+                a.touched = True
+                a.start = ts if a.start is None else min(a.start, ts)
+                a.end = ts if a.end is None else max(a.end, ts)
 
                 if top == "event_msg":
                     et = payload.get("type")
                     if et == "user_message":
-                        user_turns += 1
+                        a.user_turns += 1
                     elif et == "turn_aborted":
-                        interruptions += 1
-                    elif et == "token_count":
-                        info = payload.get("info")
-                        if isinstance(info, dict):
-                            total = info.get("total_token_usage")
-                            if isinstance(total, dict):
-                                ot = total.get("output_tokens")
-                                if isinstance(ot, (int, float)):
-                                    max_output_tokens = max(max_output_tokens, int(ot))
+                        a.interruptions += 1
                     elif et == "agent_message":
-                        api_calls += 1
+                        a.api_calls_event_msg += 1
                     continue
 
                 if top == "response_item":
                     pt = payload.get("type")
                     if pt == "message" and payload.get("role") == "assistant":
-                        api_calls += 1
+                        a.has_response_item_assistant = True
+                        a.api_calls_response_item += 1
                     elif pt == "function_call":
                         name = str(payload.get("name") or "function")
-                        tool_counts[name] += 1
+                        a.tool_counts[name] += 1
                     elif pt == "custom_tool_call":
                         name = str(payload.get("name") or "custom_tool")
-                        tool_counts[name] += 1
+                        a.tool_counts[name] += 1
                         status = str(payload.get("status") or "").lower()
                         if status and status not in ("completed", "success", "ok"):
-                            tool_errors += 1
+                            a.tool_errors += 1
                     elif pt == "function_call_output":
                         if _tool_output_is_error(payload.get("output")):
-                            tool_errors += 1
+                            a.tool_errors += 1
                     elif pt == "custom_tool_call_output":
                         if _tool_output_is_error(payload.get("output")):
-                            tool_errors += 1
-
-        if not touched or start is None or end is None:
-            return
-        if user_turns <= 0 and interruptions <= 0:
-            return
-        if model:
-            models.add(model)
-        sessions[session_id] = AISession(
-            session_id=session_id,
-            project=project,
-            start=start,
-            end=end,
-            user_turns=user_turns,
-            tool_counts=tool_counts,
-            tool_errors=tool_errors,
-            interruptions=interruptions,
-            api_calls=api_calls,
-            output_tokens=max_output_tokens,
-            models=models,
-            source="codex",
-        )
+                            a.tool_errors += 1
 
     def _prompts_from_file(
         self,

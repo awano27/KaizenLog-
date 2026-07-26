@@ -114,8 +114,17 @@ def compute_metric(
     cc_sessions: list[AISession],
     input_stats: InputStats | None = None,
     retry_chains: int | None = None,
+    known_categories: set[str] | frozenset[str] | None = None,
 ) -> float | None:
-    """対象日の指標値を計算する。未知の指標・データ不足はNone。"""
+    """対象日の指標値を計算する。未知の指標・データ不足はNone。
+
+    known_categories:
+      category_minutes で既知集合に無い名前は None（偽PASS防止）。
+      None（省略）は後方互換で従来どおり 0.0 フォールバック。
+      既知名で当日0分は 0.0 が正当。
+    site_minutes:
+      欠損は常に 0.0（サイトブロック成功時の0分判定が正当。カテゴリとの非対称）。
+    """
     if metric in ("focus_blocks", "focus_minutes", "input_keypresses"):
         if input_stats is None:
             return None  # aw-watcher-input 未導入の日は計測不能
@@ -125,6 +134,7 @@ def compute_metric(
             return round(input_stats.focus_minutes, 1)
         return float(input_stats.keypresses)
     if metric.startswith("site_minutes:"):
+        # 欠損=0.0 を維持（ブロック成功で0分になった既知ドメインの判定が正当）
         site = metric.split(":", 1)[1].strip().lower()
         return round(summary.by_site.get(site, 0.0), 1)
     if metric == "context_switches":
@@ -152,11 +162,18 @@ def compute_metric(
         return round(sum(s.user_turns for s in cc_sessions) / len(cc_sessions), 1)
     if metric.startswith("category_minutes:"):
         category = metric.split(":", 1)[1].strip()
+        # 未知カテゴリを 0.0 にすると PASS: cat <= N が恒久偽PASSになる
+        if known_categories is not None and category not in known_categories:
+            return None
         return round(summary.by_category.get(category, 0.0), 1)
     return None
 
 
-def metric_from_stats(metric: str, stats: dict) -> float | None:
+def metric_from_stats(
+    metric: str,
+    stats: dict,
+    known_categories: set[str] | frozenset[str] | None = None,
+) -> float | None:
     """日次統計 JSON（stats.write_stats 形式）から指標値を復元する。
 
     対応:
@@ -208,10 +225,14 @@ def metric_from_stats(metric: str, stats: dict) -> float | None:
         return None
     if metric.startswith("category_minutes:"):
         cat = metric.split(":", 1)[1].strip()
+        # 未知カテゴリは未計測（None）。既知名でキー欠落のみ 0.0
+        if known_categories is not None and cat not in known_categories:
+            return None
         by_cat = stats.get("by_category") if isinstance(stats.get("by_category"), dict) else {}
         v = by_cat.get(cat)
         return float(v) if isinstance(v, (int, float)) else 0.0
     if metric.startswith("site_minutes:"):
+        # 欠損=0.0 維持（サイトブロック成功の0分判定。category との非対称）
         site = metric.split(":", 1)[1].strip().lower()
         by_site = stats.get("by_site") if isinstance(stats.get("by_site"), dict) else {}
         # キーが小文字で保存されている想定。大小混在も拾う

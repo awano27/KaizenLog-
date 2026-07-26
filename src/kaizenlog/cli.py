@@ -11,6 +11,8 @@
   kaizenlog status                         実行履歴（最終成功・直近の失敗）を表示
   kaizenlog doctor                         セットアップと環境の健全性を診断
   kaizenlog morning [--date]               朝の追いつき・アクション再描画・通知
+  kaizenlog today  [--date]                今日の未完了アクションを表示
+  kaizenlog done   <id>                    アクションをターミナルから消化
   kaizenlog setup                          対話式セットアップウィザード
   kaizenlog init-config                    設定ファイルの雛形を出力する
 """
@@ -27,10 +29,12 @@ from zoneinfo import ZoneInfo
 
 from .advisor import (
     AdviceContractError,
+    AdviceResult,
     AdvisorError,
     generate_advice,
     prepare_advice_request,
     render_reader_advice,
+    requires_daily_contract,
 )
 from .advice_evidence import build_advice_evidence
 from .aiwork import (
@@ -41,12 +45,17 @@ from .aiwork import (
 )
 from .doctor import run_doctor
 from .memory import (
+    ACTIONS_HANDOFF_DAYS,
     append_entries,
     assign_action_ids,
     compute_action_stats,
+    format_today_action_line,
     load_entries,
+    mark_entry_done,
+    open_actions_in_window,
     render_action_stats_line,
     render_actions_section,
+    resolve_action_id,
     summarize_for_prompt,
     update_statuses_from_note,
 )
@@ -54,7 +63,13 @@ from .nippou import generate_nippou_deterministic, generate_nippou_llm
 from .notify import notify
 from .privacy import PrivacyError, make_redactor
 from .promptmine import render_prompt_report
-from .runlog import load_runs, log_run, render_status
+from .runlog import (
+    advise_health_warning_line,
+    load_runs,
+    log_advise_health,
+    log_run,
+    render_status,
+)
 from .skill_manager import (
     bundled_skill_content,
     bundled_skill_names,
@@ -63,7 +78,7 @@ from .skill_manager import (
     install_skill,
     skill_description,
 )
-from .classifier import Classifier
+from .classifier import Classifier, known_category_names
 from .collector import ActivityWatchClient, ActivityWatchError, collect_day, collect_input
 from .focus import compute_input_stats
 from .intervention import detect_time_sinks, render_leechblock_options, render_plan, suggest_rules
@@ -96,6 +111,7 @@ from .vault import (
 )
 from .verdict import (
     apply_verdicts_to_advice_note,
+    backfill_verdicts,
     judge_entries,
     parse_pass_condition,
 )
@@ -107,13 +123,37 @@ def _parse_date(s: str | None, tz: ZoneInfo) -> date:
     return datetime.now(tz).date()
 
 
+def _safe_log_notify_failed(cfg: Config, context: str) -> None:
+    """通知失敗を runlog に残す。二次例外で元の失敗処理を壊さない。"""
+    try:
+        log_run(
+            cfg.logs_path,
+            "notify",
+            ok=False,
+            duration_seconds=0.0,
+            error=f"notify_failed: {context}"[:500],
+            retention_days=cfg.log_retention_days,
+            notify_failed=True,
+        )
+    except Exception:
+        pass
+
+
+def _notify(cfg: Config, title: str, message: str, **kwargs) -> bool:
+    ok = notify(title, message, **kwargs)
+    if not ok:
+        _safe_log_notify_failed(cfg, f"{title}: {message[:80]}")
+    return ok
+
+
 def cmd_generate(cfg: Config, day: date) -> Path:
     tz = ZoneInfo(cfg.timezone)
     day_start = datetime.combine(day, time.min, tzinfo=tz)
     day_end = day_start + timedelta(days=1)
+    known_cats = known_category_names(cfg.rules)
 
     client = ActivityWatchClient(cfg.aw_base_url)
-    events = collect_day(client, day_start, day_end)
+    events, afk_ok = collect_day(client, day_start, day_end)
     classified = Classifier(cfg.rules).classify_all(events)
     summary = summarize(day, classified, gap_minutes=cfg.session_gap_minutes)
 
@@ -155,6 +195,7 @@ def cmd_generate(cfg: Config, day: date) -> Path:
         input_stats,
         activity_md=section,
         retry_chains=day_retry_chains if cfg.aiwork.enabled else None,
+        afk_watcher_available=afk_ok,
     )
 
     # 実験の実測追記: running 全件 + adopted（deadline から30日以内のみ）
@@ -165,6 +206,7 @@ def cmd_generate(cfg: Config, day: date) -> Path:
         value = compute_metric(
             exp.metric, summary, ai_sessions, input_stats,
             retry_chains=retry_chain_count,
+            known_categories=known_cats,
         )
         if value is None:
             print(f"⚠️  実験「{exp.title}」の指標 {exp.metric} は不明のためスキップしました")
@@ -195,6 +237,7 @@ def cmd_generate(cfg: Config, day: date) -> Path:
     judged = judge_entries(
         memory_entries, proposal_day, summary, ai_sessions, input_stats, day,
         retry_chains=retry_chain_count,
+        known_categories=known_cats,
     )
     if judged:
         append_entries(cfg.memory_path, judged)
@@ -214,9 +257,38 @@ def cmd_generate(cfg: Config, day: date) -> Path:
             if updated is not None:
                 atomic_write_text(store.path_for(proposal_day), updated)
 
-    # A2: 翌日ノートへ未完了アクションを転記（backfill で過去日を汚さない）
+    # A1b: 遅延 PASS バックフィル（提案翌日に stats が無かった行を後追い）
+    # 測定日 = done_date+1（行動効果）/ 無ければ提案日+1（提案妥当性）
     by_id = {e.id: e for e in memory_entries}
     by_id.update({e.id: e for e in judged})
+    bf = backfill_verdicts(
+        list(by_id.values()),
+        cfg.stats_path,
+        day,
+        known_categories=known_cats,
+    )
+    print(bf.log_line())
+    if bf.judged:
+        append_entries(cfg.memory_path, bf.judged)
+        for entry in bf.judged:
+            by_id[entry.id] = entry
+            mark = "✅" if entry.verdict == "pass" else "❌"
+            print(
+                f"🧪 バックフィル判定: {entry.id} {mark}"
+                f"（実測 {entry.verdict_value:g} / 判定日 {entry.verdict_date}）"
+            )
+            # 提案日ノートへ注記（冪等）
+            try:
+                prop_day = date.fromisoformat(entry.date)
+            except ValueError:
+                continue
+            prev_note = store.read(prop_day)
+            if prev_note is not None:
+                updated = apply_verdicts_to_advice_note(prev_note, [entry])
+                if updated is not None:
+                    atomic_write_text(store.path_for(prop_day), updated)
+
+    # A2: 翌日ノートへ未完了アクションを転記（backfill で過去日を汚さない）
     _write_actions_handoff(cfg, store, day, list(by_id.values()))
     return path
 
@@ -305,9 +377,11 @@ def catch_up_yesterday(cfg: Config, today: date) -> None:
 def build_morning_notification(
     entries: list,
     today: date,
+    *,
+    health_line: str | None = None,
 ) -> str | None:
     """朝トースト本文。アクション本文は載せない（ロック画面に固有名詞を出さない）。"""
-    window_start = (today - timedelta(days=7)).isoformat()
+    window_start = (today - timedelta(days=ACTIONS_HANDOFF_DAYS)).isoformat()
     window_end = (today - timedelta(days=1)).isoformat()
     open_n = sum(
         1
@@ -315,17 +389,32 @@ def build_morning_notification(
         if e.status == "proposed" and window_start <= e.date <= window_end
     )
     yday = (today - timedelta(days=1)).isoformat()
+    # superseded（同日再 advise で撤回）は判定集計から除外
     pass_n = sum(
-        1 for e in entries if e.verdict_date == yday and e.verdict == "pass"
+        1
+        for e in entries
+        if e.status != "superseded"
+        and e.verdict_date == yday
+        and e.verdict == "pass"
     )
     fail_n = sum(
-        1 for e in entries if e.verdict_date == yday and e.verdict == "fail"
+        1
+        for e in entries
+        if e.status != "superseded"
+        and e.verdict_date == yday
+        and e.verdict == "fail"
     )
-    if open_n == 0 and pass_n == 0 and fail_n == 0:
+    parts: list[str] = []
+    if open_n or pass_n or fail_n:
+        parts.append(
+            f"今日のアクション {open_n}件 / 昨日の判定 ✅{pass_n} ❌{fail_n}"
+        )
+    # 昨夜 degraded/failed のときだけ（提案本文・違反内容は載せない）
+    if health_line:
+        parts.append(health_line)
+    if not parts:
         return None
-    return (
-        f"今日のアクション {open_n}件 / 昨日の判定 ✅{pass_n} ❌{fail_n}"
-    )
+    return " / ".join(parts) if len(parts) == 1 else "\n".join(parts)
 
 
 def cmd_morning(cfg: Config, day: date) -> int:
@@ -344,11 +433,12 @@ def cmd_morning(cfg: Config, day: date) -> int:
         else:
             print("📌 今日の未完了アクションはありません")
 
-        msg = build_morning_notification(entries, day)
+        health = advise_health_warning_line(load_runs(cfg.logs_path))
+        msg = build_morning_notification(entries, day, health_line=health)
         if msg:
             print(msg)
             # 本文は件数のみ（固有名詞をロック画面に出さない）
-            notify("KaizenLog 朝の確認", msg, icon="Information")
+            _notify(cfg, "KaizenLog 朝の確認", msg, icon="Information")
         log_run(
             cfg.logs_path, "morning", ok=True,
             duration_seconds=monotonic() - t0,
@@ -364,7 +454,7 @@ def cmd_morning(cfg: Config, day: date) -> int:
             retention_days=cfg.log_retention_days,
         )
         if cfg.notify_on_failure:
-            notify("KaizenLog 失敗", f"morning: {e}")
+            _notify(cfg, "KaizenLog 失敗", f"morning: {e}")
         return 1
 
 
@@ -476,11 +566,14 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
 
     experiments_ctx = render_experiments_context(load_experiments(cfg.experiments_path))
 
-    # Kaizen Memory: 提案日のノートのチェックボックスからdoneを検出し、要約をLLMに渡す。
-    # KZNチェックボックスは提案日のノートにしか存在しないため、固定の直近N日ではなく
-    # 「未完了エントリの提案日」のノートを走査する（4日以上経ってからのチェックも拾う）
+    # Kaizen Memory: ノートのチェックボックスから done を検出する。
+    # 提案は (1) 提案日ノートの ADVICE、(2) 転記先ノートの 📌 の両方に現れうる。
+    # 転記ウィンドウ（直近 ACTIONS_HANDOFF_DAYS 日）を常に走査し、
+    # さらに未完了エントリの提案日（窓外の遅れチェック用）も足す。
     entries = load_entries(cfg.memory_path)
     scan_days = {day} | {
+        day - timedelta(days=i) for i in range(1, ACTIONS_HANDOFF_DAYS + 1)
+    } | {
         date.fromisoformat(e.date) for e in entries
         if e.status == "proposed" and _is_valid_date(e.date)
     }
@@ -528,6 +621,7 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         prior_stats,
         timezone=ZoneInfo(cfg.timezone),
         source_status=source_status,
+        known_categories=known_category_names(cfg.rules),
     )
 
     redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
@@ -552,8 +646,11 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         print("（--dry-run のためLLMには送信していません。ノートも変更していません）")
         return None
 
+    t_advise = monotonic()
+    outcome = "ok"
+    violations: list[str] = []
     try:
-        advice_md = generate_advice(
+        result = generate_advice(
             cfg.llm, activity_md, recent,
             intent=intent,
             experiments=experiments_ctx or None,
@@ -561,13 +658,39 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
             evidence=evidence_ctx,
             redactor=redactor,
         )
-    except AdviceContractError:
+        if isinstance(result, AdviceResult):
+            advice_md = result.markdown
+            outcome = result.outcome
+            violations = list(result.violations)
+        else:
+            # 後方互換（モックが str を返すテスト）
+            advice_md = str(result)
+    except AdviceContractError as e:
         # 契約違反でも確定事実サマリーだけは残す（静かな失敗を防ぐ）。例外は再送出。
         store.write_section(day, ADVICE_MARKER, _degraded_advice_section(evidence_ctx))
         print("⚠️  出力契約を満たせなかったため縮退セクションを保存しました")
+        _safe_log_advise_health(
+            cfg,
+            day=day,
+            outcome="degraded",
+            duration_seconds=monotonic() - t_advise,
+            violations=getattr(e, "violations", None) or [str(e)],
+        )
         raise
-    advice_md = render_reader_advice(advice_md, evidence_ctx)
-    # 「明日試すこと」に安定ID（KZN-YYYYMMDD-NNN）を付与して記録する
+    except Exception:
+        _safe_log_advise_health(
+            cfg,
+            day=day,
+            outcome="failed",
+            duration_seconds=monotonic() - t_advise,
+            violations=["exception"],
+        )
+        raise
+    # 日次契約プロンプトだけ reader 向け再構成。weekly / 自作プロンプトは素通し
+    # （render_reader_advice は「明日の最小アクション」前提で全文を組み直すため）
+    if requires_daily_contract(cfg.llm):
+        advice_md = render_reader_advice(advice_md, evidence_ctx)
+    # 安定ID（KZN-YYYYMMDD-NNN）を付与して記録する
     advice_md, new_entries = assign_action_ids(advice_md, day, effective_entries)
     path = store.write_section(day, ADVICE_MARKER, advice_md)
     append_entries(cfg.memory_path, new_entries)
@@ -579,7 +702,125 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
     merged = {e.id: e for e in effective_entries}
     merged.update({e.id: e for e in new_entries})
     _write_actions_handoff(cfg, store, day, list(merged.values()))
+    _safe_log_advise_health(
+        cfg,
+        day=day,
+        outcome=outcome,
+        duration_seconds=monotonic() - t_advise,
+        violations=violations,
+    )
     return path
+
+
+def _safe_log_advise_health(
+    cfg: Config,
+    *,
+    day: date,
+    outcome: str,
+    duration_seconds: float,
+    violations: list[str] | None = None,
+) -> None:
+    """ヘルス記録の失敗で本処理を落とさない。"""
+    try:
+        log_advise_health(
+            cfg.logs_path,
+            day=day,
+            backend=getattr(cfg.llm, "backend", "") or "",
+            outcome=outcome,
+            duration_seconds=duration_seconds,
+            violations=violations,
+            retention_days=cfg.log_retention_days,
+        )
+    except Exception:
+        pass
+
+
+def _sync_checkbox_statuses(cfg: Config, day: date) -> list:
+    """ノートの [x] を Memory に反映してから表示する（表示が古いと信頼を失う）。
+
+    cmd_advise と同じ走査幅（当日 + 転記窓 + 未完了提案日）。
+    """
+    store = DailyNoteStore(cfg.daily_notes_path)
+    entries = load_entries(cfg.memory_path)
+    scan_days = {day} | {
+        day - timedelta(days=i) for i in range(1, ACTIONS_HANDOFF_DAYS + 1)
+    } | {
+        date.fromisoformat(e.date)
+        for e in entries
+        if e.status == "proposed" and _is_valid_date(e.date)
+    }
+    status_updates: list = []
+    for scan_day in sorted(scan_days, reverse=True):
+        past = store.read(scan_day)
+        if past:
+            status_updates.extend(update_statuses_from_note(past, entries, day))
+    status_updates = list({entry.id: entry for entry in status_updates}.values())
+    if status_updates:
+        append_entries(cfg.memory_path, status_updates)
+    by_id = {e.id: e for e in entries}
+    by_id.update({e.id: e for e in status_updates})
+    return sorted(by_id.values(), key=lambda e: e.id)
+
+
+def cmd_today(cfg: Config, day: date) -> int:
+    """ターミナルから今日の未完了アクションを見る。"""
+    entries = _sync_checkbox_statuses(cfg, day)
+    runs = load_runs(cfg.logs_path)
+    health = advise_health_warning_line(runs)
+    if health:
+        print(health)
+    stats = compute_action_stats(entries, day)
+    print(render_action_stats_line(stats))
+    open_entries = open_actions_in_window(entries, day)
+    if not open_entries:
+        print("未完了のアクションはありません")
+        return 0
+    print()
+    for e in open_entries:
+        print(format_today_action_line(e))
+    return 0
+
+
+def cmd_done(cfg: Config, action_id: str, day: date) -> int:
+    """ターミナルからアクションを消化する。"""
+    entries = load_entries(cfg.memory_path)
+    resolved = resolve_action_id(action_id, entries)
+    if resolved is None:
+        print(f"❌ 該当するアクションがありません: {action_id}", file=sys.stderr)
+        return 1
+    if isinstance(resolved, list):
+        print("❌ ID が曖昧です。候補:", file=sys.stderr)
+        for e in resolved:
+            print(f"  {e.id}  {e.action[:60]}", file=sys.stderr)
+        return 1
+    entry = resolved
+    if entry.status == "done":
+        print(f"ℹ️  既に完了済みです: {entry.id}")
+        # 冪等: 再記録しても壊れないよう done を後勝ち追記
+    done = mark_entry_done(entry, day)
+    append_entries(cfg.memory_path, [done])
+    # 当日ノートの 📌 を再描画（無ければ Memory のみ）
+    store = DailyNoteStore(cfg.daily_notes_path)
+    note = store.read(day)
+    if note is None:
+        print(f"⚠️  当日ノートが無いためノート同期をスキップしました: {store.path_for(day)}")
+    else:
+        merged = {e.id: e for e in load_entries(cfg.memory_path)}
+        section = render_actions_section(list(merged.values()), day, note)
+        if section:
+            store.write_section(
+                day, ACTIONS_MARKER, section, position=cfg.actions_position
+            )
+    stats = compute_action_stats(load_entries(cfg.memory_path), day)
+    rate = (
+        f"{round(stats.done_rate * 100)}%"
+        if stats.done_rate is not None
+        else "-"
+    )
+    print(f"✅ 消化しました: {done.id}")
+    print(f"   {done.action}")
+    print(f"   消化率 {rate} に上がりました（直近{stats.window_days}日 {stats.done}/{stats.proposed}）")
+    return 0
 
 
 def _degraded_advice_section(evidence_ctx) -> str:
@@ -876,6 +1117,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="朝タスク時刻（空文字で登録しない、既定 08:30）")
     mor = sub.add_parser("morning", help="朝の追いつき・アクション再描画・通知")
     mor.add_argument("--date", help="対象日 YYYY-MM-DD（省略時は今日）")
+    tod = sub.add_parser("today", help="今日の未完了アクションを表示")
+    tod.add_argument("--date", help="対象日 YYYY-MM-DD（省略時は今日）")
+    don = sub.add_parser("done", help="アクションを消化（KZN ID または末尾）")
+    don.add_argument("id", help="KZN-YYYYMMDD-NNN または proposed の ID 末尾")
+    don.add_argument("--date", help="done_date とする日（省略時は今日）")
 
     args = parser.parse_args(argv)
 
@@ -892,9 +1138,17 @@ def main(argv: list[str] | None = None) -> int:
 
     # setup bootstraps config — must not require load_config first
     if args.command == "setup":
-        from .setup import SetupOptions, run_setup
+        from .setup import SetupOptions, run_setup, validate_hhmm
         # setup subparser has its own --config; top-level --config may also apply
         cfg_arg = getattr(args, "config", None)
+        try:
+            task_time = validate_hhmm(args.time, "日次タスク時刻")
+            morning = args.morning_time or ""
+            if morning:
+                morning = validate_hhmm(morning, "朝タスク時刻")
+        except ConfigError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            return 1
         return run_setup(SetupOptions(
             config_path=Path(cfg_arg).expanduser() if cfg_arg else None,
             vault=Path(args.vault).expanduser() if args.vault else None,
@@ -905,8 +1159,8 @@ def main(argv: list[str] | None = None) -> int:
             skip_skills=args.skip_skills,
             install_aw=args.install_aw,
             register_task=args.register_task,
-            time=args.time,
-            morning_time=args.morning_time or "",
+            time=task_time,
+            morning_time=morning,
         ))
 
     try:
@@ -919,6 +1173,16 @@ def main(argv: list[str] | None = None) -> int:
         tz = ZoneInfo(cfg.timezone)
         day = _parse_date(args.date, tz)
         return cmd_morning(cfg, day)
+
+    if args.command == "today":
+        tz = ZoneInfo(cfg.timezone)
+        day = _parse_date(args.date, tz)
+        return cmd_today(cfg, day)
+
+    if args.command == "done":
+        tz = ZoneInfo(cfg.timezone)
+        day = _parse_date(args.date, tz)
+        return cmd_done(cfg, args.id, day)
 
     if args.command == "status":
         print(render_status(load_runs(cfg.logs_path)))
@@ -1011,7 +1275,7 @@ def main(argv: list[str] | None = None) -> int:
                     duration_seconds=monotonic() - start_time,
                     error=str(e), retention_days=cfg.log_retention_days)
             if cfg.notify_on_failure:
-                notify("KaizenLog 失敗", f"{args.command}: {e}")
+                _notify(cfg, "KaizenLog 失敗", f"{args.command}: {e}")
         return 1
     except Exception as e:
         # 想定外の例外でも「静かな故障」にしない：無人の夜間実行では
@@ -1023,7 +1287,7 @@ def main(argv: list[str] | None = None) -> int:
                     error=f"想定外のエラー: {e.__class__.__name__}: {e}",
                     retention_days=cfg.log_retention_days)
             if cfg.notify_on_failure:
-                notify("KaizenLog 失敗", f"{args.command}: {e.__class__.__name__}: {e}")
+                _notify(cfg, "KaizenLog 失敗", f"{args.command}: {e.__class__.__name__}: {e}")
         return 1
     if not dry_run:
         log_run(cfg.logs_path, args.command, ok=True,

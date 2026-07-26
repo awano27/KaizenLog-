@@ -1,6 +1,7 @@
 """Setup wizard orchestration (detect → config → optional side effects → doctor)."""
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -10,10 +11,21 @@ from pathlib import Path
 from typing import Protocol
 
 from . import setup_detect
-from .config import default_config_path, load_config, write_config_file
+from .config import ConfigError, default_config_path, load_config, write_config_file
 from .doctor import run_doctor
 from .skill_manager import bundled_skill_names, install_skill
 from .setup_detect import find_aw_exe, probe_aw_api
+
+_HHMM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+
+
+def validate_hhmm(value: str, field: str = "時刻") -> str:
+    """HH:MM (0-23:00-59) を検証して正規化する。"""
+    s = (value or "").strip()
+    if not _HHMM_RE.match(s):
+        raise ConfigError(f"{field} は HH:MM 形式で指定してください（例 08:30）: {value!r}")
+    h, m = s.split(":")
+    return f"{int(h):02d}:{int(m):02d}"
 
 # Re-export for monkeypatch paths used by tests (kaizenlog.setup.run_doctor).
 __all__ = [
@@ -195,12 +207,13 @@ def _find_register_task_script() -> Path | None:
 
 
 def register_daily_task(
-    time: str = "21:30",
+    time: str | None = "21:30",
     kaizenlog_exe: str | None = None,
     morning_time: str = "",
 ) -> bool:
-    """Register daily KaizenLog task via scripts/register-task.ps1.
+    """Register KaizenLog tasks via scripts/register-task.ps1.
 
+    time が None のときは日次タスクを触らない（朝だけ追加する経路）。
     morning_time が非空なら朝タスク（kaizenlog morning）も登録する。
     Returns False (graceful) if the script is missing or registration fails.
     """
@@ -219,11 +232,12 @@ def register_daily_task(
         "Bypass",
         "-File",
         str(script),
-        "-Time",
-        time,
     ]
+    # -Time を渡すとスクリプトが日次を（再）登録。朝のみ追加時は省略して既存日次を守る
+    if time is not None:
+        args += ["-Time", validate_hhmm(time, "日次タスク時刻")]
     if morning_time:
-        args += ["-MorningTime", morning_time]
+        args += ["-MorningTime", validate_hhmm(morning_time, "朝タスク時刻")]
     if exe:
         args += ["-KaizenlogExe", str(exe)]
     try:
@@ -376,36 +390,52 @@ def run_setup(opts: SetupOptions, ui: SetupUI | None = None) -> int:
     else:
         ui.print("スキル導入をスキップしました")
 
-    # Phase 6: task — never register on bare --yes without --register-task
+    # Phase 6: task — Daily / Morning を個別判定（片方が欠けていれば提案）
+    # never register on bare --yes without --register-task
     if not opts.skip_task:
-        already = setup_detect.is_task_registered()
-        if already:
+        daily_ok = setup_detect.is_task_registered("KaizenLog Daily")
+        morning_ok = setup_detect.is_task_registered("KaizenLog Morning")
+        need_daily = not daily_ok
+        need_morning = bool(opts.morning_time) and not morning_ok
+        if daily_ok:
             ui.print("✅ 日次タスクは既に登録済みです")
+        if morning_ok and opts.morning_time:
+            ui.print("✅ 朝タスクは既に登録済みです")
+        if not need_daily and not need_morning:
+            pass  # both present (or morning not requested)
         else:
             do_reg = False
             if opts.register_task:
                 do_reg = True
             elif not opts.yes:
+                parts = []
+                if need_daily:
+                    parts.append(f"日次 {opts.time}")
+                if need_morning:
+                    parts.append(f"朝 {opts.morning_time}")
                 do_reg = ui.confirm(
-                    f"日次タスクを {opts.time} に登録しますか？",
+                    f"欠けているタスクを登録しますか？（{' / '.join(parts)}）",
                     default=False,
                 )
             if do_reg:
-                morning = opts.morning_time or ""
-                if morning and not opts.yes:
+                morning = (opts.morning_time or "") if need_morning else ""
+                if morning and not opts.yes and need_morning:
                     if not ui.confirm(
                         f"朝タスク（kaizenlog morning）を {morning} に登録しますか？",
                         default=True,
                     ):
                         morning = ""
-                if register_daily_task(opts.time, morning_time=morning):
-                    msg = f"✅ 日次タスクを登録しました（{opts.time}"
+                # 日次が既にあれば -Time を渡さず既存時刻・作業フォルダを維持
+                time_arg: str | None = opts.time if need_daily else None
+                if register_daily_task(time_arg, morning_time=morning):
+                    bits = []
+                    if need_daily:
+                        bits.append(f"日次 {opts.time}")
                     if morning:
-                        msg += f" / 朝 {morning}"
-                    msg += "）"
-                    ui.print(msg)
+                        bits.append(f"朝 {morning}")
+                    ui.print("✅ タスクを登録しました（" + " / ".join(bits) + "）")
                 else:
-                    ui.print("⚠️  日次タスクの登録に失敗しました（後で手動可）")
+                    ui.print("⚠️  タスクの登録に失敗しました（後で手動可）")
                     soft_fail = True
             else:
                 ui.print(
