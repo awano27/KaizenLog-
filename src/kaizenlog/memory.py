@@ -316,9 +316,13 @@ def open_actions_in_window(
     target_day: date,
     window_days: int = ACTIONS_HANDOFF_DAYS,
 ) -> list[MemoryEntry]:
-    """提案日が target_day-window 〜 target_day-1 の proposed を新しい順で返す。"""
+    """today 一覧用: 提案日が target_day-window 〜 target_day（当日含む）の proposed。
+
+    表示窓は当日の advise 直後に tonight の提案を消化できるよう当日を含む。
+    消化率などの統計窓（compute_action_stats: target-window 〜 target-1）とは別物。
+    """
     window_start = (target_day - timedelta(days=window_days)).isoformat()
-    window_end = (target_day - timedelta(days=1)).isoformat()
+    window_end = target_day.isoformat()
     open_entries = [
         e
         for e in entries

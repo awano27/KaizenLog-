@@ -16,15 +16,21 @@ def notify(
     *,
     icon: str = "Warning",
     duration_ms: int = 10000,
-) -> bool:
-    """トースト風バルーン通知を出す。成功時 True、失敗時 False。
+) -> bool | None:
+    """トースト風バルーン通知を出す。
+
+    戻り値:
+      True  — Windows で送出成功
+      False — Windows で送出を試みたが失敗（notify_failed 記録対象）
+      None  — 非 Windows で送出を試みていない（失敗ではない。記録しない）
 
     icon: SystemIcons 名（Warning / Information / Error 等）
     既存の失敗通知は icon=Warning のまま。
     例外は外へ漏らさない（通知失敗で本処理を落とさない）。
     """
     if sys.platform != "win32":
-        return False
+        # 送出未試行（旧仕様の no-op）。False だと CI/WSL で偽陽性の notify_failed になる
+        return None
     # PowerShellのシングルクォート文字列としてエスケープ
     t = title.replace("'", "''")[:80]
     m = message.replace("'", "''")[:200]

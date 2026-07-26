@@ -139,11 +139,13 @@ def _safe_log_notify_failed(cfg: Config, context: str) -> None:
         pass
 
 
-def _notify(cfg: Config, title: str, message: str, **kwargs) -> bool:
-    ok = notify(title, message, **kwargs)
-    if not ok:
+def _notify(cfg: Config, title: str, message: str, **kwargs) -> bool | None:
+    """notify の結果を返す。False のときだけ notify_failed を記録（None=非Windowsは記録しない）。"""
+    result = notify(title, message, **kwargs)
+    # False のみ失敗。None は送出未試行（スキップ）なので runlog に残さない
+    if result is False:
         _safe_log_notify_failed(cfg, f"{title}: {message[:80]}")
-    return ok
+    return result
 
 
 def cmd_generate(cfg: Config, day: date) -> Path:
@@ -807,8 +809,10 @@ def cmd_done(cfg: Config, action_id: str, day: date) -> int:
         return 1
     entry = resolved
     if entry.status == "done":
-        print(f"ℹ️  既に完了済みです: {entry.id}")
-        # 冪等: 再記録しても壊れないよう done を後勝ち追記
+        # 再 done で done_date を上書きしない（M2 測定基準日 = 最初の done_date+1 が正）
+        done_label = entry.done_date or "?"
+        print(f"ℹ️  既に消化済みです（done_date: {done_label}）: {entry.id}")
+        return 0
     done = mark_entry_done(entry, day)
     append_entries(cfg.memory_path, [done])
     # 当日ノートの 📌 を再描画（無ければ Memory のみ）
