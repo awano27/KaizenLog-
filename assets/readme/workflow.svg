@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="t d">
+  <title id="t">How KaizenLog works</title>
+  <desc id="d">ActivityWatch records, generate writes the journal, advise proposes actions, morning and today surface them, done closes the loop.</desc>
+  <rect width="1200" height="360" rx="24" fill="#0c1218"/>
+
+  <!-- nodes -->
+  <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Hiragino Sans, Yu Gothic UI, Meiryo, sans-serif">
+    <rect x="40" y="60" width="200" height="100" rx="14" fill="#152028" stroke="#3d9a7a" stroke-width="2"/>
+    <text x="140" y="105" text-anchor="middle" fill="#8fd4b5" font-size="18" font-weight="700">ActivityWatch</text>
+    <text x="140" y="132" text-anchor="middle" fill="#8aa0ad" font-size="14">常駐・自動記録</text>
+
+    <rect x="300" y="60" width="200" height="100" rx="14" fill="#152028" stroke="#5d8aa0" stroke-width="2"/>
+    <text x="400" y="100" text-anchor="middle" fill="#b8d4e4" font-size="17" font-weight="700">generate</text>
+    <text x="400" y="126" text-anchor="middle" fill="#8aa0ad" font-size="14">分類・集計・日誌</text>
+
+    <rect x="560" y="60" width="200" height="100" rx="14" fill="#152028" stroke="#e8a54b" stroke-width="2"/>
+    <text x="660" y="100" text-anchor="middle" fill="#f0c98a" font-size="17" font-weight="700">advise</text>
+    <text x="660" y="126" text-anchor="middle" fill="#8aa0ad" font-size="14">LLM 改善提案</text>
+
+    <rect x="820" y="60" width="200" height="100" rx="14" fill="#152028" stroke="#7a9e8f" stroke-width="2"/>
+    <text x="920" y="100" text-anchor="middle" fill="#b5d4c6" font-size="17" font-weight="700">morning</text>
+    <text x="920" y="126" text-anchor="middle" fill="#8aa0ad" font-size="14">📌 とトースト</text>
+
+    <rect x="300" y="220" width="200" height="100" rx="14" fill="#152028" stroke="#5d8aa0" stroke-width="2"/>
+    <text x="400" y="260" text-anchor="middle" fill="#b8d4e4" font-size="17" font-weight="700">today</text>
+    <text x="400" y="286" text-anchor="middle" fill="#8aa0ad" font-size="14">ターミナル一覧</text>
+
+    <rect x="560" y="220" width="200" height="100" rx="14" fill="#152028" stroke="#3d9a7a" stroke-width="2"/>
+    <text x="660" y="260" text-anchor="middle" fill="#8fd4b5" font-size="17" font-weight="700">done</text>
+    <text x="660" y="286" text-anchor="middle" fill="#8aa0ad" font-size="14">消化率を更新</text>
+
+    <rect x="820" y="220" width="200" height="100" rx="14" fill="#152028" stroke="#6a7f90" stroke-width="2"/>
+    <text x="920" y="260" text-anchor="middle" fill="#c5d4de" font-size="17" font-weight="700">Memory</text>
+    <text x="920" y="286" text-anchor="middle" fill="#8aa0ad" font-size="14">KZN ID · PASS</text>
+  </g>
+
+  <!-- arrows -->
+  <g stroke="#3d5566" stroke-width="2.5" fill="none" stroke-linecap="round">
+    <path d="M240 110 H300"/>
+    <path d="M500 110 H560"/>
+    <path d="M760 110 H820"/>
+    <path d="M920 160 V220"/>
+    <path d="M400 160 V220"/>
+    <path d="M500 270 H560"/>
+    <path d="M760 270 H820"/>
+  </g>
+  <g fill="#3d5566">
+    <polygon points="296,110 286,104 286,116"/>
+    <polygon points="556,110 546,104 546,116"/>
+    <polygon points="816,110 806,104 806,116"/>
+    <polygon points="920,216 914,206 926,206"/>
+    <polygon points="400,216 394,206 406,206"/>
+    <polygon points="556,270 546,264 546,276"/>
+    <polygon points="816,270 806,264 806,276"/>
+  </g>
+
+  <text x="48" y="330" fill="#6f8796" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">markers only · LLM never writes outside kaizenlog sections · local-first</text>
+</svg>

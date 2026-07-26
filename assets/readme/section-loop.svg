@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="140" viewBox="0 0 1200 140" role="img" aria-labelledby="t d">
+  <title id="t">Daily loop</title>
+  <desc id="d">Night generate and advise, morning handoff, terminal today and done.</desc>
+  <rect width="1200" height="140" rx="20" fill="#0f161c"/>
+  <text x="48" y="52" fill="#7a9e8f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" letter-spacing="2">DAILY LOOP</text>
+  <text x="48" y="96" fill="#eef3f6" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Hiragino Sans, Yu Gothic UI, Meiryo, sans-serif" font-size="36" font-weight="700">夜に計測し、朝に届き、日中に消化する</text>
+  <circle cx="1120" cy="70" r="28" fill="none" stroke="#3d9a7a" stroke-width="3"/>
+  <path d="M1110 70 h20 M1120 60 v20" stroke="#3d9a7a" stroke-width="3" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="120" viewBox="0 0 1200 120" role="img" aria-labelledby="t d">
+  <title id="t">Quick start</title>
+  <desc id="d">Install, setup, doctor, first run.</desc>
+  <rect width="1200" height="120" rx="18" fill="#0f161c"/>
+  <text x="48" y="48" fill="#e8a54b" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" letter-spacing="2">QUICK START</text>
+  <text x="48" y="88" fill="#eef3f6" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Hiragino Sans, Yu Gothic UI, Meiryo, sans-serif" font-size="32" font-weight="700">4コマンドで夜の自動ループまで</text>
+</svg>
