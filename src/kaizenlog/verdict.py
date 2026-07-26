@@ -195,8 +195,10 @@ def apply_verdicts_to_advice_note(
         new_lines.append(new_line)
     if not changed:
         return None
-    # 元 body の前後の改行を尊重
-    prefix_nl = "\n" if body.startswith("\n") or not body else "\n"
-    # 常に start タグ直後に改行、end タグ直前に改行を置く（既存 upsert と整合）
-    new_body = "\n" + "\n".join(new_lines) + "\n"
+    # 先頭・末尾にちょうど1つの改行を保証（splitlines の空要素に重ねて増殖させない）
+    new_body = "\n".join(new_lines)
+    if not new_body.startswith("\n"):
+        new_body = "\n" + new_body
+    if not new_body.endswith("\n"):
+        new_body = new_body + "\n"
     return content[:body_start] + new_body + content[end_idx:]

@@ -139,6 +139,84 @@ def test_validate_kzn_forbidden():
     assert any("KZN" in e for e in errs)
 
 
+def test_validate_fact_ids_not_shared_between_pair():
+    """件数は一致するが proposals[i] と actions[i] が根拠IDを共有しない（F7）。"""
+    data = _valid_data()
+    data["actions"][0]["fact_ids"] = ["F9"]  # proposals[0] は F3 のみ
+    errs = validate_advice(data, _evidence())
+    assert any("根拠IDが対応していません" in e for e in errs)
+
+
+def test_validate_f4_only_session_claim():
+    """F4 のみで会話/セッション断定 → JSON 層で意味違反（F2）。"""
+    data = _valid_data()
+    data["ai_review"] = [
+        {"fact_ids": ["F4"], "text": "セッションが細切れになっている"}
+    ]
+    errs = validate_advice(data, _evidence())
+    assert any("会話数・セッション数・往復数へ変換" in e for e in errs)
+
+
+def test_render_invariant_semantic_vs_structure(monkeypatch):
+    """意味違反のみ AdviceContractError、構造破壊は AdvisorError（F2）。"""
+    from kaizenlog.advisor import AdviceContractError, AdvisorError
+    import kaizenlog.advice_format as af
+
+    data = _valid_data()
+    evidence = _evidence()
+
+    # 意味違反のみ
+    monkeypatch.setattr(af, "validate_advice", lambda d, e: [])
+    monkeypatch.setattr(
+        "kaizenlog.advisor.advice_contract_errors",
+        lambda *a, **k: ["AI関連画面ブロック数を会話数・セッション数・往復数へ変換しています"],
+    )
+    monkeypatch.setattr(
+        "kaizenlog.advisor._semantic_contract_errors",
+        lambda *a, **k: ["AI関連画面ブロック数を会話数・セッション数・往復数へ変換しています"],
+    )
+    with pytest.raises(AdviceContractError):
+        af.render_advice_markdown(data, evidence)
+
+    # 構造違反が混じる
+    monkeypatch.setattr(
+        "kaizenlog.advisor.advice_contract_errors",
+        lambda *a, **k: ["見出し「### 今日の改善提案」は1回だけ使用してください"],
+    )
+    monkeypatch.setattr(
+        "kaizenlog.advisor._semantic_contract_errors",
+        lambda *a, **k: [],
+    )
+    with pytest.raises(AdvisorError, match="renderer bug"):
+        af.render_advice_markdown(data, evidence)
+
+
+def test_generate_advice_repairs_semantic_via_json(monkeypatch):
+    """意味違反 JSON が修復プロンプト経由で直る（F2c）。"""
+    from kaizenlog.advisor import generate_advice
+    from kaizenlog.config import LLMConfig
+    from tests.test_advice_evidence import VALID_ADVICE_JSON
+
+    bad = json.loads(VALID_ADVICE_JSON)
+    bad["ai_review"] = [
+        {"fact_ids": ["F4"], "text": "セッションが細切れになっている"}
+    ]
+    replies = iter([json.dumps(bad, ensure_ascii=False), VALID_ADVICE_JSON])
+    calls = []
+
+    def fake_generate(cfg, system, user):
+        calls.append(user)
+        return next(replies)
+
+    monkeypatch.setattr("kaizenlog.advisor.generate_text", fake_generate)
+    result = generate_advice(
+        LLMConfig(), "ログ", [], evidence=_evidence()
+    )
+    assert len(calls) == 2
+    assert "会話数・セッション数・往復数へ変換" in calls[1] or "違反" in calls[1]
+    assert "### 明日の最小アクション" in result
+
+
 # ---- render + roundtrip ----
 
 def test_render_golden():

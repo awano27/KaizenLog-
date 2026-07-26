@@ -102,6 +102,48 @@ def test_ai_friction_fragmentation_with_errors():
     assert "摩擦を伴う短セッション" in out[0].evidence
 
 
+def test_ai_friction_interruptions_not_cross_project():
+    """他PJの中断が fragmented だけのPJを摩擦にしない（F6）。"""
+    days = _days(4)
+    stats = []
+    for d in days:
+        stats.append({
+            "day": d.isoformat(),
+            "by_app": {},
+            "blocks": [],
+            "ai": {
+                "sessions": 3,
+                "fragmented": 2,
+                "tool_errors": 0,
+                "interruptions": 1,  # 日合算（旧形式の罠）
+                "projects": {
+                    "proj-a": {
+                        "sessions": 1, "turns": 2, "errors": 0,
+                        "fragmented": 0, "retry_chains": 0, "interruptions": 1,
+                    },
+                    "proj-b": {
+                        "sessions": 2, "turns": 2, "errors": 0,
+                        "fragmented": 2, "retry_chains": 0, "interruptions": 0,
+                    },
+                },
+            },
+        })
+    out = detect_ai_friction(stats)
+    titles = " ".join(o.title for o in out)
+    assert "proj-b" not in titles
+    # 旧形式: interruptions キー無し → 0 扱い
+    old = [
+        _day_stats(d, ai_projects={
+            "legacy": {"sessions": 2, "turns": 2, "errors": 0, "fragmented": 2},
+        })
+        for d in days
+    ]
+    # 日合算 interruptions があっても projects に無い
+    for s in old:
+        s["ai"]["interruptions"] = 5
+    assert detect_ai_friction(old) == []
+
+
 def test_ai_friction_by_errors():
     stats = [
         _day_stats(d, ai_projects={"vault": {"sessions": 1, "turns": 5,
@@ -174,4 +216,5 @@ def test_build_stats_aggregates_ai_projects():
     s = build_stats(date(2026, 7, 5), summary, sessions)
     assert s["ai_activity_blocks"] == summary.ai_activity_blocks
     assert s["ai"]["projects"]["ai-news"] == {
-        "sessions": 2, "turns": 6, "errors": 2, "fragmented": 1, "retry_chains": 0}
+        "sessions": 2, "turns": 6, "errors": 2, "fragmented": 1,
+        "retry_chains": 0, "interruptions": 0}

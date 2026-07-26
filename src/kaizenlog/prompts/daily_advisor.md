@@ -83,8 +83,8 @@ KaizenLog が決定論的に組み立てます。
 - `pass` は**可能な限り**機械構文 `指標 演算子 数値`（例: `context_switches <= 40`、
   `category_minutes:エンタメ <= 30`）。翌晩に自動判定される
   使用可能指標: `context_switches` / `total_active_minutes` / `ai_cc_sessions` /
-  `ai_fragmented_sessions` / `ai_tool_errors` / `ai_interruptions` / `ai_avg_turns` /
-  `focus_blocks` / `focus_minutes` / `input_keypresses` /
+  `ai_fragmented_sessions` / `ai_retry_chains` / `ai_tool_errors` / `ai_interruptions` /
+  `ai_avg_turns` / `focus_blocks` / `focus_minutes` / `input_keypresses` /
   `category_minutes:<カテゴリ名>` / `site_minutes:<ドメイン>`
   測れない行動のみ、数値を含む自由文でよい
 - 全テキストフィールドに改行を入れない（`plan_review` のみ改行可）

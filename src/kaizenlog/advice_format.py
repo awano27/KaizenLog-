@@ -130,11 +130,12 @@ def validate_advice(data: dict, evidence: AdviceEvidence) -> list[str]:
             errors.append(str(e))
         return errors
 
-    # 意味検証: 全テキストを結合して既存セマンティックガードを再利用
+    # 意味検証: 結合テキスト + fact_ids 文脈付き per-item ガード
     from .advisor import _semantic_contract_errors
 
     joined = _join_text_fields(data)
     errors.extend(_semantic_contract_errors(joined, evidence))
+    errors.extend(_fact_context_semantic_errors(data, evidence))
     return errors
 
 
@@ -156,6 +157,86 @@ def _join_text_fields(data: dict) -> str:
                 if isinstance(v, str):
                     parts.append(v)
     return "\n".join(parts)
+
+
+def _item_fact_ids(item: dict) -> set[str]:
+    raw = item.get("fact_ids") or []
+    if not isinstance(raw, list):
+        return set()
+    out: set[str] = set()
+    for t in raw:
+        n = _norm_fact_id(t) if isinstance(t, str) else None
+        if n:
+            out.add(n)
+    return out
+
+
+def _item_text(item: dict) -> str:
+    parts: list[str] = []
+    for k, v in item.items():
+        if k == "fact_ids":
+            continue
+        if isinstance(v, str):
+            parts.append(v)
+    return "。".join(parts)
+
+
+def _fact_context_semantic_errors(
+    data: dict, evidence: AdviceEvidence
+) -> list[str]:
+    """fact_ids を文脈として使う意味ガード（JSON 層で F4/F1 系を捕捉）。
+
+    _join_text_fields は fact_ids を落とすため、Markdown 向けの文中 [F#]
+    前提ガードが JSON 経路で効かない。item 単位で同じ禁止推論を判定する。
+    """
+    from .advisor import _has_uncertainty_language, _observed_clause
+
+    errors: list[str] = []
+    conversion = re.compile(r"会話|セッション|往復")
+    unsupported_cause = re.compile(
+        r"(?:通知|割り込み|中断|(?:生産性|集中力).{0,6}(?:低下|下が|悪化))"
+    )
+
+    def is_measurement_instruction(clause: str) -> bool:
+        return (
+            bool(re.search(r"記録|計測|測定|確認|設定|目標|条件", clause))
+            and not bool(re.search(r"した|だった|発生した|実績", clause))
+        )
+
+    for key in ("proposals", "actions", "ai_review"):
+        items = data.get(key) or []
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            facts = _item_fact_ids(item)
+            text = _item_text(item)
+            if not text.strip():
+                continue
+            for sentence in re.split(r"[。\n]", text):
+                clause = _observed_clause(sentence.strip())
+                if not clause:
+                    continue
+                if _has_uncertainty_language(clause) or is_measurement_instruction(clause):
+                    continue
+                if (
+                    "[F4]" in facts
+                    and "[F5]" not in facts
+                    and conversion.search(clause)
+                ):
+                    msg = "AI関連画面ブロック数を会話数・セッション数・往復数へ変換しています"
+                    if msg not in errors:
+                        errors.append(msg)
+                if (
+                    facts & {"[F1]", "[F8]", "[F9]"}
+                    and "[F5]" not in facts
+                    and unsupported_cause.search(clause)
+                ):
+                    msg = "カテゴリ変更回数を通知・割り込み・生産性低下へ変換しています"
+                    if msg not in errors:
+                        errors.append(msg)
+    return errors
 
 
 def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
@@ -272,12 +353,20 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
 
 def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
     """検証済み JSON を現行契約互換の Markdown にレンダリングする。"""
-    from .advisor import AdvisorError, advice_contract_errors
+    from .advisor import (
+        AdviceContractError,
+        AdvisorError,
+        _semantic_contract_errors,
+        advice_contract_errors,
+    )
 
     # 念のため再検証（呼び出し側が validate 済みでも壊れを防ぐ）
     errs = validate_advice(data, evidence)
     if errs:
-        raise AdvisorError("renderer bug: invalid data passed to render: " + errs[0])
+        # validate 失敗は LLM 契約違反（レンダラバグではない）
+        raise AdviceContractError(
+            "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errs)
+        )
 
     lines: list[str] = []
     plan = data.get("plan_review")
@@ -319,8 +408,16 @@ def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
 
     rendered = "\n".join(lines).rstrip() + "\n"
 
-    # レンダラのインバリアント: 旧 Markdown 契約を満たすこと
+    # レンダラのインバリアント: 旧 Markdown 契約を満たすこと。
+    # 意味違反のみなら AdviceContractError（修復・L2 縮退へ）。
+    # 構造エラーが混じる場合だけ renderer bug。
     contract_errs = advice_contract_errors(rendered, evidence)
     if contract_errs:
+        semantic_errs = _semantic_contract_errors(rendered, evidence)
+        if set(contract_errs) <= set(semantic_errs):
+            raise AdviceContractError(
+                "LLMの改善提案が保存条件を満たしませんでした:\n- "
+                + "\n- ".join(contract_errs)
+            )
         raise AdvisorError("renderer bug: " + "; ".join(contract_errs))
     return rendered

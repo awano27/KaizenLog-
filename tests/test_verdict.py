@@ -199,6 +199,35 @@ def test_apply_verdicts_idempotent_and_skips_outside_advice():
     assert again is None
 
 
+def test_apply_verdicts_does_not_accumulate_blank_lines():
+    """判定書き込みを複数回しても ADVICE 区間の空行数が増えない（F1）。"""
+    content = upsert_section(
+        "---\ndate: 2026-07-24\n---\n",
+        ADVICE_MARKER,
+        "## Kaizen\n- [ ] KZN-20260724-001: a｜PASS: context_switches <= 40｜FAIL: x\n",
+    )
+    blank_counts: list[int] = []
+    for value in (30.0, 35.0, 40.0):
+        entry = MemoryEntry(
+            id="KZN-20260724-001",
+            date="2026-07-24",
+            action="a｜PASS: context_switches <= 40｜FAIL: x",
+            verdict="pass" if value <= 40 else "fail",
+            verdict_value=value,
+            verdict_date="2026-07-25",
+        )
+        updated = apply_verdicts_to_advice_note(content, [entry])
+        assert updated is not None
+        content = updated
+        section = extract_section(content, ADVICE_MARKER) or ""
+        # extract_section は strip するため raw body の空行を直接数える
+        start = content.find(f"<!-- {ADVICE_MARKER}:start -->")
+        end = content.find(f"<!-- {ADVICE_MARKER}:end -->")
+        body = content[start + len(f"<!-- {ADVICE_MARKER}:start -->"):end]
+        blank_counts.append(sum(1 for ln in body.splitlines() if ln.strip() == ""))
+    assert blank_counts[0] == blank_counts[1] == blank_counts[2]
+
+
 # ---- advice_contract_errors ----
 
 def test_advice_contract_machine_pass_known_and_unknown():

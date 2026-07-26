@@ -871,18 +871,39 @@ def generate_advice(
             return None, [str(e)]
         return data, validate_advice(data, evidence_ctx)
 
-    data, errors = _try_parse_and_validate(raw)
-    if errors:
-        # 形式違反は1回だけ JSON 修復を試みる（失敗後は L2 縮退保存が受ける）
-        print(f"⚠️  出力契約違反を検出、1回だけ修復を試みます: {errors[0]}")
-        repair_prompt = _contract_repair_prompt(evidence_ctx, raw, errors)
+    def _repair_once(source: str, errs: list[str]) -> str:
+        print(f"⚠️  出力契約違反を検出、1回だけ修復を試みます: {errs[0]}")
+        repair_prompt = _contract_repair_prompt(evidence_ctx, source, errs)
         if redactor:
             repair_prompt = redactor(repair_prompt)
-        raw = generate_text(cfg, system_prompt, repair_prompt)
+        return generate_text(cfg, system_prompt, repair_prompt)
+
+    data, errors = _try_parse_and_validate(raw)
+    repaired = False
+    if errors:
+        # 形式違反は1回だけ JSON 修復を試みる（失敗後は L2 縮退保存が受ける）
+        raw = _repair_once(raw, errors)
+        repaired = True
         data, errors = _try_parse_and_validate(raw)
     if errors or data is None:
         raise AdviceContractError(
             "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errors)
         )
-    markdown = render_advice_markdown(data, evidence_ctx)
+    try:
+        markdown = render_advice_markdown(data, evidence_ctx)
+    except AdviceContractError as e:
+        # validate 通過後でもレンダ側で意味違反が残るケース → 未修復なら1回だけ再試行
+        if repaired:
+            raise
+        err_list = [line.lstrip("- ").strip() for line in str(e).splitlines() if line.strip()]
+        # 先頭の説明行を除き違反リストを渡す
+        if err_list and "保存条件" in err_list[0]:
+            err_list = err_list[1:] or [str(e)]
+        raw = _repair_once(raw, err_list)
+        data, errors = _try_parse_and_validate(raw)
+        if errors or data is None:
+            raise AdviceContractError(
+                "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errors)
+            )
+        markdown = render_advice_markdown(data, evidence_ctx)
     return f"## 🚀 Kaizen（AIからの改善提案）\n\n{markdown}"

@@ -131,21 +131,19 @@ def detect_ai_friction(stats: list[dict]) -> list[PatternCandidate]:
     session_total: dict[str, int] = defaultdict(int)
     for day in stats:
         ai = day.get("ai") or {}
-        day_interruptions = int(ai.get("interruptions") or 0)
         for project, p in (ai.get("projects") or {}).items():
             if not isinstance(p, dict):
                 continue
             session_total[project] += int(p.get("sessions") or 0)
             errors = int(p.get("errors") or 0)
             retries = int(p.get("retry_chains") or 0)
+            # プロジェクト別 interruptions。旧形式 stats に無い場合は 0 扱い。
+            # 日合算 ai.interruptions へのフォールバックはしない（他PJへの誤帰属を防ぐ）。
+            interruptions = int(p.get("interruptions") or 0)
             error_total[project] += errors
             retry_total[project] += retries
             fragmented = int(p.get("fragmented") or 0)
-            companion = (
-                errors > 0
-                or retries > 0
-                or day_interruptions > 0
-            )
+            companion = errors > 0 or retries > 0 or interruptions > 0
             # fragmented 単独は摩擦にしない（成功した短セッションと区別）
             if fragmented > 0 and companion:
                 friction_short_days[project] += 1

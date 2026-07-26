@@ -75,7 +75,7 @@ allowed-tools: "Read Glob Grep Edit"
 - 「ブラウジング」は中立カテゴリ。エンタメ等の直接根拠なしに私用・娯楽と断定しない
 - コンテキストスイッチはカテゴリ変更であり、通知・割り込みを直接示さない
 - タイムラインとサイト別表は部分観測。欠落を0、一部の表示行を一日全体と扱わない
-- AI会話の品質は明示されたClaude Code等のテレメトリだけで評価し、無ければ測定不能とする
+- AI会話の品質は明示されたAIテレメトリ（Claude Code / Codex CLI 等）だけで評価し、無ければ測定不能とする
 - 単日の絶対値だけで問題視せず、計画との差、過去中央値との差、反復パターンを優先する
 - 憶測で断定しない。分析中は根拠ID `[F#]` で照合するが、保存する文章にはF-IDを表示しない
 - 当日の記録が120分未満なら問題を作らず、維持したい行動を最大1件だけ提案する
@@ -86,8 +86,8 @@ allowed-tools: "Read Glob Grep Edit"
 - PASS は可能な限り機械構文 `指標 演算子 数値`（例: `context_switches <= 40`、
   `category_minutes:エンタメ <= 30`）。翌晩 `kaizenlog generate` が自動判定する。
   指標: context_switches / total_active_minutes / ai_cc_sessions /
-  ai_fragmented_sessions / ai_tool_errors / ai_interruptions / ai_avg_turns /
-  focus_blocks / focus_minutes / input_keypresses /
+  ai_fragmented_sessions / ai_retry_chains / ai_tool_errors / ai_interruptions /
+  ai_avg_turns / focus_blocks / focus_minutes / input_keypresses /
   category_minutes:<名> / site_minutes:<ドメイン>。測れない行動のみ自由文＋数値
 - `suggestions.jsonl` は読むだけ。書き込みは `kaizenlog advise` 側のID採番に任せる
 - 合計400〜800字程度に収める。長文化しない

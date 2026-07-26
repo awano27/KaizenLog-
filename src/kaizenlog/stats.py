@@ -39,18 +39,33 @@ def build_stats(
     for s in cc_sessions:
         p = projects.setdefault(
             s.project,
-            {"sessions": 0, "turns": 0, "errors": 0, "fragmented": 0, "retry_chains": 0},
+            {
+                "sessions": 0,
+                "turns": 0,
+                "errors": 0,
+                "fragmented": 0,
+                "retry_chains": 0,
+                "interruptions": 0,
+            },
         )
         p["sessions"] += 1
         p["turns"] += s.user_turns
         p["errors"] += s.tool_errors
         p["fragmented"] += 1 if s.is_fragmented else 0
+        p["interruptions"] = p.get("interruptions", 0) + s.interruptions
 
     chains = retry_chains or []
     for chain in chains:
         p = projects.setdefault(
             chain.project,
-            {"sessions": 0, "turns": 0, "errors": 0, "fragmented": 0, "retry_chains": 0},
+            {
+                "sessions": 0,
+                "turns": 0,
+                "errors": 0,
+                "fragmented": 0,
+                "retry_chains": 0,
+                "interruptions": 0,
+            },
         )
         p["retry_chains"] = p.get("retry_chains", 0) + 1
 

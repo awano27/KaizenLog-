@@ -15,6 +15,23 @@ from .config import LLMConfig
 
 NIPPOU_MARKER_HEADING = "## 📝 日報ドラフト"
 
+# stats.ai.sources キー → 日報表示名
+_AI_SOURCE_LABELS = {
+    "claude-code": "Claude Code",
+    "codex": "Codex CLI",
+}
+
+
+def _format_ai_agent_names(ai: dict) -> str:
+    """ai.sources から表示名を組み立てる。旧形式は Claude Code 固定。"""
+    sources = ai.get("sources")
+    if not isinstance(sources, dict) or not sources:
+        return "Claude Code"
+    labels: list[str] = []
+    for key in sorted(sources.keys()):
+        labels.append(_AI_SOURCE_LABELS.get(str(key), str(key)))
+    return " / ".join(labels) if labels else "Claude Code"
+
 NIPPOU_SYSTEM_PROMPT = """\
 あなたはユーザーの作業ログから、上司やチームに提出する日報の下書きを作るアシスタントです。
 
@@ -136,7 +153,10 @@ def generate_nippou_deterministic(
         lines.append(f"- 合計 {_fmt_minutes(total)} の作業を実施")
     ai = stats.get("ai", {})
     if ai.get("sessions", 0) > 0:
-        lines.append(f"- AIエージェント（Claude Code）を{ai['sessions']}セッション活用")
+        lines.append(
+            f"- AIエージェント（{_format_ai_agent_names(ai)}）を"
+            f"{ai['sessions']}セッション活用"
+        )
     lines.append("")
 
     lines.append("【明日の予定】")
