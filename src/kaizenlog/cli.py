@@ -144,11 +144,22 @@ def _notify(cfg: Config, title: str, message: str, **kwargs) -> bool | None:
     result = notify(title, message, **kwargs)
     # False のみ失敗。None は送出未試行（スキップ）なので runlog に残さない
     if result is False:
+        print(f"⚠️  Windows 通知の送出に失敗しました: {title}", file=sys.stderr)
         _safe_log_notify_failed(cfg, f"{title}: {message[:80]}")
     return result
 
 
-def cmd_generate(cfg: Config, day: date) -> Path:
+def cmd_generate(
+    cfg: Config,
+    day: date,
+    *,
+    skip_verdict_ids: set[str] | None = None,
+) -> Path:
+    """日次 generate。
+
+    skip_verdict_ids: 同一プロセスで retro-advise したばかりの KZN を判定から除外する。
+    判定は「実行機会があった提案のみ」— 数秒前に生まれた提案に即 PASS/FAIL を付けない。
+    """
     tz = ZoneInfo(cfg.timezone)
     day_start = datetime.combine(day, time.min, tzinfo=tz)
     day_end = day_start + timedelta(days=1)
@@ -168,15 +179,20 @@ def cmd_generate(cfg: Config, day: date) -> Path:
                               input_stats=input_stats)
 
     ai_sessions = []
+    day_prompts = []
     day_retry_chains = []
     retry_chain_count: int | None = None
+    pricing = cfg.aiwork.pricing or None
     if cfg.aiwork.enabled:
         adapters = available_adapters(cfg)
         ai_sessions, day_prompts = collect_ai_telemetry(adapters, day_start, day_end)
         day_retry_chains = detect_retry_chains(day_prompts)
         retry_chain_count = len(day_retry_chains)
         aiwork_md = render_aiwork_markdown(
-            ai_sessions, tz, retry_chain_count=retry_chain_count
+            ai_sessions,
+            tz,
+            retry_chain_count=retry_chain_count,
+            pricing=pricing,
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
@@ -198,18 +214,32 @@ def cmd_generate(cfg: Config, day: date) -> Path:
         activity_md=section,
         retry_chains=day_retry_chains if cfg.aiwork.enabled else None,
         afk_watcher_available=afk_ok,
+        pricing=pricing,
     )
 
     # 実験の実測追記: running 全件 + adopted（deadline から30日以内のみ）
+    from .promptmine import count_cluster_matches
+
     experiments = load_experiments(cfg.experiments_path)
     for exp in experiments:
         if not should_measure_experiment(exp, day):
             continue
-        value = compute_metric(
-            exp.metric, summary, ai_sessions, input_stats,
-            retry_chains=retry_chain_count,
-            known_categories=known_cats,
-        )
+        # prompt_cluster: compute_metric を汚さずループ側で件数算出
+        if exp.metric.startswith("prompt_cluster:"):
+            if not exp.cluster_rep:
+                print(
+                    f"⚠️  実験「{exp.title}」の prompt_cluster に cluster_rep が無いためスキップ"
+                )
+                continue
+            value = float(
+                count_cluster_matches(day_prompts, exp.cluster_rep)
+            )
+        else:
+            value = compute_metric(
+                exp.metric, summary, ai_sessions, input_stats,
+                retry_chains=retry_chain_count,
+                known_categories=known_cats,
+            )
         if value is None:
             print(f"⚠️  実験「{exp.title}」の指標 {exp.metric} は不明のためスキップしました")
             continue
@@ -241,6 +271,8 @@ def cmd_generate(cfg: Config, day: date) -> Path:
         retry_chains=retry_chain_count,
         known_categories=known_cats,
     )
+    if skip_verdict_ids:
+        judged = [e for e in judged if e.id not in skip_verdict_ids]
     if judged:
         append_entries(cfg.memory_path, judged)
         for entry in judged:
@@ -324,14 +356,19 @@ def _write_actions_handoff(
     print(f"📌 今日のアクションを転記しました: {path}")
 
 
-def catch_up_yesterday(cfg: Config, today: date) -> None:
+def catch_up_yesterday(cfg: Config, today: date) -> set[str]:
     """前夜に走らなかった日の追いつき（昨日のみ）。
 
     1) 昨日の stats が無ければ generate（一昨日分の判定も generate 内で走る）
     2) ACTIVITY あり ADVICE なしなら advise（retro-advise: 今日向けアクションになる）
     失敗は警告＋runlog に留め、呼び出し元を止めない。
+
+    戻り値: retro-advise で新規作成した KZN ID 集合（同一プロセスの直後 generate で
+    判定除外に使う）。リトライは generate_text 内部に任せ、ここでの追加リトライはしない
+    （主 advise を優先し、retro 失敗は即座に諦めて当日処理へ）。
     """
     yesterday = today - timedelta(days=1)
+    new_ids: set[str] = set()
     # generate: stats 欠損時のみ
     try:
         if missing_days(cfg.stats_path, today, 1) == [yesterday]:
@@ -357,25 +394,31 @@ def catch_up_yesterday(cfg: Config, today: date) -> None:
 
     # retro-advise: ACTIVITY あり・ADVICE なしのときだけ（今日向けアクションが価値あり）
     if cfg.llm.backend == "none":
-        return
+        return new_ids
     try:
         store = DailyNoteStore(cfg.daily_notes_path)
         note = store.read(yesterday)
         if not note:
-            return
+            return new_ids
         if extract_section(note, ACTIVITY_MARKER) is None:
-            return
+            return new_ids
         if extract_section(note, ADVICE_MARKER) is not None:
-            return
+            return new_ids
         print(f"🔄 追いつき: {yesterday.isoformat()} の advise を実行します")
+        before_ids = {e.id for e in load_entries(cfg.memory_path)}
         t0 = monotonic()
         try:
+            # AdvisorError 含め例外は握り、追加リトライせず当日処理へ（主 advise 優先）
             cmd_advise(cfg, yesterday, dry_run=False)
             log_run(
                 cfg.logs_path, "advise", ok=True,
                 duration_seconds=monotonic() - t0,
                 retention_days=cfg.log_retention_days,
             )
+            yiso = yesterday.isoformat()
+            for e in load_entries(cfg.memory_path):
+                if e.id not in before_ids and e.date == yiso:
+                    new_ids.add(e.id)
         except Exception as e:
             print(f"⚠️  追いつき advise 失敗: {e}", file=sys.stderr)
             log_run(
@@ -386,6 +429,7 @@ def catch_up_yesterday(cfg: Config, today: date) -> None:
             )
     except Exception as e:
         print(f"⚠️  追いつき advise 判定に失敗: {e}", file=sys.stderr)
+    return new_ids
 
 
 def build_morning_notification(
@@ -918,7 +962,17 @@ def cmd_prompts(cfg: Config, days: int, end_day: date, min_count: int) -> None:
     start = end - timedelta(days=days)
     adapters = available_adapters(cfg) if cfg.aiwork.enabled else []
     _, prompts = collect_ai_telemetry(adapters, start, end)
-    print(render_prompt_report(prompts, days=days, min_count=min_count))
+    tracking: list[tuple[str, str]] = []
+    for exp in load_experiments(cfg.experiments_path):
+        if exp.status not in ("running", "adopted"):
+            continue
+        if exp.metric.startswith("prompt_cluster:") and exp.cluster_rep:
+            tracking.append((exp.cluster_rep, exp.title))
+    print(
+        render_prompt_report(
+            prompts, days=days, min_count=min_count, tracking=tracking
+        )
+    )
 
 
 def _resolve_pre_start_baseline(cfg: Config, metric: str, today: date) -> float | None:
@@ -1106,6 +1160,12 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--days", type=int, default=14, help="遡る日数（デフォルト14）")
     pr.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
     pr.add_argument("--min-count", type=int, default=3, help="レポートする最低反復回数（デフォルト3）")
+    wc = sub.add_parser(
+        "weekly-context",
+        help="週次レビュー用の決定論コンテキストを出力（LLM不使用）",
+    )
+    wc.add_argument("--week", help="対象週 YYYY-Www（月曜始まり）")
+    wc.add_argument("--date", help="この日を含む週（--week より優先されない）")
     blk = sub.add_parser("block", help="時間泥棒からLeechBlockのブロックルールを生成（介入）")
     blk.add_argument("--days", type=int, default=14, help="分析する日数（デフォルト14）")
     blk.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
@@ -1251,6 +1311,29 @@ def main(argv: list[str] | None = None) -> int:
         cmd_prompts(cfg, args.days, end_day, args.min_count)
         return 0
 
+    if args.command == "weekly-context":
+        from .weekly_context import monday_of, parse_iso_week, render_weekly_context
+
+        tz = ZoneInfo(cfg.timezone)
+        if args.week:
+            try:
+                week_start = parse_iso_week(args.week)
+            except ValueError as e:
+                print(f"❌ {e}", file=sys.stderr)
+                return 1
+        else:
+            ref = _parse_date(args.date, tz)
+            week_start = monday_of(ref)
+        print(
+            render_weekly_context(
+                cfg.stats_path,
+                cfg.memory_path,
+                cfg.experiments_path,
+                week_start,
+            )
+        )
+        return 0
+
     if args.command == "block":
         tz = ZoneInfo(cfg.timezone)
         end_day = _parse_date(args.date, tz)
@@ -1275,13 +1358,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in ("generate", "run"):
             # 日付指定のない通常実行では、直近の欠損日を先に自動補完する
             # （dry-runは書き込みを伴うため補完しない）
+            skip_verdict: set[str] = set()
             if not args.date and cfg.auto_backfill_days > 0 and not dry_run:
                 if missing_days(cfg.stats_path, day, cfg.auto_backfill_days):
                     cmd_backfill(cfg, cfg.auto_backfill_days, day)
                 # 前夜に advise まで走らなかった日の retro-advise（冪等）
-                catch_up_yesterday(cfg, day)
+                # 直後 generate で同日 retro 分を即判定しないよう ID を返す
+                skip_verdict = catch_up_yesterday(cfg, day)
             if not dry_run:
-                cmd_generate(cfg, day)
+                cmd_generate(cfg, day, skip_verdict_ids=skip_verdict or None)
         if args.command in ("advise", "run"):
             cmd_advise(cfg, day, dry_run=dry_run)
     except (ActivityWatchError, AdvisorError, PrivacyError) as e:

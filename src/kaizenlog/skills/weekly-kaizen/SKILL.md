@@ -14,15 +14,17 @@ description: 直近1週間のKaizenLogアクティビティログとデイリー
 1. **対象週の特定**: 今日を含む週（月曜始まり）を対象とする。引数で `--week 2026-W27` の
    ような指定があればその週を使う。
 
-2. **データ収集**: `01 Daily Notes/` から対象週の7日分のデイリーノート
-   （`YYYY-MM-DD.md`）を読む。各ノートから以下を収集する:
-   - `<!-- kaizenlog:activity:start -->` 区間: カテゴリ別時間・AI作業の内訳・
-     「AI作業の質（Claude Code）」・コンテキストスイッチ回数
-   - `<!-- kaizenlog:advice:start -->` 区間: その日の改善提案
+2. **データ収集（一次データは集約コマンド）**:
+   まず `kaizenlog weekly-context`（任意で `--week YYYY-Www`）を実行し、その stdout を
+   **一次データ**とする（日別カテゴリ・AI推移・消化率/PASS率・実験サマリー・記録なし日が
+   決定論で揃う）。トークンと幻覚面積を削るため、ここを主材料にする。
+
+   デイリーノートの生読みは次に限定する:
    - 手書きの Today's Focus / Tasks / Reflections
-   存在しない日はスキップし、レビューに「記録なし」と明記する。
-   あわせて `Kaizen/Memory/suggestions.jsonl` を読み、対象週の提案・status・
-   verdict（pass/fail）を集計材料にする。
+   - 提案本文の確認（`<!-- kaizenlog:advice:start -->` が必要なときだけ）
+
+   `weekly-context` が使えない場合は従来どおり `01 Daily Notes/` の7日分と
+   `Kaizen/Memory/suggestions.jsonl` を直接読む（記録なし日はレビューに明記）。
 
 3. **関連コンテキスト**: `02 Projects/` に進行中プロジェクトのノートがあれば読み、
    今週の作業がどのプロジェクトに対応するか突き合わせる。

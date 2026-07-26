@@ -658,6 +658,28 @@ def _observed_value_restatement_errors(sections: dict[str, str]) -> list[str]:
     return []
 
 
+# requires_daily_contract が真の同梱日本語プロンプト（daily_advisor / privacy_safe）専用。
+# 英語版プロンプトを追加する場合は、このキーワード表に対訳を足すこと（沈黙劣化防止）。
+_JA_ENTERTAINMENT_RE = re.compile(
+    r"(?:(?:娯楽|私用|エンタメ).{0,12}(?:利用|閲覧|視聴|浪費|費や|食い込|多い|発生)"
+    r"|ブラウジング.{0,12}(?:娯楽|私用))"
+)
+_JA_AI_NUMERIC_RE = re.compile(
+    r"(?:\d+(?:\.\d+)?\s*(?:回|件)?\s*(?:往復|発話|会話セッション)"
+    r"|(?:往復|発話|会話セッション)(?:数)?\s*(?:は|が|:|：)?\s*\d+)"
+)
+_JA_AI_QUALITY_RE = re.compile(
+    r"(?:(?:会話|セッション|往復).{0,12}(?:多い|少ない|短い|長い|細切れ|過多|多発)"
+    r"|(?:往復過多|会話品質|AI品質))"
+)
+_JA_F4_CONVERSION_RE = re.compile(r"会話|セッション|往復")
+_JA_NOTIFY_CAUSE_RE = re.compile(
+    r"(?:通知|割り込み|中断|(?:生産性|集中力).{0,6}(?:低下|下が|悪化))"
+)
+_JA_MEASURE_INSTRUCTION_RE = re.compile(r"記録|計測|測定|確認|設定|目標|条件")
+_JA_MEASURE_PAST_RE = re.compile(r"した|だった|発生した|実績")
+
+
 def _semantic_contract_errors(advice: str, evidence: AdviceEvidence) -> list[str]:
     """今回の根本原因になった既知の禁止推論を決定論的に止める。"""
     errors: list[str] = []
@@ -665,15 +687,12 @@ def _semantic_contract_errors(advice: str, evidence: AdviceEvidence) -> list[str
 
     def is_measurement_instruction(clause: str) -> bool:
         return (
-            bool(re.search(r"記録|計測|測定|確認|設定|目標|条件", clause))
-            and not bool(re.search(r"した|だった|発生した|実績", clause))
+            bool(_JA_MEASURE_INSTRUCTION_RE.search(clause))
+            and not bool(_JA_MEASURE_PAST_RE.search(clause))
         )
 
     if not evidence.entertainment_observed:
-        entertainment_claim = re.compile(
-            r"(?:(?:娯楽|私用|エンタメ).{0,12}(?:利用|閲覧|視聴|浪費|費や|食い込|多い|発生)"
-            r"|ブラウジング.{0,12}(?:娯楽|私用))"
-        )
+        entertainment_claim = _JA_ENTERTAINMENT_RE
         for sentence in sentences:
             clause = _observed_clause(sentence)
             if (
@@ -685,14 +704,6 @@ def _semantic_contract_errors(advice: str, evidence: AdviceEvidence) -> list[str
                 break
 
     if not evidence.ai_conversation_metrics_available:
-        numeric_ai_claim = re.compile(
-            r"(?:\d+(?:\.\d+)?\s*(?:回|件)?\s*(?:往復|発話|会話セッション)"
-            r"|(?:往復|発話|会話セッション)(?:数)?\s*(?:は|が|:|：)?\s*\d+)"
-        )
-        unsupported_ai_quality = re.compile(
-            r"(?:(?:会話|セッション|往復).{0,12}(?:多い|少ない|短い|長い|細切れ|過多|多発)"
-            r"|(?:往復過多|会話品質|AI品質))"
-        )
         for sentence in sentences:
             clause = _observed_clause(sentence)
             ai_fragmentation_claim = (
@@ -701,8 +712,8 @@ def _semantic_contract_errors(advice: str, evidence: AdviceEvidence) -> list[str
             )
             if (
                 (
-                    numeric_ai_claim.search(clause)
-                    or unsupported_ai_quality.search(clause)
+                    _JA_AI_NUMERIC_RE.search(clause)
+                    or _JA_AI_QUALITY_RE.search(clause)
                     or ai_fragmentation_claim
                 )
                 and not _has_uncertainty_language(clause)
@@ -712,13 +723,12 @@ def _semantic_contract_errors(advice: str, evidence: AdviceEvidence) -> list[str
                 break
 
     if "[F4]" in evidence.fact_ids:
-        conversion = re.compile(r"会話|セッション|往復")
         for sentence in sentences:
             clause = _observed_clause(sentence)
             if (
                 "[F4]" in clause
                 and "[F5]" not in clause
-                and conversion.search(clause)
+                and _JA_F4_CONVERSION_RE.search(clause)
                 and not _has_uncertainty_language(clause)
                 and not is_measurement_instruction(clause)
             ):
@@ -726,15 +736,12 @@ def _semantic_contract_errors(advice: str, evidence: AdviceEvidence) -> list[str
                 break
 
     if "[F1]" in evidence.fact_ids:
-        unsupported_cause = re.compile(
-            r"(?:通知|割り込み|中断|(?:生産性|集中力).{0,6}(?:低下|下が|悪化))"
-        )
         for sentence in sentences:
             clause = _observed_clause(sentence)
             if (
                 any(f"[F{fact_id}]" in clause for fact_id in (1, 8, 9))
                 and "[F5]" not in clause
-                and unsupported_cause.search(clause)
+                and _JA_NOTIFY_CAUSE_RE.search(clause)
                 and not _has_uncertainty_language(clause)
                 and not is_measurement_instruction(clause)
             ):

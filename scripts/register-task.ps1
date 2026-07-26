@@ -61,7 +61,9 @@ try {
     # これがないとタスクは C:\Windows\System32 で実行され、カレント優先の設定解決
     # （./kaizenlog.toml → %APPDATA%）により手動実行と別の設定を拾う事故が起きる。
     $workDir = (Get-Location).Path
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+    # ExecutionTimeLimit: 最悪ケース（主 backend 600s×3 + フォールバック同様 + retro-advise）
+    # で advise が 1 時間超になり得るため 3 時間。1h だと途中 kill で log_run/通知が残らない。
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 3)
 
     $timeExplicit = $PSBoundParameters.ContainsKey('Time')
     $dailyExists = Test-TaskExists $TaskName

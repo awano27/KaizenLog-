@@ -53,6 +53,15 @@ description: KaizenLogが検出した繰り返しパターンから自動化コ�
    `kaizenlog experiment new --title "朝のニュース巡回を自動化で置換" --metric "category_minutes:ブラウジング" --target "<= 30" --days 14`
    コマンドが使えなければ `03 Areas/Kaizen Experiments/` に既存実験と同じ形式で直接書く。
 
+   **繰り返しプロンプトをスキル化した場合（必須）**: 生依頼が減ったかを測るため、
+   実験ノートに次を必ず入れる:
+   - `metric: prompt_cluster:<slug>`（slug はスキル名など）
+   - `cluster_rep: <正規化代表文>` — `kaizenlog prompts` のクラスタ代表（正規化済み）から採る。
+     **機密を含む生の依頼全文をそのまま書かない**
+   - `target: "<= 0"`（スキル化後は同型の生依頼が0件/日を目標）
+   - `deadline` は14日後
+   毎晩の `generate` が `cluster_rep` 類似の依頼件数を自動計測する。
+
 6. **報告**: 最後に以下を簡潔にまとめる:
    - 実装した自動化（ブランチ/PR/提案ノートへのリンク）
    - 見送った候補とその理由

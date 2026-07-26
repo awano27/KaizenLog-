@@ -40,6 +40,25 @@ def normalize(text: str) -> str:
     return t[:200]
 
 
+def count_cluster_matches(
+    prompts: list[UserPrompt],
+    representative: str,
+    similarity: float = DEFAULT_SIMILARITY,
+) -> int:
+    """正規化済み代表文に類似する依頼の件数（クラスタリングと同じ閾値既定 0.6）。"""
+    rep = (representative or "").strip()
+    if not rep:
+        return 0
+    n = 0
+    for p in prompts:
+        norm = normalize(p.text)
+        if not norm:
+            continue
+        if SequenceMatcher(None, norm, rep).ratio() >= similarity:
+            n += 1
+    return n
+
+
 def cluster_prompts(
     prompts: list[UserPrompt], similarity: float = DEFAULT_SIMILARITY
 ) -> list[PromptCluster]:
@@ -90,7 +109,13 @@ def render_prompt_report(
     days: int,
     min_count: int = DEFAULT_MIN_COUNT,
     max_clusters: int = 10,
+    tracking: list[tuple[str, str]] | None = None,
 ) -> str:
+    """prompts レポート。
+
+    tracking: (cluster_rep 正規化文, 実験タイトル) のリスト。
+    代表文が一致するクラスタに「📉 追跡中」を付記する。
+    """
     header = f"# 💬 プロンプト資産化レポート（過去{days}日・依頼{len(prompts)}件）\n"
     if not prompts:
         return header + (
@@ -101,6 +126,11 @@ def render_prompt_report(
     clusters.sort(key=lambda c: -c.count)
     if not clusters:
         return header + f"\n{min_count}回以上繰り返された依頼パターンはありません。\n"
+
+    track_map: dict[str, str] = {}
+    for rep, title in tracking or []:
+        if rep:
+            track_map[rep] = title
 
     lines = [header]
     lines.append(f"{min_count}回以上繰り返された依頼: {len(clusters)}パターン\n")
@@ -113,6 +143,9 @@ def render_prompt_report(
         lines.append(f"> {example}")
         lines.append("")
         lines.append(f"- 提案: {_suggestion(c)}")
+        title = track_map.get(c.representative)
+        if title:
+            lines.append(f"- 📉 追跡中: {title}")
         lines.append("")
     if len(clusters) > max_clusters:
         lines.append(f"（他 {len(clusters) - max_clusters} パターン省略）")

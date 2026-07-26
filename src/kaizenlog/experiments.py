@@ -41,6 +41,10 @@ METRIC_DESCRIPTIONS = {
     "focus_blocks": "集中ブロック数（25分以上入力が続いた区間。要 aw-watcher-input）",
     "focus_minutes": "集中ブロックの合計時間（分。要 aw-watcher-input）",
     "input_keypresses": "1日のキー入力数（要 aw-watcher-input）",
+    "prompt_cluster:<slug>": (
+        "指定クラスタに類似する生依頼の件数/日（要 frontmatter cluster_rep。"
+        "スキル化後の効果測定用）"
+    ),
 }
 
 _TARGET_RE = re.compile(r"^(<=|>=|<|>|==?)\s*([\d.]+)$")
@@ -74,6 +78,8 @@ class Experiment:
     baseline: float | None = None
     deadline: date | None = None
     measurements: dict[date, float] = field(default_factory=dict)
+    # prompt_cluster 計測用: 正規化済み代表文（機密を含む生文を書かないこと）
+    cluster_rep: str | None = None
 
 
 class ExperimentError(ValueError):
@@ -392,6 +398,9 @@ def load_experiments(experiments_dir: Path) -> list[Experiment]:
                 baseline = float(fields["baseline"])
             except ValueError:
                 pass
+        cluster_rep = fields.get("cluster_rep") or None
+        if cluster_rep is not None:
+            cluster_rep = cluster_rep.strip() or None
         experiments.append(
             Experiment(
                 path=path,
@@ -403,6 +412,7 @@ def load_experiments(experiments_dir: Path) -> list[Experiment]:
                 baseline=baseline,
                 deadline=deadline,
                 measurements=_parse_measurements(content),
+                cluster_rep=cluster_rep,
             )
         )
     return experiments

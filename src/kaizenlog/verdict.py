@@ -58,6 +58,9 @@ def is_known_metric(metric: str) -> bool:
     if metric.startswith("site_minutes:"):
         suffix = metric.split(":", 1)[1]
         return bool(suffix) and " " not in suffix and "\t" not in suffix and "<" not in suffix
+    if metric.startswith("prompt_cluster:"):
+        suffix = metric.split(":", 1)[1]
+        return bool(suffix) and " " not in suffix and "\t" not in suffix and "<" not in suffix
     return False
 
 

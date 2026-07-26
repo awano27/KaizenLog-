@@ -31,9 +31,11 @@ def notify(
     if sys.platform != "win32":
         # 送出未試行（旧仕様の no-op）。False だと CI/WSL で偽陽性の notify_failed になる
         return None
-    # PowerShellのシングルクォート文字列としてエスケープ
-    t = title.replace("'", "''")[:80]
-    m = message.replace("'", "''")[:200]
+    # 切り詰めをエスケープ前に行う（'' 二重化の境界で PS リテラルが壊れないように）
+    raw_t = (title or "")[:80]
+    raw_m = (message or "")[:200]
+    t = raw_t.replace("'", "''")
+    m = raw_m.replace("'", "''")
     # 許可アイコン以外は Warning にフォールバック
     icon_name = icon if icon in ("Warning", "Information", "Error", "Question") else "Warning"
     tip = {

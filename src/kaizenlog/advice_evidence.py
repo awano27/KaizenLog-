@@ -359,10 +359,21 @@ def build_advice_evidence(
                         bits.append(f"{name} {int(n)}回")
             if bits:
                 source_part = f"（内訳: {' / '.join(bits)}）"
+        cost_part = ""
+        cost_raw = ai_telemetry.get("est_cost_usd")
+        if isinstance(cost_raw, (int, float)) and not isinstance(cost_raw, bool):
+            uncosted = ai_telemetry.get("uncosted_tokens")
+            u_part = (
+                f"・対象外 {int(uncosted):,} tok"
+                if isinstance(uncosted, (int, float)) and not isinstance(uncosted, bool)
+                else ""
+            )
+            # input/cache 未計上の概算であることを明示
+            cost_part = f" / 推定コスト ${float(cost_raw):.2f}（output のみ{u_part}）"
         lines.append(
             f"- [F5] 構造化AIテレメトリ: セッション {telemetry_sessions}回{source_part} / "
             f"2往復以下 {fragmented}回 / ツールエラー {tool_errors}回 / "
-            f"中断・拒否 {interruptions}回{retry_part}。"
+            f"中断・拒否 {interruptions}回{retry_part}{cost_part}。"
         )
     elif ai_stats_valid:
         lines.append(

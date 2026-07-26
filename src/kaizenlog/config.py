@@ -128,6 +128,8 @@ class AIWorkConfig:
     enabled: bool = True
     claude_projects_dir: str = "~/.claude/projects"
     codex_sessions_dir: str = "~/.codex/sessions"
+    # モデル名部分一致 → USD / 100万 output tokens（既定表の上書き・追加）
+    pricing: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -295,6 +297,8 @@ base_url = "http://localhost:5600"
 enabled = true
 claude_projects_dir = "~/.claude/projects"
 codex_sessions_dir = "~/.codex/sessions"  # Codex CLI ロールアウトログ（無ければ無効）
+# 推定コスト用単価（USD / 100万 output tokens）。既定表は目安で変動する。
+# 例: [aiwork.pricing] "claude-sonnet" = 3.0
 
 [llm]
 # "claude-code-cli"   : Claude Code CLI（要: https://claude.com/claude-code & ログイン済み）
@@ -427,6 +431,15 @@ def load_config(path: str | None = None) -> Config:
     cfg.aiwork.codex_sessions_dir = aiwork.get(
         "codex_sessions_dir", cfg.aiwork.codex_sessions_dir
     )
+    pricing = aiwork.get("pricing")
+    if isinstance(pricing, dict):
+        parsed: dict[str, float] = {}
+        for k, v in pricing.items():
+            try:
+                parsed[str(k)] = float(v)
+            except (TypeError, ValueError):
+                continue
+        cfg.aiwork.pricing = parsed
 
     cats = data.get("categories", {})
     user_rules = cats.get("rules", [])

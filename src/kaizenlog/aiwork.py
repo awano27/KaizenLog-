@@ -27,6 +27,71 @@ _INTERRUPT_MARKERS = (
     "request interrupted by user",
 )
 
+# 既定単価表: モデル名の部分一致（小文字）→ USD / 100万 output tokens。
+# 目安のみ。市場単価は変動するため [aiwork.pricing] で上書き・追加すること。
+DEFAULT_OUTPUT_USD_PER_MTOK: list[tuple[str, float]] = [
+    ("claude-opus-4", 15.0),
+    ("claude-opus", 15.0),
+    ("claude-sonnet-4", 3.0),
+    ("claude-sonnet", 3.0),
+    ("claude-haiku", 1.25),
+    ("gpt-4o", 10.0),
+    ("gpt-4.1", 10.0),
+    ("o3", 40.0),
+    ("o4-mini", 4.4),
+    ("gpt-4o-mini", 0.6),
+]
+
+
+def resolve_output_price(
+    model: str | None,
+    pricing: dict[str, float] | None = None,
+) -> float | None:
+    """モデル名から output 単価（USD/MTok）を返す。未登録は None。"""
+    if not model:
+        return None
+    m = model.lower()
+    # config 上書きを先に（ユーザーパターン優先）
+    table: list[tuple[str, float]] = []
+    if pricing:
+        table.extend((str(k).lower(), float(v)) for k, v in pricing.items())
+    table.extend(DEFAULT_OUTPUT_USD_PER_MTOK)
+    for pattern, price in table:
+        if pattern and pattern in m:
+            return float(price)
+    return None
+
+
+def estimate_sessions_cost(
+    sessions: list[AISession],
+    pricing: dict[str, float] | None = None,
+) -> tuple[float, int, dict[str, dict]]:
+    """セッション群の概算コスト。
+
+    戻り値: (est_cost_usd, uncosted_tokens, per_source 内訳)
+    モデル不明・単価未登録のトークンは uncosted に回し cost に含めない。
+    """
+    total_cost = 0.0
+    uncosted = 0
+    per_source: dict[str, dict] = {}
+    for s in sessions:
+        src = s.source or "claude-code"
+        bucket = per_source.setdefault(
+            src, {"est_cost_usd": 0.0, "uncosted_tokens": 0, "output_tokens": 0}
+        )
+        bucket["output_tokens"] += int(s.output_tokens or 0)
+        models = list(s.models) if s.models else []
+        model = models[0] if models else None
+        price = resolve_output_price(model, pricing)
+        if price is None or not s.output_tokens:
+            uncosted += int(s.output_tokens or 0)
+            bucket["uncosted_tokens"] += int(s.output_tokens or 0)
+            continue
+        cost = (s.output_tokens / 1_000_000.0) * price
+        total_cost += cost
+        bucket["est_cost_usd"] = float(bucket["est_cost_usd"]) + cost
+    return round(total_cost, 4), uncosted, per_source
+
 
 @dataclass
 class AISession:
@@ -423,6 +488,7 @@ def render_aiwork_markdown(
     tz: tzinfo,
     max_rows: int = 15,
     retry_chain_count: int = 0,
+    pricing: dict[str, float] | None = None,
 ) -> str:
     """「AI作業の質」セクションのMarkdownを生成する。セッションが無ければ空文字。
 
@@ -437,6 +503,7 @@ def render_aiwork_markdown(
     interruptions = sum(s.interruptions for s in sessions)
     output_tokens = sum(s.output_tokens for s in sessions)
     avg_turns = total_turns / len(sessions) if sessions else 0.0
+    est_cost, uncosted, _ = estimate_sessions_cost(sessions, pricing)
     all_tools = Counter()
     for s in sessions:
         all_tools.update(s.tool_counts)
@@ -458,6 +525,10 @@ def render_aiwork_markdown(
         f"ツールエラー: {tool_errors}回 / ユーザー中断・拒否: {interruptions}回"
         f" / リトライ連鎖: {retry_chain_count}回"
         f" / 出力トークン: {output_tokens:,}"
+    )
+    lines.append(
+        f"推定コスト: ${est_cost:.2f}（output tokens ベース概算、"
+        f"対象外 {uncosted:,} tok。input/cache 未計上）"
     )
     if top_tools:
         lines.append(f"主なツール: {top_tools}")

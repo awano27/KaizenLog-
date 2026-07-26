@@ -12,7 +12,7 @@ import json
 from datetime import date, timedelta
 from pathlib import Path
 
-from .aiwork import AISession, RetryChain
+from .aiwork import AISession, RetryChain, estimate_sessions_cost
 from .focus import InputStats
 from .report import DailySummary
 from .vault import atomic_write_text
@@ -35,6 +35,7 @@ def build_stats(
     activity_md: str | None = None,
     retry_chains: list[RetryChain] | None = None,
     afk_watcher_available: bool | None = None,
+    pricing: dict[str, float] | None = None,
 ) -> dict:
     projects: dict[str, dict] = {}
     for s in cc_sessions:
@@ -88,6 +89,20 @@ def build_stats(
         bucket["fragmented"] += 1 if s.is_fragmented else 0
         bucket["tool_errors"] += s.tool_errors
         bucket["interruptions"] += s.interruptions
+    est_cost, uncosted, cost_by_src = estimate_sessions_cost(cc_sessions, pricing)
+    for src, cbucket in cost_by_src.items():
+        bucket = sources.setdefault(
+            src,
+            {
+                "sessions": 0,
+                "fragmented": 0,
+                "tool_errors": 0,
+                "interruptions": 0,
+                "retry_chains": 0,
+            },
+        )
+        bucket["est_cost_usd"] = round(float(cbucket.get("est_cost_usd", 0.0)), 4)
+        bucket["uncosted_tokens"] = int(cbucket.get("uncosted_tokens", 0))
     # リトライ連鎖はプロンプト側の source が無い場合があるため、
     # チェーン先頭プロンプトの source があれば割当、無ければ合算のみ
     for chain in chains:
@@ -138,6 +153,9 @@ def build_stats(
             "retry_prompts": sum(c.length for c in chains),
             "projects": projects,
             "sources": sources,
+            # output tokens ベースの概算（input/cache 未計上）。旧 stats は欠落可
+            "est_cost_usd": est_cost,
+            "uncosted_tokens": uncosted,
         },
     }
     if input_stats is not None:
@@ -166,6 +184,7 @@ def write_stats(
     activity_md: str | None = None,
     retry_chains: list[RetryChain] | None = None,
     afk_watcher_available: bool | None = None,
+    pricing: dict[str, float] | None = None,
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
@@ -180,6 +199,7 @@ def write_stats(
                 activity_md,
                 retry_chains,
                 afk_watcher_available=afk_watcher_available,
+                pricing=pricing,
             ),
             ensure_ascii=False,
             indent=1,
