@@ -94,10 +94,29 @@ def parse_pass_condition(action_text: str) -> tuple[str, str, float] | None:
 
 
 def strip_pass_annotation(pass_value: str) -> str:
-    """PASS 値末尾の全角/半角括弧注記を除去する。"""
+    """PASS 値末尾の全角/半角括弧注記を除去する。
+
+    ネストした括弧（例: （エンタメの時間（分）））も外側1組ごと剥がす。
+    既にノートへ書かれた旧注記との互換用。
+    """
     s = pass_value.strip()
-    s = re.sub(r"（[^）]*）\s*$", "", s)
-    s = re.sub(r"\([^)]*\)\s*$", "", s)
+
+    def _strip_trailing_pair(text: str, open_ch: str, close_ch: str) -> str:
+        if not text.endswith(close_ch):
+            return text
+        depth = 0
+        for i in range(len(text) - 1, -1, -1):
+            ch = text[i]
+            if ch == close_ch:
+                depth += 1
+            elif ch == open_ch:
+                depth -= 1
+                if depth == 0:
+                    return text[:i].rstrip()
+        return text
+
+    s = _strip_trailing_pair(s, "（", "）")
+    s = _strip_trailing_pair(s, "(", ")")
     return s.strip()
 
 

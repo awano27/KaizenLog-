@@ -330,3 +330,50 @@ def test_legacy_line_verdict_writeback_still_works():
     )
     updated = apply_verdicts_to_advice_note(content, [entry])
     assert updated and "｜判定: ✅（実測 12）" in updated
+
+
+def test_category_minutes_label_has_no_nested_parens():
+    """注記自体が（…）で囲まれるため、ラベル内に括弧を入れない。"""
+    from kaizenlog.experiments import metric_display_label
+
+    cat = metric_display_label("category_minutes:エンタメ")
+    site = metric_display_label("site_minutes:youtube.com")
+    assert cat is not None and "（" not in cat and "(" not in cat
+    assert site is not None and "（" not in site and "(" not in site
+    assert "分" in cat and "エンタメ" in cat
+
+
+def test_strip_pass_annotation_handles_nested_parens():
+    """既にノートに残ったネスト注記も strip で機械構文に戻す。"""
+    from kaizenlog.verdict import strip_pass_annotation
+
+    nested = "category_minutes:エンタメ <= 30（エンタメの時間（分））"
+    assert strip_pass_annotation(nested) == "category_minutes:エンタメ <= 30"
+    half = "context_switches <= 40(ctx (count))"
+    assert strip_pass_annotation(half) == "context_switches <= 40"
+    plain = "focus_blocks >= 2（集中ブロック数）"
+    assert strip_pass_annotation(plain) == "focus_blocks >= 2"
+
+
+def test_category_minutes_annotated_pass_roundtrip():
+    """render 注記 → Memory 保存文 → parse → 機械判定可能な metric。"""
+    from kaizenlog.experiments import metric_display_label
+    from kaizenlog.verdict import strip_pass_annotation
+
+    metric = "category_minutes:エンタメ"
+    label = metric_display_label(metric)
+    assert label
+    # レンダラと同形: PASS 値 + （ラベル）
+    annotated = f"{metric} <= 30（{label}）"
+    assert "（" not in label  # ネストしない
+    assert strip_pass_annotation(annotated) == f"{metric} <= 30"
+    line = f"- [ ] 娯楽を減らす｜PASS: {annotated}｜FAIL: 31分以上"
+    assert parse_pass_condition(line) == (metric, "<=", 30.0)
+
+    # 過去に書き込まれたネスト注記の互換
+    legacy = (
+        "- [ ] KZN-20260725-001: 娯楽を減らす"
+        "｜PASS: category_minutes:エンタメ <= 30（エンタメの時間（分））"
+        "｜FAIL: 31分以上"
+    )
+    assert parse_pass_condition(legacy) == ("category_minutes:エンタメ", "<=", 30.0)

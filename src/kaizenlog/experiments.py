@@ -49,16 +49,17 @@ _TARGET_RE = re.compile(r"^(<=|>=|<|>|==?)\s*([\d.]+)$")
 def metric_display_label(metric: str) -> str | None:
     """PASS 注記用の短い日本語ラベル。未知指標は None。
 
-    説明文の括弧内補足は落とす（注記自体が （…） で囲まれるためネストを避ける）。
+    注記自体が全角（…）で囲まれるため、ラベル内に括弧を入れない
+    （ネストすると strip_pass_annotation / parse_pass_condition が壊れる）。
     """
     if metric in METRIC_DESCRIPTIONS and "<" not in metric:
         return re.split(r"[（(]", METRIC_DESCRIPTIONS[metric], 1)[0].strip()
     if metric.startswith("category_minutes:"):
         cat = metric.split(":", 1)[1].strip()
-        return f"{cat}の時間（分）" if cat else None
+        return f"{cat}の時間・分" if cat else None
     if metric.startswith("site_minutes:"):
         site = metric.split(":", 1)[1].strip()
-        return f"{site}の時間（分）" if site else None
+        return f"{site}の時間・分" if site else None
     return None
 
 
