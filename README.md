@@ -45,6 +45,10 @@ kaizenlog run                # ActivityWatch 起動後に初回実行
 
 `setup` は `%APPDATA%\kaizenlog\config.toml` に設定を書き、検出できた LLM / ActivityWatch を優先して提案します。詳細手順・手動設定は [docs/USAGE.md](docs/USAGE.md) を参照。
 
+### 朝の流れ
+
+`kaizenlog morning`（タスク `KaizenLog Morning`、既定 08:30）が、前夜に走らなかった日の追いつき（generate/advise）、今日のノート先頭付近の「📌 今日のアクション」再描画、未完了件数と昨日の ✅/❌ のトースト通知を行います。アクション本文は通知に載せません。
+
 ### LLMバックエンド（参考）
 
 **自動フォールバック機構** — 指定バックエンドが使えない場合はローカル LLM（Ollama）へ自動フォールバック。

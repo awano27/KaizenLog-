@@ -246,13 +246,13 @@ def test_render_golden():
     md = render_advice_markdown(data, _evidence())
     expected = (
         "### 今日の改善提案\n"
-        "1. [F3] 解釈文。提案文。翌日見る指標: 指標名\n"
+        "1. 解釈文。提案文。翌日見る指標: 指標名\n"
         "\n"
         "### 明日の最小アクション\n"
-        "- [ ] [F3] 行動する｜PASS: focus_blocks >= 1｜FAIL: 0回\n"
+        "- [ ] 行動する｜PASS: focus_blocks >= 1（集中ブロック数）｜FAIL: 0回\n"
         "\n"
         "### AI作業の改善\n"
-        "- [F5] 測定不能なので断定しない\n"
+        "- 測定不能なので断定しない\n"
     )
     assert md == expected
 

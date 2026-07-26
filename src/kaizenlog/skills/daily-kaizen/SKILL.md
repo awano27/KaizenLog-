@@ -59,11 +59,12 @@ allowed-tools: "Read Glob Grep Edit"
 （記録時間と良かった点を平易な日本語で1-3行。短時間ならデータ不足と明記）
 
 ### 明日試すこと
-- [ ] （15分以内に始める行動）｜PASS: context_switches <= 40｜FAIL: context_switches > 40
+- [ ] （15分以内に始める行動）｜PASS: context_switches <= 40（コンテキストスイッチ回数）｜FAIL: context_switches > 40
 
 ### 計測上の注意
 （未計測の内容、比較不能、部分観測を1-3行）
 ```
+保存文には F-ID を表示しない。PASS が機械構文のときは括弧で日本語ラベルを付けてよい。
 
 ## ルール（違反禁止）
 

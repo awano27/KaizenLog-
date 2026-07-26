@@ -355,20 +355,33 @@ def test_without_previous_day_rejects_relative_action_condition():
 
 
 def test_missing_evidence_uses_safe_unmeasured_context():
-    invalid = MISSING_EVIDENCE_ADVICE.replace("[F0]", "[F999]", 1)
+    # F-ID 存在性は JSON 層（validate_advice）で担保。Markdown 契約では見出し等を見る
+    invalid = MISSING_EVIDENCE_ADVICE.replace(
+        "｜PASS: 1件確認｜FAIL: 0件", "｜PASS: ｜FAIL:"
+    )
     errors = advice_contract_errors(invalid)
-    assert any("存在しない根拠ID" in error for error in errors)
+    assert any("PASS:/FAIL:" in error for error in errors)
 
 
 def test_contract_rejects_unknown_fact_missing_outcome_and_mismatched_action():
     evidence = build_advice_evidence(CURRENT)
-    invalid = VALID_ADVICE.replace("[F3] 開始", "[F99] 開始", 1).replace(
+    # Markdown 契約は PASS/FAIL と件数。F-ID 対応は JSON 層。
+    # PASS 欠落は outcome エラー。件数不一致は別ケースで検証する。
+    invalid = VALID_ADVICE.replace(
         "｜PASS: 集中ブロック2回以上｜FAIL: 1回以下", ""
     )
     errors = advice_contract_errors(invalid, evidence)
-    assert any("存在しない根拠ID" in error for error in errors)
     assert any("PASS:/FAIL:" in error for error in errors)
-    assert any("対応していません" in error for error in errors)
+
+
+def test_contract_rejects_mismatched_proposal_action_counts():
+    # 提案2件・アクション1件 → 件数1対1違反
+    invalid = VALID_ADVICE.replace(
+        "- [ ] [F9] 調査リンクを開く前に3件まとめる｜PASS: 開発→ブラウジング1回以下｜FAIL: 2回以上\n",
+        "",
+    )
+    errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
+    assert any("件数を1対1" in error for error in errors)
 
 
 def test_contract_rejects_empty_outcomes():
@@ -475,34 +488,24 @@ def test_semantic_guard_allows_zero_entertainment_maintenance():
 
 
 def test_contract_rejects_observed_value_restatement_even_when_measured():
-    current = deepcopy(CURRENT)
-    current["ai_activity_blocks"] = 5
-    current["ai"] = {
-        "sessions": 5,
-        "fragmented": 1,
-        "tool_errors": 0,
-        "interruptions": 0,
-    }
-    advice = VALID_ADVICE.replace(
-        "[F5] 会話の往復数は測定不能なので、品質の良否は断定しない。",
-        "[F5] Claude Codeセッションは999回だった。",
-    )
-    errors = advice_contract_errors(advice, build_advice_evidence(current))
-    assert any("観測数値を再掲せず" in error for error in errors)
+    # 観測数値再掲は JSON 層（interpretation / ai_review.text）で禁止。Markdown 契約からは削除。
+    from kaizenlog.advice_format import validate_advice
+    from tests.test_advice_format import _valid_data
+
+    data = _valid_data()
+    data["ai_review"] = [{"fact_ids": ["F5"], "text": "セッションは999回だった"}]
+    errors = validate_advice(data, build_advice_evidence(CURRENT))
+    assert any("観測数値" in error for error in errors)
 
 
 def test_contract_rejects_fabricated_entertainment_value_when_observed():
-    current = deepcopy(CURRENT)
-    current["by_category"]["エンタメ"] = 10.0
-    advice = VALID_ADVICE.replace(
-        "[F3] 開始条件を固定して集中枠の再現性を試す。翌日は集中ブロック2回以上を目標にする。",
-        "[F7] エンタメ利用が999分発生したため分類を見直す。翌日は0分を目標にする。",
-    ).replace(
-        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: 集中ブロック2回以上｜FAIL: 1回以下",
-        "[F7] 分類設定を確認する｜PASS: エンタメ0分｜FAIL: 1分以上",
-    )
-    errors = advice_contract_errors(advice, build_advice_evidence(current))
-    assert any("観測数値を再掲せず" in error for error in errors)
+    from kaizenlog.advice_format import validate_advice
+    from tests.test_advice_format import _valid_data
+
+    data = _valid_data()
+    data["proposals"][0]["interpretation"] = "エンタメ利用が999分発生した"
+    errors = validate_advice(data, build_advice_evidence(CURRENT))
+    assert any("観測数値" in error for error in errors)
 
 
 def test_contract_requires_typed_evidence_context():
@@ -544,9 +547,13 @@ def test_contract_rejects_subjective_pass_fail_conditions():
 
 
 def test_contract_rejects_unknown_fact_in_ai_section():
-    invalid = VALID_ADVICE.replace("[F5] 会話", "[F5] [F999] 会話")
-    errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
-    assert any("存在しない根拠ID" in error for error in errors)
+    from kaizenlog.advice_format import validate_advice
+    from tests.test_advice_format import _valid_data
+
+    data = _valid_data()
+    data["ai_review"] = [{"fact_ids": ["F999"], "text": "測定不能なので断定しない"}]
+    errors = validate_advice(data, build_advice_evidence(CURRENT))
+    assert any("存在しない" in error for error in errors)
 
 
 def test_missing_ai_mapping_still_blocks_fabricated_turn_count():
@@ -563,14 +570,6 @@ def test_missing_ai_mapping_still_blocks_fabricated_turn_count():
 @pytest.mark.parametrize(
     ("invalid", "expected"),
     [
-        (
-            VALID_ADVICE.replace("- [ ] [F3]", "- [ ] 先に説明 [F3]", 1),
-            "根拠ID [F#] から開始",
-        ),
-        (
-            VALID_ADVICE.replace("[F5] 会話", "[F1] 会話"),
-            "AI根拠ID [F4] または [F5]",
-        ),
         (
             VALID_ADVICE.replace("- [ ] [F3]", "- [ ] KZN-20260721-999: [F3]", 1),
             "モデル生成のKZN ID",
@@ -766,5 +765,5 @@ def test_generate_advice_json_path_renders_markdown(monkeypatch):
     )
     assert result.startswith("## 🚀 Kaizen")
     assert "### 今日の改善提案" in result
-    assert "- [ ] [F3]" in result
-    assert "PASS:" in result
+    assert "- [ ]" in result and "PASS:" in result
+    assert "[F3]" not in result  # U3: 表示から F-ID を外す

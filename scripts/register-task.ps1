@@ -12,6 +12,8 @@
 param(
     [string]$Time = "21:30",
     [string]$TaskName = "KaizenLog Daily",
+    [string]$MorningTime = "",
+    [string]$MorningTaskName = "KaizenLog Morning",
     [switch]$Weekly,
     [switch]$Autopilot,
     [string]$VaultDir = "",
@@ -25,9 +27,10 @@ param(
 
 if ($Unregister) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $MorningTaskName -Confirm:$false -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $WeeklyTaskName -Confirm:$false -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $AutopilotTaskName -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Host "タスク '$TaskName' / '$WeeklyTaskName' / '$AutopilotTaskName' を削除しました。"
+    Write-Host "タスク '$TaskName' / '$MorningTaskName' / '$WeeklyTaskName' / '$AutopilotTaskName' を削除しました。"
     exit 0
 }
 
@@ -52,6 +55,13 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
 Write-Host "タスク '$TaskName' を登録しました（毎日 $Time に実行 / 作業フォルダ: $workDir）。"
+
+if ($MorningTime) {
+    $morningAction = New-ScheduledTaskAction -Execute $kaizenlog -Argument "morning" -WorkingDirectory $workDir
+    $morningTrigger = New-ScheduledTaskTrigger -Daily -At $MorningTime
+    Register-ScheduledTask -TaskName $MorningTaskName -Action $morningAction -Trigger $morningTrigger -Settings $settings -Force | Out-Null
+    Write-Host "タスク '$MorningTaskName' を登録しました（毎日 $MorningTime に実行）。"
+}
 
 if ($Weekly) {
     if (-not $VaultDir) {

@@ -152,6 +152,8 @@ class Config:
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     min_block_minutes: float = 3.0  # タイムラインに載せる最小ブロック長
     session_gap_minutes: float = 5.0  # この間隔以上空いたら別画面ブロック扱い
+    # 「📌 今日のアクション」の初回挿入位置（既存区間は移動しない）
+    actions_position: str = "top"  # "top" | "bottom"
     rules: list[dict] = field(default_factory=lambda: list(DEFAULT_RULES))
     llm: LLMConfig = field(default_factory=LLMConfig)
 
@@ -271,6 +273,8 @@ auto_backfill_days = 3      # 毎晩の実行時に直近N日の欠損を自動�
 log_retention_days = 90     # 実行ログの保持日数
 min_block_minutes = 3.0     # タイムラインに載せる最小ブロック長（分）
 session_gap_minutes = 5.0   # この分数以上空いたら別画面ブロック扱い
+# 「📌 今日のアクション」の初回挿入位置: top=frontmatter直後 / bottom=末尾
+actions_position = "top"
 
 [notifications]
 on_failure = true   # 夜間実行が失敗したときWindows通知を出す
@@ -401,6 +405,14 @@ def load_config(path: str | None = None) -> Config:
     cfg.privacy.replacement = privacy.get("replacement", cfg.privacy.replacement)
     cfg.min_block_minutes = _coerce(float, general.get("min_block_minutes", cfg.min_block_minutes), "general.min_block_minutes")
     cfg.session_gap_minutes = _coerce(float, general.get("session_gap_minutes", cfg.session_gap_minutes), "general.session_gap_minutes")
+    if "actions_position" in general:
+        pos = str(general["actions_position"]).strip().lower()
+        if pos not in ("top", "bottom"):
+            raise ConfigError(
+                f"設定値 general.actions_position が不正です: {general['actions_position']!r}"
+                "（top または bottom を指定してください）"
+            )
+        cfg.actions_position = pos
 
     aw = data.get("activitywatch", {})
     cfg.aw_base_url = aw.get("base_url", cfg.aw_base_url).rstrip("/")

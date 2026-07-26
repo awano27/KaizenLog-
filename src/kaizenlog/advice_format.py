@@ -375,13 +375,14 @@ def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
         lines.append(plan.strip())
         lines.append("")
 
+    # 表示から F-ID を外す（検証は JSON 層で完了。保存文は読者向けに）
+    from .experiments import metric_display_label
+    from .verdict import looks_like_machine_pass, strip_pass_annotation
+
     lines.append("### 今日の改善提案")
     for i, item in enumerate(data["proposals"], 1):
-        facts = " ".join(
-            x for x in (_norm_fact_id(f) for f in item["fact_ids"]) if x
-        )
         lines.append(
-            f"{i}. {facts} {item['interpretation'].strip()}。"
+            f"{i}. {item['interpretation'].strip()}。"
             f"{item['proposal'].strip()}。"
             f"翌日見る指標: {item['next_metric'].strip()}"
         )
@@ -389,22 +390,24 @@ def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
 
     lines.append("### 明日の最小アクション")
     for item in data["actions"]:
-        facts = " ".join(
-            x for x in (_norm_fact_id(f) for f in item["fact_ids"]) if x
-        )
-        # 先頭が [F#] で始まること（旧契約 ^\[F\d+\]\s 互換）
+        pass_raw = item["pass"].strip()
+        note = ""
+        if looks_like_machine_pass(pass_raw):
+            core = strip_pass_annotation(pass_raw)
+            m = re.match(r"^(\S+)\s*(?:<=|>=|<|>|==?)", core)
+            if m:
+                label = metric_display_label(m.group(1))
+                if label:
+                    note = f"（{label}）"
         lines.append(
-            f"- [ ] {facts} {item['action'].strip()}"
-            f"｜PASS: {item['pass'].strip()}｜FAIL: {item['fail'].strip()}"
+            f"- [ ] {item['action'].strip()}"
+            f"｜PASS: {pass_raw}{note}｜FAIL: {item['fail'].strip()}"
         )
     lines.append("")
 
     lines.append("### AI作業の改善")
     for item in data["ai_review"]:
-        facts = " ".join(
-            x for x in (_norm_fact_id(f) for f in item["fact_ids"]) if x
-        )
-        lines.append(f"- {facts} {item['text'].strip()}")
+        lines.append(f"- {item['text'].strip()}")
 
     rendered = "\n".join(lines).rstrip() + "\n"
 

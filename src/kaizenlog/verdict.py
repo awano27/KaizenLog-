@@ -78,6 +78,8 @@ def parse_pass_condition(action_text: str) -> tuple[str, str, float] | None:
         if pipe >= 0:
             rest = rest[:pipe]
     segment = rest.strip(" ｜|/\t")
+    # レンダラが付けた日本語注記（…）/(...) を除去してから機械構文を判定
+    segment = strip_pass_annotation(segment)
     m = re.match(r"^(\S+)\s*(<=|>=|<|>|==?)\s*([\d.]+)\s*$", segment)
     if not m:
         return None
@@ -91,9 +93,17 @@ def parse_pass_condition(action_text: str) -> tuple[str, str, float] | None:
     return metric, op, value
 
 
+def strip_pass_annotation(pass_value: str) -> str:
+    """PASS 値末尾の全角/半角括弧注記を除去する。"""
+    s = pass_value.strip()
+    s = re.sub(r"（[^）]*）\s*$", "", s)
+    s = re.sub(r"\([^)]*\)\s*$", "", s)
+    return s.strip()
+
+
 def looks_like_machine_pass(pass_value: str) -> bool:
     """契約検証用: PASS 値が機械構文らしいか（指標の既知性は別判定）。"""
-    return bool(_MACHINE_PASS_RE.match(pass_value.strip()))
+    return bool(_MACHINE_PASS_RE.match(strip_pass_annotation(pass_value)))
 
 
 def judge_entries(

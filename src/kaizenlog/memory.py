@@ -375,6 +375,15 @@ def render_actions_section(
         "## 📌 今日のアクション",
         "前日までの改善提案の未完了アクション。完了したらチェック",
     ]
+    # 北極星指標をノート上でも見えるようにする（CLI status と揃える）
+    stats = compute_action_stats(entries, target_day)
+    if stats.proposed > 0:
+        lines.append(
+            f"直近{stats.window_days}日: 消化率 {_pct_label(stats.done_rate)}"
+            f"（{stats.proposed}件中{stats.done}件）"
+            f" / 自動判定 {stats.judged}件"
+            f" / PASS率 {_pct_label(stats.pass_rate)}"
+        )
     for e in open_entries:
         mark = "x" if e.id in checked_ids else " "
         try:

@@ -458,33 +458,9 @@ def advice_contract_errors(
         errors.append("改善提案と最小アクションの件数を1対1にしてください")
     if len(_ANY_CHECKBOX_RE.findall(advice)) != len(actions):
         errors.append("チェックボックスは「明日の最小アクション」の未チェック行だけにしてください")
-    errors.extend(_observed_value_restatement_errors(sections))
-
-    available_fact_ids = set(evidence_ctx.fact_ids)
-    if available_fact_ids:
-        cited_anywhere = set(_FACT_ID_RE.findall(advice))
-        if not cited_anywhere <= available_fact_ids:
-            errors.append("回答が存在しない根拠IDを参照しています")
-        for index, item in enumerate(improvements, 1):
-            cited = set(_FACT_ID_RE.findall(item))
-            if not cited:
-                errors.append(f"改善提案{index}に根拠ID [F#] がありません")
-            elif not cited <= available_fact_ids:
-                errors.append(f"改善提案{index}が存在しない根拠IDを参照しています")
-
-        ai_section = sections.get("AI作業の改善", "")
-        ai_ids = set(_FACT_ID_RE.findall(ai_section))
-        if ai_section and not ai_ids & {"[F4]", "[F5]"} & available_fact_ids:
-            errors.append("「AI作業の改善」にAI根拠ID [F4] または [F5] がありません")
+    # F-ID 引用・観測数値再掲の検査は JSON 層で行う（U3: レンダ後テキストには F-ID を出さない）
 
     for index, action in enumerate(actions, 1):
-        cited = set(_FACT_ID_RE.findall(action))
-        if available_fact_ids and not re.match(r"\[F\d+\]\s", action):
-            errors.append(f"最小アクション{index}は根拠ID [F#] から開始してください")
-        if available_fact_ids and not cited:
-            errors.append(f"最小アクション{index}に根拠ID [F#] がありません")
-        elif available_fact_ids and not cited <= available_fact_ids:
-            errors.append(f"最小アクション{index}が存在しない根拠IDを参照しています")
         pass_position = action.find("PASS:")
         fail_position = action.find("FAIL:")
         pass_value = (
@@ -498,15 +474,12 @@ def advice_contract_errors(
         if not pass_value or not fail_value:
             errors.append(f"最小アクション{index}に翌日の PASS:/FAIL: 条件がありません")
         else:
-            # 機械構文らしい PASS は既知指標のみ自動判定対象。未知は新エラー。
-            # 自由文＋数値は従来どおり合格（人間判定のまま）。
-            from .verdict import is_known_metric, looks_like_machine_pass
-            if looks_like_machine_pass(pass_value):
-                metric_token = pass_value.split()[0] if pass_value.split() else ""
-                # "context_switches <= 40" → first token may include op if no space;
-                # looks_like requires metric op number with spaces around op optional
-                m_metric = re.match(r"^(\S+)\s*(?:<=|>=|<|>|==?)", pass_value.strip())
-                metric_name = m_metric.group(1) if m_metric else metric_token
+            # 機械構文らしい PASS は既知指標のみ。注記括弧（…）は除去して判定。
+            from .verdict import is_known_metric, looks_like_machine_pass, strip_pass_annotation
+            core_pass = strip_pass_annotation(pass_value)
+            if looks_like_machine_pass(core_pass):
+                m_metric = re.match(r"^(\S+)\s*(?:<=|>=|<|>|==?)", core_pass.strip())
+                metric_name = m_metric.group(1) if m_metric else core_pass.split()[0]
                 if not is_known_metric(metric_name):
                     errors.append(
                         f"最小アクション{index}の PASS: 指標名が使用可能な指標にありません"
@@ -551,11 +524,7 @@ def advice_contract_errors(
             errors.append(
                 f"最小アクション{index}はブラウザ実測が短いためwatcher設定を優先できません"
             )
-
-        if index <= len(improvements) and available_fact_ids:
-            improvement_ids = set(_FACT_ID_RE.findall(improvements[index - 1]))
-            if improvement_ids and cited and not improvement_ids & cited:
-                errors.append(f"改善提案{index}と最小アクション{index}の根拠IDが対応していません")
+        # 改善提案とアクションの F-ID 対応は JSON 層で検証済み（表示文には F-ID 無し）
 
     errors.extend(_semantic_contract_errors(advice, evidence_ctx))
 

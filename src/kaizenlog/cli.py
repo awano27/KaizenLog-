@@ -10,6 +10,7 @@
   kaizenlog backfill [--days N]            欠損日の日誌・統計をまとめて補完する
   kaizenlog status                         実行履歴（最終成功・直近の失敗）を表示
   kaizenlog doctor                         セットアップと環境の健全性を診断
+  kaizenlog morning [--date]               朝の追いつき・アクション再描画・通知
   kaizenlog setup                          対話式セットアップウィザード
   kaizenlog init-config                    設定ファイルの雛形を出力する
 """
@@ -231,8 +232,140 @@ def _write_actions_handoff(
     section = render_actions_section(entries, target, store.read(target))
     if not section:
         return
-    path = store.write_section(target, ACTIONS_MARKER, section)
+    path = store.write_section(
+        target, ACTIONS_MARKER, section, position=cfg.actions_position
+    )
     print(f"📌 今日のアクションを転記しました: {path}")
+
+
+def catch_up_yesterday(cfg: Config, today: date) -> None:
+    """前夜に走らなかった日の追いつき（昨日のみ）。
+
+    1) 昨日の stats が無ければ generate（一昨日分の判定も generate 内で走る）
+    2) ACTIVITY あり ADVICE なしなら advise（retro-advise: 今日向けアクションになる）
+    失敗は警告＋runlog に留め、呼び出し元を止めない。
+    """
+    yesterday = today - timedelta(days=1)
+    # generate: stats 欠損時のみ
+    try:
+        if missing_days(cfg.stats_path, today, 1) == [yesterday]:
+            print(f"🔄 追いつき: {yesterday.isoformat()} の generate を実行します")
+            t0 = monotonic()
+            try:
+                cmd_generate(cfg, yesterday)
+                log_run(
+                    cfg.logs_path, "generate", ok=True,
+                    duration_seconds=monotonic() - t0,
+                    retention_days=cfg.log_retention_days,
+                )
+            except Exception as e:
+                print(f"⚠️  追いつき generate 失敗: {e}", file=sys.stderr)
+                log_run(
+                    cfg.logs_path, "generate", ok=False,
+                    duration_seconds=monotonic() - t0,
+                    error=str(e),
+                    retention_days=cfg.log_retention_days,
+                )
+    except Exception as e:
+        print(f"⚠️  追いつき generate 判定に失敗: {e}", file=sys.stderr)
+
+    # retro-advise: ACTIVITY あり・ADVICE なしのときだけ（今日向けアクションが価値あり）
+    if cfg.llm.backend == "none":
+        return
+    try:
+        store = DailyNoteStore(cfg.daily_notes_path)
+        note = store.read(yesterday)
+        if not note:
+            return
+        if extract_section(note, ACTIVITY_MARKER) is None:
+            return
+        if extract_section(note, ADVICE_MARKER) is not None:
+            return
+        print(f"🔄 追いつき: {yesterday.isoformat()} の advise を実行します")
+        t0 = monotonic()
+        try:
+            cmd_advise(cfg, yesterday, dry_run=False)
+            log_run(
+                cfg.logs_path, "advise", ok=True,
+                duration_seconds=monotonic() - t0,
+                retention_days=cfg.log_retention_days,
+            )
+        except Exception as e:
+            print(f"⚠️  追いつき advise 失敗: {e}", file=sys.stderr)
+            log_run(
+                cfg.logs_path, "advise", ok=False,
+                duration_seconds=monotonic() - t0,
+                error=str(e),
+                retention_days=cfg.log_retention_days,
+            )
+    except Exception as e:
+        print(f"⚠️  追いつき advise 判定に失敗: {e}", file=sys.stderr)
+
+
+def build_morning_notification(
+    entries: list,
+    today: date,
+) -> str | None:
+    """朝トースト本文。アクション本文は載せない（ロック画面に固有名詞を出さない）。"""
+    window_start = (today - timedelta(days=7)).isoformat()
+    window_end = (today - timedelta(days=1)).isoformat()
+    open_n = sum(
+        1
+        for e in entries
+        if e.status == "proposed" and window_start <= e.date <= window_end
+    )
+    yday = (today - timedelta(days=1)).isoformat()
+    pass_n = sum(
+        1 for e in entries if e.verdict_date == yday and e.verdict == "pass"
+    )
+    fail_n = sum(
+        1 for e in entries if e.verdict_date == yday and e.verdict == "fail"
+    )
+    if open_n == 0 and pass_n == 0 and fail_n == 0:
+        return None
+    return (
+        f"今日のアクション {open_n}件 / 昨日の判定 ✅{pass_n} ❌{fail_n}"
+    )
+
+
+def cmd_morning(cfg: Config, day: date) -> int:
+    """朝の到達性: 追いつき → 📌 再描画 → 通知。"""
+    t0 = monotonic()
+    try:
+        catch_up_yesterday(cfg, day)
+        store = DailyNoteStore(cfg.daily_notes_path)
+        entries = load_entries(cfg.memory_path)
+        section = render_actions_section(entries, day, store.read(day))
+        if section:
+            path = store.write_section(
+                day, ACTIONS_MARKER, section, position=cfg.actions_position
+            )
+            print(f"📌 今日のアクションを更新しました: {path}")
+        else:
+            print("📌 今日の未完了アクションはありません")
+
+        msg = build_morning_notification(entries, day)
+        if msg:
+            print(msg)
+            # 本文は件数のみ（固有名詞をロック画面に出さない）
+            notify("KaizenLog 朝の確認", msg, icon="Information")
+        log_run(
+            cfg.logs_path, "morning", ok=True,
+            duration_seconds=monotonic() - t0,
+            retention_days=cfg.log_retention_days,
+        )
+        return 0
+    except Exception as e:
+        traceback.print_exc()
+        log_run(
+            cfg.logs_path, "morning", ok=False,
+            duration_seconds=monotonic() - t0,
+            error=str(e),
+            retention_days=cfg.log_retention_days,
+        )
+        if cfg.notify_on_failure:
+            notify("KaizenLog 失敗", f"morning: {e}")
+        return 1
 
 
 def cmd_backfill(cfg: Config, days: int, end_day: date) -> int:
@@ -739,6 +872,10 @@ def main(argv: list[str] | None = None) -> int:
     su.add_argument("--register-task", action="store_true",
                     help="非対話でも日次タスク登録を許可")
     su.add_argument("--time", default="21:30", help="日次タスク時刻（既定 21:30）")
+    su.add_argument("--morning-time", default="08:30",
+                    help="朝タスク時刻（空文字で登録しない、既定 08:30）")
+    mor = sub.add_parser("morning", help="朝の追いつき・アクション再描画・通知")
+    mor.add_argument("--date", help="対象日 YYYY-MM-DD（省略時は今日）")
 
     args = parser.parse_args(argv)
 
@@ -769,6 +906,7 @@ def main(argv: list[str] | None = None) -> int:
             install_aw=args.install_aw,
             register_task=args.register_task,
             time=args.time,
+            morning_time=args.morning_time or "",
         ))
 
     try:
@@ -776,6 +914,11 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as e:
         print(f"❌ {e}", file=sys.stderr)
         return 1
+
+    if args.command == "morning":
+        tz = ZoneInfo(cfg.timezone)
+        day = _parse_date(args.date, tz)
+        return cmd_morning(cfg, day)
 
     if args.command == "status":
         print(render_status(load_runs(cfg.logs_path)))
@@ -855,6 +998,8 @@ def main(argv: list[str] | None = None) -> int:
             if not args.date and cfg.auto_backfill_days > 0 and not dry_run:
                 if missing_days(cfg.stats_path, day, cfg.auto_backfill_days):
                     cmd_backfill(cfg, cfg.auto_backfill_days, day)
+                # 前夜に advise まで走らなかった日の retro-advise（冪等）
+                catch_up_yesterday(cfg, day)
             if not dry_run:
                 cmd_generate(cfg, day)
         if args.command in ("advise", "run"):

@@ -45,8 +45,34 @@ def default_frontmatter(day: date) -> str:
     )
 
 
-def upsert_section(content: str, marker: str, section_md: str) -> str:
-    """マーカー区間があれば置換、なければ末尾に追加する。"""
+def _frontmatter_end(content: str) -> int:
+    """frontmatter の終了位置（次のコンテンツ開始 index）。無ければ 0。
+
+    先頭が --- で始まり、次の --- 行までを frontmatter とみなす。
+    """
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return 0
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return sum(len(lines[j]) for j in range(i + 1))
+    return 0
+
+
+def upsert_section(
+    content: str,
+    marker: str,
+    section_md: str,
+    position: str = "bottom",
+) -> str:
+    """マーカー区間があれば置換、なければ追加する。
+
+    position:
+      - \"bottom\": 末尾に追加（従来）
+      - \"top\": 区間が**未存在のときだけ** frontmatter 直後（無ければ先頭）に挿入。
+        既存区間がある場合は現在位置で置換する（区間外テキストとの相対位置を
+        ユーザーが前提にしている可能性があるため、移動しない）。
+    """
     start_tag, end_tag = _start_tag(marker), _end_tag(marker)
     # 中身に同じマーカーが紛れ込むと（LLMがマーカーを復唱した場合など）、
     # 次回のupsertが偽の終了タグで区間を誤認しノートを壊す。事前に除去する。
@@ -56,7 +82,20 @@ def upsert_section(content: str, marker: str, section_md: str) -> str:
     start_idx = content.find(start_tag)
     end_idx = content.find(end_tag)
     if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
+        # 既存区間は位置を動かさず中身だけ置換
         return content[:start_idx] + wrapped + content[end_idx + len(end_tag):]
+
+    if position == "top":
+        insert_at = _frontmatter_end(content)
+        before = content[:insert_at].rstrip("\n")
+        after = content[insert_at:].lstrip("\n")
+        parts: list[str] = []
+        if before:
+            parts.append(before)
+        parts.append(wrapped)
+        if after:
+            parts.append(after)
+        return "\n\n".join(parts) + ("\n" if not after.endswith("\n") else "")
 
     body = content.rstrip()
     if body:
@@ -125,11 +164,19 @@ class DailyNoteStore:
         p = self.path_for(day)
         return p.read_text(encoding="utf-8") if p.is_file() else None
 
-    def write_section(self, day: date, marker: str, section_md: str) -> Path:
+    def write_section(
+        self,
+        day: date,
+        marker: str,
+        section_md: str,
+        position: str = "bottom",
+    ) -> Path:
         self.dir.mkdir(parents=True, exist_ok=True)
         p = self.path_for(day)
         content = self.read(day)
         if content is None:
             content = default_frontmatter(day) + "\n"
-        atomic_write_text(p, upsert_section(content, marker, section_md))
+        atomic_write_text(
+            p, upsert_section(content, marker, section_md, position=position)
+        )
         return p

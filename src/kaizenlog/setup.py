@@ -41,6 +41,7 @@ class SetupOptions:
     install_aw: bool = False
     register_task: bool = False
     time: str = "21:30"
+    morning_time: str = "08:30"  # 空なら朝タスク未登録
     aw_base_url: str = "http://localhost:5600"
     ollama_base_url: str = "http://localhost:11434/v1"
 
@@ -193,9 +194,14 @@ def _find_register_task_script() -> Path | None:
     return None
 
 
-def register_daily_task(time: str = "21:30", kaizenlog_exe: str | None = None) -> bool:
+def register_daily_task(
+    time: str = "21:30",
+    kaizenlog_exe: str | None = None,
+    morning_time: str = "",
+) -> bool:
     """Register daily KaizenLog task via scripts/register-task.ps1.
 
+    morning_time が非空なら朝タスク（kaizenlog morning）も登録する。
     Returns False (graceful) if the script is missing or registration fails.
     """
     script = _find_register_task_script()
@@ -216,6 +222,8 @@ def register_daily_task(time: str = "21:30", kaizenlog_exe: str | None = None) -
         "-Time",
         time,
     ]
+    if morning_time:
+        args += ["-MorningTime", morning_time]
     if exe:
         args += ["-KaizenlogExe", str(exe)]
     try:
@@ -383,8 +391,19 @@ def run_setup(opts: SetupOptions, ui: SetupUI | None = None) -> int:
                     default=False,
                 )
             if do_reg:
-                if register_daily_task(opts.time):
-                    ui.print(f"✅ 日次タスクを登録しました（{opts.time}）")
+                morning = opts.morning_time or ""
+                if morning and not opts.yes:
+                    if not ui.confirm(
+                        f"朝タスク（kaizenlog morning）を {morning} に登録しますか？",
+                        default=True,
+                    ):
+                        morning = ""
+                if register_daily_task(opts.time, morning_time=morning):
+                    msg = f"✅ 日次タスクを登録しました（{opts.time}"
+                    if morning:
+                        msg += f" / 朝 {morning}"
+                    msg += "）"
+                    ui.print(msg)
                 else:
                     ui.print("⚠️  日次タスクの登録に失敗しました（後で手動可）")
                     soft_fail = True

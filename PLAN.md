@@ -67,3 +67,25 @@
 - 実装判断を保留する仮置き文言や、挙動を特定しない表現が残っていない。
 - 仕様書と `PLAN.md` 以外に変更がなく、`grok-desktop-experiment/` がステージ・コミットされていない。
 - 実装計画の作成は、ユーザーが書面仕様をレビュー・承認するまで開始しない。
+# qwen3.6:27b KaizenLog機能確認（2026-07-26）
+
+## Goal breakdown
+
+- インストール済みモデル、Ollama、コミット済みreasoning制御を確認する。
+- ユーザーデータを使わず、代表的な日次統計からKaizenLogの構造化改善提案を実生成する。
+- JSON契約検証、Markdownレンダリング、根拠・最小アクション・PASS/FAILを確認する。
+- 回帰テストとGit差分を確認し、外部作業中のdirtyファイルを変更・ステージしない。
+
+## Risks and mitigations
+
+- `run` / `generate` / `advise` CLIは実ボールトへ書き得るため使用しない。
+- ActivityWatch、通知、Memory、実験、スケジューラへの書き込みを行わない。
+- ローカルOllama以外のネットワークへ接続しない。
+- 27B CPU推論は数分かかり得るため、KaizenLog既定の600秒内で判定する。
+
+## Acceptance criteria
+
+- `qwen3.6:27b`がOllamaに存在する。
+- `generate_advice()`が空でないKaizen Markdownを返す。
+- 出力が根拠、15分以内の行動、翌日のPASS/FAILを含み、保存契約を通過する。
+- 全pytestが失敗なしで完了する。
