@@ -71,6 +71,7 @@ def test_render_template_embeds_vault_backend_model():
     assert "C:/vault" in text or "C:\\\\vault" in text or "C:/vault" in text.replace("\\", "/")
     assert 'backend = "openai-compatible"' in text
     assert 'model = "gemma4:latest"' in text
+    assert 'reasoning_effort = "none"' in text
 
 
 def test_write_config_creates_parents_atomically(tmp_path):

@@ -89,6 +89,15 @@ def _as_str_list(value, key) -> list[str]:
     raise ConfigError(f"設定値 {key} が不正です: {value!r}（文字列の配列を指定してください）")
 
 
+def _as_choice(value, key: str, allowed: set[str]) -> str:
+    if isinstance(value, str) and value in allowed:
+        return value
+    choices = ", ".join(sorted(allowed))
+    raise ConfigError(
+        f"設定値 {key} が不正です: {value!r}（{choices} のいずれかを指定してください）"
+    )
+
+
 @dataclass
 class LLMConfig:
     backend: str = "copilot-cli"  # "claude-code-cli" | "copilot-cli" | "openai-compatible" | "none"
@@ -106,6 +115,7 @@ class LLMConfig:
     base_url: str = "http://localhost:11434/v1"
     model: str = "qwen3:8b"
     api_key_env: str = "KAIZENLOG_API_KEY"
+    reasoning_effort: str = "none"
     timeout_seconds: int = 600
     lookback_days: int = 7
     retries: int = 2  # 一時エラー時の再試行回数（合計 retries+1 回試行）
@@ -308,6 +318,7 @@ extra_args = []   # 例: ["--model", "claude-sonnet-4"]
 # model は setup が検出した実在モデル、またはプレースホルダ
 base_url = "http://localhost:11434/v1"
 model = "{model}"
+reasoning_effort = "none"   # none | low | medium | high
 # --- GitHub Models（無料API）を使う場合は下記に差し替え ---
 # base_url = "https://models.github.ai/inference"
 # model = "openai/gpt-4o"
@@ -427,6 +438,11 @@ def load_config(path: str | None = None) -> Config:
     cfg.llm.base_url = oai.get("base_url", cfg.llm.base_url).rstrip("/")
     cfg.llm.model = oai.get("model", cfg.llm.model)
     cfg.llm.api_key_env = oai.get("api_key_env", cfg.llm.api_key_env)
+    cfg.llm.reasoning_effort = _as_choice(
+        oai.get("reasoning_effort", cfg.llm.reasoning_effort),
+        "llm.openai_compatible.reasoning_effort",
+        {"none", "low", "medium", "high"},
+    )
     cfg.llm.timeout_seconds = _coerce(int, oai.get("timeout_seconds", cfg.llm.timeout_seconds), "llm.openai_compatible.timeout_seconds")
     cfg.llm.retries = _coerce(int, llm.get("retries", cfg.llm.retries), "llm.retries")
     cfg.llm.retry_wait_seconds = _coerce(int, llm.get("retry_wait_seconds", cfg.llm.retry_wait_seconds), "llm.retry_wait_seconds")

@@ -64,6 +64,19 @@ def test_openai_non_json_body_raises_advisor_error(monkeypatch):
         _call_openai_compatible(LLMConfig(), "sys", "user")
 
 
+def test_openai_payload_disables_reasoning_by_default(monkeypatch):
+    captured = {}
+    resp = _FakeResp({"choices": [{"message": {"content": "改善提案"}}]})
+
+    def post(*args, **kwargs):
+        captured["json"] = kwargs["json"]
+        return resp
+
+    monkeypatch.setattr("kaizenlog.advisor.requests.post", post)
+    assert _call_openai_compatible(LLMConfig(), "sys", "user") == "改善提案"
+    assert captured["json"]["reasoning_effort"] == "none"
+
+
 # ---- advisor: Claude CLIのJSONエラー封筒をノートに書かない ----
 
 def _fake_run(stdout="", stderr="", returncode=0):
@@ -308,4 +321,26 @@ def test_config_bad_int_raises_config_error(tmp_path):
     p = tmp_path / "c.toml"
     p.write_text('[llm]\nretries = "2 times"\n', encoding="utf-8")
     with pytest.raises(ConfigError, match="llm.retries"):
+        load_config(str(p))
+
+
+def test_config_loads_openai_reasoning_effort(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[llm.openai_compatible]\nreasoning_effort = "low"\n',
+        encoding="utf-8",
+    )
+    assert load_config(str(p)).llm.reasoning_effort == "low"
+
+
+def test_config_rejects_invalid_openai_reasoning_effort(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[llm.openai_compatible]\nreasoning_effort = "off"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ConfigError,
+        match="llm.openai_compatible.reasoning_effort",
+    ):
         load_config(str(p))

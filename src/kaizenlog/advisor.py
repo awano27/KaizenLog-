@@ -283,6 +283,7 @@ def _call_openai_compatible(cfg: LLMConfig, system_prompt: str, user_prompt: str
         headers["Authorization"] = f"Bearer {api_key}"
     payload = {
         "model": cfg.model,
+        "reasoning_effort": cfg.reasoning_effort,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
