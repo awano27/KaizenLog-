@@ -59,10 +59,15 @@ def build_prompt(
     experiments: str | None = None,
     memory: str | None = None,
     evidence: str | AdviceEvidence | None = None,
+    reflections: str | None = None,
 ) -> str:
     parts: list[str] = []
     if evidence:
         parts.append(evidence.markdown if isinstance(evidence, AdviceEvidence) else evidence)
+        parts.append("\n\n")
+    if reflections:
+        parts.append("# ユーザーの振り返り（本人の言葉。最優先の文脈）\n")
+        parts.append(reflections)
         parts.append("\n\n")
     if intent:
         parts.append("# 本日の計画（ユーザーが手書きしたToday's Focus / Tasks）\n")
@@ -869,6 +874,7 @@ def prepare_advice_request(
     memory: str | None = None,
     redactor: Callable[[str], str] | None = None,
     evidence: AdviceEvidence | None = None,
+    reflections: str | None = None,
 ) -> tuple[str, str, AdviceEvidence | None]:
     """dry-runと本実行で完全に同じsystem/user promptを準備する。"""
     daily_contract = requires_daily_contract(cfg)
@@ -878,7 +884,13 @@ def prepare_advice_request(
         else None
     )
     prompt = build_prompt(
-        today_md, recent_summaries, intent, experiments, memory, evidence_ctx
+        today_md,
+        recent_summaries,
+        intent,
+        experiments,
+        memory,
+        evidence_ctx,
+        reflections=reflections,
     )
     system_prompt = resolve_system_prompt(cfg)
     if redactor:
@@ -1011,6 +1023,7 @@ def generate_advice(
     memory: str | None = None,
     redactor: Callable[[str], str] | None = None,
     evidence: AdviceEvidence | None = None,
+    reflections: str | None = None,
 ) -> AdviceResult:
     system_prompt, prompt, evidence_ctx = prepare_advice_request(
         cfg,
@@ -1021,6 +1034,7 @@ def generate_advice(
         memory,
         redactor,
         evidence,
+        reflections=reflections,
     )
 
     # 日次プロンプト以外は従来どおり素通し

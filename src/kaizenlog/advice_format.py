@@ -344,6 +344,13 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
                 f"actions[{i}] と proposals[{i}] の根拠IDが対応していません"
             )
         action = _require_single_line(item.get("action"), f"actions[{i}].action")
+        # if-then 実行意図: 実在の日課・時刻をアンカーにした短い合図（目安15字）
+        trigger = _require_single_line(item.get("trigger"), f"actions[{i}].trigger")
+        if len(trigger) > 40:
+            raise _contract_error(
+                f"actions[{i}].trigger は短くしてください（目安15字、最大40字）"
+            )
+        _check_no_kzn_or_marker(trigger, f"actions[{i}].trigger")
         pass_v = _require_single_line(item.get("pass"), f"actions[{i}].pass")
         fail_v = _require_single_line(item.get("fail"), f"actions[{i}].fail")
         _check_no_kzn_or_marker(action, f"actions[{i}].action")
@@ -485,8 +492,14 @@ def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
                 label = metric_display_label(m.group(1))
                 if label:
                     note = f"（{label}）"
+        trigger = str(item.get("trigger") or "").strip()
+        body = (
+            f"{trigger}→{item['action'].strip()}"
+            if trigger
+            else item["action"].strip()
+        )
         lines.append(
-            f"- [ ] {item['action'].strip()}"
+            f"- [ ] {body}"
             f"｜PASS: {core}{note}｜FAIL: {item['fail'].strip()}"
         )
     lines.append("")

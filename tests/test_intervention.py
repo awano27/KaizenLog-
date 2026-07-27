@@ -91,7 +91,7 @@ def test_window_rule_uses_hourly_limit():
     assert r.limit_mins == 10 and r.limit_period == 3600
     assert r.conj_mode is True  # 時間帯 AND 上限
     assert r.metric == "category_minutes:エンタメ"  # web watcher無しのフォールバック
-    assert r.target == "<= 20"  # 45分/日の半分（22.5）を5分単位に丸め
+    assert r.target == "<= 30"  # 45分/日×0.7=31.5 → 5分丸め30
 
 
 def test_daily_rule_for_site_source():
@@ -99,7 +99,8 @@ def test_daily_rule_for_site_source():
     rules = suggest_rules(detect_time_sinks(stats, DEFAULT_RULES))
     r = rules[0]
     assert r.times == ""
-    assert r.limit_mins == 30 and r.limit_period == 86400
+    # 60×0.7=42 → 40分（5分丸め）
+    assert r.limit_mins == 40 and r.limit_period == 86400
     assert r.conj_mode is False
     assert r.metric == "site_minutes:youtube.com"
 

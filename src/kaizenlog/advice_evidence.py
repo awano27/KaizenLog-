@@ -199,6 +199,7 @@ def build_advice_evidence(
     timezone: tzinfo | None = None,
     source_status: str = "unverified",
     known_categories: Sequence[str] | frozenset[str] | None = None,
+    action_stats: Any | None = None,
 ) -> AdviceEvidence:
     """LLMがログの意味を取り違えないための根拠コンテキストを作る。
 
@@ -505,12 +506,84 @@ def build_advice_evidence(
 
     lines.append(_transition_fact(blocks, timezone))
 
+    # F10: 推奨PASS帯（過去14日中央値×0.85〜0.95）。ガイドであり外れてよい
+    band_parts: list[str] = []
+    history_list = list(history or [])
+    # 主要指標: context_switches / 上位カテゴリ / focus / ai_sessions
+    def _hist_values(key_fn) -> list[float]:
+        vals: list[float] = []
+        for h in history_list[-14:]:
+            if not isinstance(h, dict):
+                continue
+            v = key_fn(h)
+            if isinstance(v, (int, float)) and isfinite(float(v)):
+                vals.append(float(v))
+        return vals
+
+    cs_vals = _hist_values(lambda h: h.get("context_switches"))
+    if len(cs_vals) >= 3:
+        m = float(median(cs_vals))
+        band_parts.append(
+            f"context_switches {m * 0.85:.0f}〜{m * 0.95:.0f}"
+        )
+    by_cat_hist: dict[str, list[float]] = {}
+    for h in history_list[-14:]:
+        if not isinstance(h, dict):
+            continue
+        bc = h.get("by_category")
+        if isinstance(bc, dict):
+            for k, v in bc.items():
+                if isinstance(v, (int, float)):
+                    by_cat_hist.setdefault(str(k), []).append(float(v))
+    # 当日上位カテゴリ優先
+    top_cats = sorted(
+        ((str(k), float(v)) for k, v in by_category.items() if isinstance(v, (int, float))),
+        key=lambda x: -x[1],
+    )[:3]
+    for cat, _ in top_cats:
+        vals = by_cat_hist.get(cat) or []
+        if len(vals) >= 3:
+            m = float(median(vals))
+            band_parts.append(
+                f"category_minutes:{cat} {m * 0.85:.0f}〜{m * 0.95:.0f}分"
+            )
+    focus_vals = _hist_values(
+        lambda h: (h.get("input") or {}).get("focus_blocks")
+        if isinstance(h.get("input"), dict)
+        else None
+    )
+    if len(focus_vals) >= 3:
+        m = float(median(focus_vals))
+        band_parts.append(f"focus_blocks {m * 0.85:.1f}〜{m * 0.95:.1f}")
+    ai_sess_vals = _hist_values(
+        lambda h: (h.get("ai") or {}).get("sessions")
+        if isinstance(h.get("ai"), dict)
+        else None
+    )
+    if len(ai_sess_vals) >= 3:
+        m = float(median(ai_sess_vals))
+        band_parts.append(f"ai_cc_sessions {m * 0.85:.1f}〜{m * 0.95:.1f}")
+    if band_parts:
+        lines.append(
+            "- [F10] 推奨PASS帯（過去14日中央値×0.85〜0.95）: "
+            + " / ".join(band_parts)
+            + "。推奨帯はガイドであり、行動内容に合わせて外れてよい。"
+        )
+
     short_record = total_minutes < 120
     previous_day_available = _previous_day_available(stats, history)
     browser_sample_sufficient = bool(
         browser_category_minutes is not None and browser_category_minutes >= 30
     )
     max_actions = 1 if short_record else 3
+    # 適応投与（消化率帯）と short_record は min で合成
+    if action_stats is not None:
+        try:
+            from .memory import dosing_max_actions
+
+            max_actions = min(max_actions, dosing_max_actions(action_stats))
+        except Exception:
+            pass
 
     summary_parts = [
         (

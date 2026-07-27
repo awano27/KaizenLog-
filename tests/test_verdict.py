@@ -193,7 +193,8 @@ def test_apply_verdicts_idempotent_and_skips_outside_advice():
     assert updated is not None
     # 区間外は未変更
     assert outside.strip() in updated
-    assert "｜判定: ✅（実測 35）" in extract_section(updated, ADVICE_MARKER)
+    sec = extract_section(updated, ADVICE_MARKER)
+    assert sec and "｜判定:" in sec and "実測35" in sec
     # 冪等
     again = apply_verdicts_to_advice_note(updated, [entry])
     assert again is None
@@ -392,7 +393,7 @@ def test_generate_verdict_and_actions_handoff(tmp_path, monkeypatch):
     prev_text = (daily / f"{proposal.isoformat()}.md").read_text(encoding="utf-8")
     assert "handwritten" in prev_text
     advice = extract_section(prev_text, ADVICE_MARKER)
-    assert "｜判定: ✅（実測 30）" in advice
+    assert "｜判定:" in advice and "実測30" in advice
     assert prev_text.count("｜判定:") == 1
     assert "- [ ] KZN-20260724-001: outside" in prev_text
 

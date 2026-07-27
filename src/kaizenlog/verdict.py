@@ -332,9 +332,34 @@ def backfill_verdicts(
 
 
 def format_verdict_suffix(entry: MemoryEntry) -> str:
+    """ノート ADVICE 行末の判定 suffix。FAIL は目標との残距離を示す。"""
     icon = "✅" if entry.verdict == "pass" else "❌"
     val = f"{entry.verdict_value:g}" if entry.verdict_value is not None else "?"
-    return f"｜判定: {icon}（実測 {val}）"
+    parsed = parse_pass_condition(entry.action)
+    if (
+        parsed is None
+        or entry.verdict_value is None
+        or entry.verdict not in ("pass", "fail")
+    ):
+        return f"｜判定: {icon}（実測 {val}）"
+    _metric, op, target = parsed
+    measured = float(entry.verdict_value)
+    t = float(target)
+    if entry.verdict == "pass":
+        return f"｜判定: ✅ 実測{measured:g}（目標{t:g}）"
+    # FAIL: 目標との差（「あと」）
+    if op in ("<=", "<"):
+        dist = measured - t  # 超過分を減らす
+    elif op in (">=", ">"):
+        dist = t - measured  # 不足分を足す
+    else:
+        dist = abs(measured - t)
+    if dist < 0:
+        dist = abs(dist)
+    near_thr = abs(t) * 0.1 if t != 0 else 0.1
+    if dist <= near_thr:
+        return f"｜判定: ❌ あと一歩（実測{measured:g}/目標{t:g}）"
+    return f"｜判定: ❌ 実測{measured:g}（目標{t:g}・あと{dist:g}）"
 
 
 def apply_verdicts_to_advice_note(

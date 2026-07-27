@@ -45,13 +45,15 @@ def _valid_data(**overrides):
         "actions": [
             {
                 "fact_ids": ["F3"],
-                "action": "始業時に集中枠を予定へ一件入れる",
+                "trigger": "始業の直後",
+                "action": "集中枠を予定へ一件入れる",
                 "pass": "focus_blocks >= 2",
                 "fail": "1回以下",
             },
             {
                 "fact_ids": ["F9"],
-                "action": "調査リンクを開く前に三件まとめる",
+                "trigger": "調査を始める前",
+                "action": "リンクを三件まとめる",
                 "pass": "context_switches <= 40",
                 "fail": "41回以上",
             },
@@ -256,6 +258,7 @@ def test_render_golden():
         "actions": [
             {
                 "fact_ids": ["F3"],
+                "trigger": "朝いちばんに",
                 "action": "行動する",
                 "pass": "focus_blocks >= 1",
                 "fail": "0回",
@@ -272,7 +275,7 @@ def test_render_golden():
         "1. 解釈文。提案文。翌日見る指標: 指標名\n"
         "\n"
         "### 明日の最小アクション\n"
-        "- [ ] 行動する｜PASS: focus_blocks >= 1（集中ブロック数）｜FAIL: 0回\n"
+        "- [ ] 朝いちばんに→行動する｜PASS: focus_blocks >= 1（集中ブロック数）｜FAIL: 0回\n"
         "\n"
         "### AI作業の改善\n"
         "- 測定不能なので断定しない\n"

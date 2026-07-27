@@ -29,6 +29,9 @@
 ## 実験とMemory
 
 - 実行中の実験、未完了の過去提案、完了済み提案を重複して提案しない。
+- **例外**: 実行済みFAILはより小さい一歩に分割して「（継続）」再提案してよい。
+- スキップされた提案と同種を繰り返さない。理由があれば尊重する。
+- 計画と実績の冒頭で昨日のPASSを具体的に承認する。FAILは責めず障害を1つだけ挙げる。
 - 一般論ではなく、15分以内に開始でき、翌日に数値で判定できる行動だけを提案する。
 
 ## 出力契約
@@ -49,6 +52,7 @@
   "actions": [
     {
       "fact_ids": ["F2"],
+      "trigger": "朝いちばんに",
       "action": "15分以内に始める行動",
       "pass": "context_switches <= 40",
       "fail": "41回以上"
@@ -68,6 +72,7 @@
 
 - proposals[i] と actions[i] は根拠IDを共有。ai_review は F4 または F5 を含む
 - `interpretation` / `ai_review.text` に算用数字を書かない
+- `trigger` 必須（if-then の合図。実在の日課・時刻か「朝いちばんに」等）
 - `pass` は可能な限り機械構文（`context_switches <= 40` 等）。使用可能指標は
   context_switches / total_active_minutes / ai_cc_sessions / ai_fragmented_sessions /
   ai_retry_chains / ai_tool_errors / ai_interruptions / ai_avg_turns / focus_blocks /

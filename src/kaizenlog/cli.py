@@ -51,9 +51,11 @@ from .memory import (
     append_entries,
     assign_action_ids,
     compute_action_stats,
+    compute_streaks,
     format_today_action_line,
     load_entries,
     mark_entry_done,
+    mark_entry_skipped,
     partition_open_actions,
     render_action_stats_line,
     render_actions_section,
@@ -495,26 +497,37 @@ def build_morning_notification(
     candidate_n = min(TODAY_CANDIDATE_CAP, len(buckets.recent))
     hold_n = max(0, buckets.total - candidate_n)
     yday = (today - timedelta(days=1)).isoformat()
-    # superseded（同日再 advise で撤回）は判定集計から除外
-    pass_n = sum(
+    # 昨日の判定は実行済みを主指標に（未実行 PASS は別掲）
+    done_pass = sum(
         1
         for e in entries
-        if e.status != "superseded"
+        if e.status == "done"
         and e.verdict_date == yday
         and e.verdict == "pass"
     )
-    fail_n = sum(
+    done_fail = sum(
         1
         for e in entries
-        if e.status != "superseded"
+        if e.status == "done"
         and e.verdict_date == yday
         and e.verdict == "fail"
     )
+    undone_pass = sum(
+        1
+        for e in entries
+        if e.status == "proposed"
+        and e.verdict_date == yday
+        and e.verdict == "pass"
+    )
     parts: list[str] = []
-    if candidate_n or hold_n or pass_n or fail_n:
+    streaks = compute_streaks(entries, today)
+    if candidate_n or hold_n or done_pass or done_fail or undone_pass or streaks.current:
+        judge = f"昨日の判定 実行済み✅{done_pass} ❌{done_fail}"
+        if undone_pass:
+            judge += f"（未実行での達成 {undone_pass}件）"
+        streak_s = f" / 🔥{streaks.current}日" if streaks.current >= 1 else ""
         parts.append(
-            f"今日の候補 {candidate_n}件 / 保留 {hold_n}件"
-            f" / 昨日の判定 ✅{pass_n} ❌{fail_n}"
+            f"今日の候補 {candidate_n}件 / 保留 {hold_n}件 / {judge}{streak_s}"
         )
     if catch_up_failures:
         failed_steps = sorted({step for step, _ in catch_up_failures})
@@ -725,6 +738,8 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         print("📗 完了アクションを記録しました: "
               + ", ".join(entry.id for entry in status_updates))
     memory_ctx = summarize_for_prompt(effective_entries, day)
+    action_stats = compute_action_stats(effective_entries, day)
+    reflections = _extract_reflections(content)
 
     # 人間向けMarkdownだけでは測定の意味が曖昧になるため、当日の統計JSONから
     # 確定事実と測定限界を作り、ログ本文より優先するコンテキストとして渡す。
@@ -754,6 +769,7 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         timezone=ZoneInfo(cfg.timezone),
         source_status=source_status,
         known_categories=known_category_names(cfg.rules),
+        action_stats=action_stats,
     )
 
     redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
@@ -769,6 +785,7 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
             memory_ctx or None,
             redactor,
             evidence_ctx,
+            reflections=reflections,
         )
         print("===== system prompt =====")
         print(system_prompt)
@@ -787,6 +804,7 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
             intent=intent,
             experiments=experiments_ctx or None,
             memory=memory_ctx or None,
+            reflections=reflections,
             evidence=evidence_ctx,
             redactor=redactor,
         )
@@ -915,7 +933,7 @@ def cmd_today(
     if health:
         print(health)
     stats = compute_action_stats(entries, day)
-    print(render_action_stats_line(stats))
+    print(render_action_stats_line(stats, streaks=compute_streaks(entries, day)))
     buckets = partition_open_actions(entries, day, recent_include_today=True)
     if buckets.total == 0:
         print("未完了のアクションはありません")
@@ -961,6 +979,32 @@ def cmd_today(
             f" / 31日以上 {len(buckets.older)}件"
         )
         print("全件表示: `kaizenlog today --all`")
+    return 0
+
+
+def cmd_skip(cfg: Config, action_id: str, reason: str | None = None) -> int:
+    """アクションをスキップ（拒否）として記録する。消化率分母から外す。"""
+    entries = load_entries(cfg.memory_path)
+    resolved = resolve_action_id(action_id, entries)
+    if resolved is None:
+        print(f"❌ 該当するアクションがありません: {action_id}", file=sys.stderr)
+        return 1
+    if isinstance(resolved, list):
+        print("❌ ID が曖昧です。候補:", file=sys.stderr)
+        for e in resolved:
+            print(f"  {e.id}  {e.action[:60]}", file=sys.stderr)
+        return 1
+    entry = resolved
+    if entry.status == "skipped":
+        print(f"ℹ️  既にスキップ済みです: {entry.id}")
+        return 0
+    if entry.status == "done":
+        print(f"ℹ️  既に消化済みです（スキップしません）: {entry.id}")
+        return 0
+    skipped = mark_entry_skipped(entry, reason=reason)
+    append_entries(cfg.memory_path, [skipped])
+    r = f" 理由: {reason}" if reason else ""
+    print(f"⏭  スキップしました: {entry.id}{r}")
     return 0
 
 
@@ -1048,6 +1092,15 @@ def _extract_intent(content: str) -> str | None:
         if section:
             parts.append(f"## {heading}\n{section}")
     return "\n\n".join(parts) or None
+
+
+def _extract_reflections(content: str) -> str | None:
+    """手書きの振り返り（Reflections / 振り返り）を取り出す。"""
+    for heading in ("Reflections", "振り返り"):
+        section = extract_heading_section(content, heading)
+        if section:
+            return f"## {heading}\n{section}"
+    return None
 
 
 NIPPOU_MARKER = "kaizenlog:nippou"
@@ -1494,6 +1547,12 @@ def main(argv: list[str] | None = None) -> int:
     don = sub.add_parser("done", help="アクションを消化（KZN ID または末尾）")
     don.add_argument("id", help="KZN-YYYYMMDD-NNN または proposed の ID 末尾")
     don.add_argument("--date", help="done_date とする日（省略時は今日）")
+    skp = sub.add_parser(
+        "skip",
+        help="アクションをスキップ（拒否。消化率の分母から除外）",
+    )
+    skp.add_argument("id", help="KZN-YYYYMMDD-NNN または proposed の ID 末尾")
+    skp.add_argument("--reason", default="", help="スキップ理由（任意）")
 
     args = parser.parse_args(argv)
 
@@ -1610,14 +1669,18 @@ def main(argv: list[str] | None = None) -> int:
         day = _parse_date(args.date, tz)
         return cmd_done(cfg, args.id, day)
 
+    if args.command == "skip":
+        return cmd_skip(cfg, args.id, reason=getattr(args, "reason", None) or None)
+
     if args.command == "status":
         print(render_status(load_runs(cfg.logs_path)))
         # 北極星: 消化率 / PASS率（読み込み失敗で status 全体を落とさない）
         try:
             today = datetime.now(ZoneInfo(cfg.timezone)).date()
-            stats = compute_action_stats(load_entries(cfg.memory_path), today)
+            mem = load_entries(cfg.memory_path)
+            stats = compute_action_stats(mem, today)
             print()
-            print(render_action_stats_line(stats))
+            print(render_action_stats_line(stats, streaks=compute_streaks(mem, today)))
         except Exception:
             pass
         return 0

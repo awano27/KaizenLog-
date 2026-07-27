@@ -87,13 +87,15 @@ VALID_ADVICE_JSON = """{
   "actions": [
     {
       "fact_ids": ["F3"],
-      "action": "始業時に集中枠を予定へ一件入れる",
+      "trigger": "始業の直後",
+      "action": "集中枠を予定へ一件入れる",
       "pass": "集中ブロック2回以上",
       "fail": "1回以下"
     },
     {
       "fact_ids": ["F9"],
-      "action": "調査リンクを開く前に三件まとめる",
+      "trigger": "調査を始める前",
+      "action": "リンクを三件まとめる",
       "pass": "開発→ブラウジング1回以下",
       "fail": "2回以上"
     }
@@ -130,7 +132,8 @@ MISSING_EVIDENCE_JSON = """{
   "actions": [
     {
       "fact_ids": ["F0"],
-      "action": "始業時に統計ファイルを一件確認する",
+      "trigger": "始業の直後",
+      "action": "統計ファイルを一件確認する",
       "pass": "1件確認",
       "fail": "0件"
     }

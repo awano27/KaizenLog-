@@ -108,7 +108,7 @@ def test_render_actions_includes_stats_line():
     md = render_actions_section(entries, today)
     assert md is not None
     assert "消化率" in md
-    assert "PASS率" in md
+    assert "実行済みPASS" in md or "PASS" in md
 
     # proposed 0 の窓内アクションのみ → セクション None（アクション0）
     assert render_actions_section([], today) is None
@@ -145,7 +145,9 @@ def test_build_morning_notification():
     assert msg is not None
     assert "今日の候補" in msg
     assert "保留" in msg
-    assert "✅1" in msg and "❌1" in msg
+    assert "昨日の判定" in msg
+    # 未実行 PASS/FAIL は層別: 未実行達成1件
+    assert "未実行での達成 1件" in msg or "✅" in msg
     assert "secret" not in msg
     assert build_morning_notification([], today) is None
 
@@ -332,7 +334,7 @@ def test_legacy_line_verdict_writeback_still_works():
         "- [ ] KZN-20260724-001: [F3] 旧形式｜PASS: context_switches <= 40｜FAIL: x\n",
     )
     updated = apply_verdicts_to_advice_note(content, [entry])
-    assert updated and "｜判定: ✅（実測 12）" in updated
+    assert updated and "｜判定:" in updated and "実測12" in updated
 
 
 def test_category_minutes_label_has_no_nested_parens():

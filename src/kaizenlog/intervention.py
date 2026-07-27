@@ -217,8 +217,8 @@ def suggest_rules(sinks: list[TimeSink], max_rules: int = 5) -> list[BlockRule]:
         window = suggest_window(sink.hour_minutes)
         metric = (f"site_minutes:{sink.label}" if sink.source == "site"
                   else "category_minutes:エンタメ")
-        # 効果測定の目標: 現状平均の半分（最低10分は許容し、ゼロ強制はしない）
-        target_minutes = max(10, int(round(sink.avg_minutes / 2 / 5) * 5))
+        # 初回目標: avg×0.7（最低10分・5分丸め）。半減は FAIL 連鎖で意欲を削ぐため段階的に
+        target_minutes = max(10, int(round(sink.avg_minutes * 0.7 / 5) * 5))
         target = f"<= {target_minutes}"
         if window:
             end_label = f"{window[1]}時" if window[1] > window[0] else f"翌{window[1]}時"
@@ -233,7 +233,7 @@ def suggest_rules(sinks: list[TimeSink], max_rules: int = 5) -> list[BlockRule]:
             ))
         else:
             evidence = (f"{sink.label}: 平均 {sink.avg_minutes:.0f}分/日（終日に分散）"
-                        f" → 半分の {target_minutes}分/日 を上限に")
+                        f" → 段階目標 {target_minutes}分/日 を上限に")
             out.append(BlockRule(
                 set_name=f"{SET_NAME_PREFIX}{sink.label}",
                 sites=sink.domains, times="",

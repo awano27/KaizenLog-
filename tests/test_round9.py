@@ -356,7 +356,7 @@ def test_superseded_excluded_from_judge_stats_notify():
     msg = build_morning_notification(with_verdict, date(2026, 7, 21))
     assert msg is not None
     assert "✅0" in msg
-    assert "❌1" in msg
+    assert "実行済み" in msg  # proposed FAIL is not counted as done-fail
 
 
 # ---- G9 ----
