@@ -1,0 +1,15 @@
+{
+  "id": "case2_thin_day",
+  "day": "2026-07-22",
+  "schema_version": 1,
+  "timezone": "Asia/Tokyo",
+  "source_status": "missing",
+  "known_categories": ["開発", "AI作業", "ブラウジング", "エンタメ", "その他"],
+  "current_stats": null,
+  "prior_stats": [],
+  "today_md": "## 📊 Activity Log\n\nActivityWatchから対象日のアクティブ時間を0分取得しました。\nPCを使わなかった場合は正常です。使用した場合は `kaizenlog doctor` でwatcherと対象日を確認してください。\n",
+  "recent_summaries": [],
+  "intent": null,
+  "experiments_ctx": null,
+  "memory_ctx": null
+}

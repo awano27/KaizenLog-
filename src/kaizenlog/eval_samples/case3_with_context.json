@@ -1,0 +1,78 @@
+{
+  "id": "case3_with_context",
+  "day": "2026-07-23",
+  "schema_version": 1,
+  "timezone": "Asia/Tokyo",
+  "source_status": "verified",
+  "known_categories": ["開発", "AI作業", "ブラウジング", "エンタメ", "その他"],
+  "current_stats": {
+    "version": 1,
+    "day": "2026-07-23",
+    "total_minutes": 280.0,
+    "context_switches": 64,
+    "ai_activity_blocks": 10,
+    "afk_watcher_available": true,
+    "by_category": {
+      "開発": 100.0,
+      "エンタメ": 55.0,
+      "ブラウジング": 50.0,
+      "AI作業": 45.0,
+      "その他": 30.0
+    },
+    "by_app": {
+      "Code.exe": 110.0,
+      "chrome.exe": 100.0,
+      "msedge.exe": 20.0
+    },
+    "by_site": {
+      "example-video.test": 30.0,
+      "github.com": 12.0
+    },
+    "blocks": [
+      {"start": "2026-07-23T09:00:00+09:00", "category": "開発", "app": "Code.exe", "title": "demo-app"},
+      {"start": "2026-07-23T12:00:00+09:00", "category": "エンタメ", "app": "chrome.exe", "title": "video"},
+      {"start": "2026-07-23T15:00:00+09:00", "category": "AI作業", "app": "Code.exe", "title": "assistant"}
+    ],
+    "input": {
+      "focus_blocks": 1,
+      "focus_minutes": 30.0,
+      "active_input_minutes": 95.0,
+      "keypresses": 8000
+    },
+    "ai": {
+      "sessions": 2,
+      "fragmented": 0,
+      "tool_errors": 1,
+      "interruptions": 0,
+      "retry_chains": 1
+    }
+  },
+  "prior_stats": [
+    {
+      "day": "2026-07-20",
+      "total_minutes": 250.0,
+      "context_switches": 58,
+      "by_category": {"エンタメ": 40.0, "開発": 120.0}
+    },
+    {
+      "day": "2026-07-21",
+      "total_minutes": 246.0,
+      "context_switches": 52,
+      "by_category": {"エンタメ": 20.0, "開発": 120.0}
+    },
+    {
+      "day": "2026-07-22",
+      "total_minutes": 260.0,
+      "context_switches": 61,
+      "by_category": {"エンタメ": 48.0, "開発": 100.0}
+    }
+  ],
+  "today_md": "## 📊 Activity Log\n\n**合計アクティブ時間**: 4h40m / コンテキストスイッチ: 64回\n\n### カテゴリ別\n\n| カテゴリ | 時間 | 割合 |\n| --- | ---: | ---: |\n| 開発 | 1h40m | 36% |\n| エンタメ | 55m | 20% |\n| ブラウジング | 50m | 18% |\n| AI作業 | 45m | 16% |\n",
+  "recent_summaries": [
+    "2026-07-22: エンタメ 48分 / 開発 100分",
+    "2026-07-21: エンタメ 20分 / 開発中心"
+  ],
+  "intent": "## Today's Focus\n- demo-app のレビューコメント対応\n- エンタメ時間を抑える\n",
+  "experiments_ctx": "- 「エンタメ30分以内」[running] 目標: category_minutes:エンタメ <= 30（開始時 45 / 直近: 07/22=48、効果量 +6.7%、期限: 2026-08-06）\n※ PC前景のみ計測。カテゴリ時間の減少はスマホ等への移行（風船効果）の可能性を排除できない。",
+  "memory_ctx": "## 提案の実績（直近14日）\n提案4件 / 消化率50% / 自動判定2件 / PASS率50%\n## 未完了のアクション（再提案しない。価値があれば「（継続）」と明示して1行のみ）\n- KZN-20260720-001（2026-07-20提案）: 始業時に25分枠を1件入れる｜PASS: focus_blocks >= 2｜FAIL: 1回以下\n- KZN-20260722-001（2026-07-22提案）: 調査リンクを開く前に3件まとめる｜PASS: context_switches <= 45｜FAIL: 46回以上"
+}

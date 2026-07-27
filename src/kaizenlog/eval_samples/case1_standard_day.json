@@ -1,0 +1,78 @@
+{
+  "id": "case1_standard_day",
+  "day": "2026-07-21",
+  "schema_version": 1,
+  "timezone": "Asia/Tokyo",
+  "source_status": "verified",
+  "known_categories": ["開発", "AI作業", "ブラウジング", "エンタメ", "その他"],
+  "current_stats": {
+    "version": 1,
+    "day": "2026-07-21",
+    "total_minutes": 246.0,
+    "context_switches": 52,
+    "ai_activity_blocks": 14,
+    "afk_watcher_available": true,
+    "by_category": {
+      "開発": 120.0,
+      "AI作業": 55.0,
+      "ブラウジング": 41.0,
+      "その他": 30.0
+    },
+    "by_app": {
+      "Code.exe": 130.0,
+      "chrome.exe": 60.0,
+      "WindowsTerminal.exe": 20.0
+    },
+    "by_site": {
+      "github.com": 18.0,
+      "docs.python.org": 6.0
+    },
+    "blocks": [
+      {"start": "2026-07-21T09:00:00+09:00", "category": "開発", "app": "Code.exe", "title": "demo-app src"},
+      {"start": "2026-07-21T10:30:00+09:00", "category": "AI作業", "app": "Code.exe", "title": "assistant panel"},
+      {"start": "2026-07-21T11:15:00+09:00", "category": "ブラウジング", "app": "chrome.exe", "title": "API docs"},
+      {"start": "2026-07-21T14:00:00+09:00", "category": "開発", "app": "Code.exe", "title": "demo-app tests"}
+    ],
+    "input": {
+      "focus_blocks": 3,
+      "focus_minutes": 78.0,
+      "active_input_minutes": 150.0,
+      "keypresses": 12000
+    },
+    "ai": {
+      "sessions": 4,
+      "fragmented": 1,
+      "tool_errors": 0,
+      "interruptions": 1,
+      "retry_chains": 0
+    }
+  },
+  "prior_stats": [
+    {
+      "day": "2026-07-18",
+      "total_minutes": 240.0,
+      "context_switches": 60,
+      "by_category": {"開発": 130.0, "AI作業": 40.0, "ブラウジング": 50.0}
+    },
+    {
+      "day": "2026-07-19",
+      "total_minutes": 210.0,
+      "context_switches": 55,
+      "by_category": {"開発": 100.0, "AI作業": 50.0, "ブラウジング": 40.0}
+    },
+    {
+      "day": "2026-07-20",
+      "total_minutes": 200.0,
+      "context_switches": 70,
+      "by_category": {"開発": 90.0, "AI作業": 45.0, "ブラウジング": 45.0}
+    }
+  ],
+  "today_md": "## 📊 Activity Log\n\n**合計アクティブ時間**: 4h6m / コンテキストスイッチ: 52回\n\n### カテゴリ別\n\n| カテゴリ | 時間 | 割合 |\n| --- | ---: | ---: |\n| 開発 | 2h | 49% |\n| AI作業 | 55m | 22% |\n| ブラウジング | 41m | 17% |\n\n### 🤖 AI作業の内訳（画面分類による推定）\n\nAI関連画面の前景ブロック数（推定）: 14回（会話数・往復数ではありません）\n",
+  "recent_summaries": [
+    "2026-07-20: 合計 3h20m / 開発中心 / スイッチ多め",
+    "2026-07-19: 合計 3h30m / AI作業 50m"
+  ],
+  "intent": "## Today's Focus\n- demo-app のテストを通す\n- 集中枠を1件入れる\n",
+  "experiments_ctx": null,
+  "memory_ctx": null
+}

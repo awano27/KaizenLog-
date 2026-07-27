@@ -144,7 +144,7 @@ F-ID などの機械トークンは検証層に留め、ノート本文は平易
 | 運用 | `doctor` · `status` · `backfill` · 失敗通知 · ヘルスレジャー |
 | AI 作業の質 | Claude Code / Codex CLI テレメトリ、リトライ連鎖 |
 | 拡張 | `report`（日報）· `prompts` · `patterns` · `/kaizen-autopilot` |
-| 開発 | `eval record` / `eval run`（プロンプト回帰の契約合格率） |
+| 開発 | `eval record` / `eval run`（プロンプト回帰。初回は同梱 `eval/samples/`、自分のデータは `eval record`） |
 | 安全 | プライバシーマスク · `advise --dry-run` · マーカー外不変 |
 
 ### 測定の限界

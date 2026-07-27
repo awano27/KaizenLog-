@@ -363,12 +363,14 @@ kaizenlog prompts --days 14   # 「5回/5日: ニュースを要約して… →
 プロンプト（`prompts/*.md`）や契約検証を変えたら、前後比較のために:
 
 ```powershell
-kaizenlog eval record --date 2026-07-21   # 実日をケース化（vault/.kaizenlog/eval/cases、gitignore 済み）
-kaizenlog eval run --repeat 3             # 現バックエンドで反復（一発/修復後/縮退率）
+kaizenlog eval run --repeat 3             # 初回は同梱サンプル(eval/samples)で動作確認
+kaizenlog eval record --date 2026-07-21   # 自分のデータは redact 済みで cases へ
+kaizenlog eval run --repeat 3             # ユーザーケースがあればそちらを優先
 kaizenlog eval run --cases path\to\cases --min-pass-rate 0.8
 ```
 
-同梱の合成サンプルはパッケージ内 `eval_samples/` にあります。pytest はモックのみで、**実 LLM は `eval run` の手動実行時のみ**呼び出します。
+**初回は同梱サンプル（`eval/samples/`）で動作確認し、自分のデータでは `eval record`。**  
+ユーザーケースが無いとき `eval run` は自動でサンプルへフォールバックします。pytest はモックのみで、**実 LLM は `eval run` の手動実行時のみ**呼び出します。
 
 ## トラブルシューティング
 

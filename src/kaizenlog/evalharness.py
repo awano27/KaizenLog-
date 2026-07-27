@@ -120,13 +120,59 @@ def redact_case(case: EvalCase, redactor: Callable[[str], str]) -> EvalCase:
 
 
 def default_cases_dir(cfg: Config) -> Path:
+    """ユーザーが record したケースの既定先（vault 配下、gitignore 対象）。"""
     return Path(cfg.vault_dir).expanduser() / ".kaizenlog" / "eval" / "cases"
 
 
+def cwd_eval_cases_dir() -> Path:
+    """リポジトリ/CWD 直下の eval/cases（gitignore 対象）。"""
+    return Path("eval") / "cases"
+
+
+def repo_eval_samples_dir() -> Path | None:
+    """ソースツリーの eval/samples（リポジトリ同梱）。無ければ None。"""
+    # src/kaizenlog/evalharness.py → parents[2] == リポジトリルート
+    cand = Path(__file__).resolve().parents[2] / "eval" / "samples"
+    if cand.is_dir() and any(cand.glob("*.json")):
+        return cand
+    # CWD からの相対（クローン直下で実行時）
+    cwd_cand = Path("eval") / "samples"
+    if cwd_cand.is_dir() and any(cwd_cand.glob("*.json")):
+        return cwd_cand.resolve()
+    return None
+
+
 def package_samples_dir() -> Path:
+    """同梱サンプル: リポジトリ eval/samples を優先、なければパッケージ内。"""
     from importlib import resources
 
+    repo = repo_eval_samples_dir()
+    if repo is not None:
+        return repo
     return Path(resources.files("kaizenlog") / "eval_samples")
+
+
+def _dir_has_cases(directory: Path) -> bool:
+    return directory.is_dir() and any(directory.glob("*.json"))
+
+
+def resolve_eval_cases_dir(
+    cfg: Config, explicit: Path | None = None
+) -> tuple[Path, bool]:
+    """評価ケースディレクトリを解決する。
+
+    戻り値: (path, used_bundled_samples)
+    優先順: 明示 --cases → vault 既定 cases → CWD eval/cases → 同梱 samples
+    """
+    if explicit is not None:
+        return explicit, False
+    user = default_cases_dir(cfg)
+    if _dir_has_cases(user):
+        return user, False
+    cwd_cases = cwd_eval_cases_dir()
+    if _dir_has_cases(cwd_cases):
+        return cwd_cases.resolve(), False
+    return package_samples_dir(), True
 
 
 def save_case(path: Path, case: EvalCase) -> None:

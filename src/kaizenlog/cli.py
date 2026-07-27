@@ -1246,26 +1246,21 @@ def cmd_eval_run(
     from .evalharness import (
         format_eval_table,
         load_cases_dir,
-        package_samples_dir,
+        resolve_eval_cases_dir,
         run_eval,
     )
 
-    directory = cases_dir
-    if directory is None:
-        # ユーザーケース → 同梱サンプルの順
-        from .evalharness import default_cases_dir
-
-        user_dir = default_cases_dir(cfg)
-        if user_dir.is_dir() and any(user_dir.glob("*.json")):
-            directory = user_dir
-        else:
-            directory = package_samples_dir()
+    directory, used_samples = resolve_eval_cases_dir(cfg, cases_dir)
+    if used_samples:
+        print(
+            f"ℹ ユーザーケースが無いため同梱サンプルを使います: {directory}"
+        )
     cases = load_cases_dir(directory)
     if not cases:
         print(f"❌ ケースがありません: {directory}", file=sys.stderr)
         print(
             "   `kaizenlog eval record` で保存するか、"
-            "同梱 sample を --cases で指定してください。",
+            "リポジトリの `eval/samples/` を --cases で指定してください。",
             file=sys.stderr,
         )
         return 1

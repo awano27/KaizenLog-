@@ -6,6 +6,6 @@ build/
 kaizenlog.toml
 .venv/
 venv/
-# 個人ログ由来の評価ケース（合成サンプルは src/kaizenlog/eval_samples/ をコミット）
+# 個人ログ由来の評価ケース（合成サンプルは eval/samples/ をコミット）
 eval/cases/
 .kaizenlog/eval/cases/
