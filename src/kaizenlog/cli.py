@@ -1435,6 +1435,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     wc.add_argument("--week", help="対象週 YYYY-Www（月曜始まり）")
     wc.add_argument("--date", help="この日を含む週（--week より優先されない）")
+    wc.add_argument(
+        "--write",
+        action="store_true",
+        help="Weekly Reviews/YYYY-Www.md のマーカー区間へ永続化（stdout も出す）",
+    )
     blk = sub.add_parser("block", help="時間泥棒からLeechBlockのブロックルールを生成（介入）")
     blk.add_argument("--days", type=int, default=14, help="分析する日数（デフォルト14）")
     blk.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
@@ -1657,7 +1662,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "weekly-context":
-        from .weekly_context import monday_of, parse_iso_week, render_weekly_context
+        from .weekly_context import (
+            monday_of,
+            parse_iso_week,
+            render_weekly_context,
+            write_weekly_context,
+        )
 
         tz = ZoneInfo(cfg.timezone)
         if args.week:
@@ -1669,14 +1679,40 @@ def main(argv: list[str] | None = None) -> int:
         else:
             ref = _parse_date(args.date, tz)
             week_start = monday_of(ref)
-        print(
-            render_weekly_context(
-                cfg.stats_path,
-                cfg.memory_path,
-                cfg.experiments_path,
-                week_start,
-            )
+        t0 = monotonic()
+        body = render_weekly_context(
+            cfg.stats_path,
+            cfg.memory_path,
+            cfg.experiments_path,
+            week_start,
         )
+        print(body)
+        if getattr(args, "write", False):
+            try:
+                path = write_weekly_context(
+                    cfg.daily_notes_path, body, week_start
+                )
+                print(f"✅ 週次コンテキストを書き込みました: {path}")
+                log_run(
+                    cfg.logs_path,
+                    "weekly-context",
+                    ok=True,
+                    duration_seconds=monotonic() - t0,
+                    retention_days=cfg.log_retention_days,
+                    note="write",
+                )
+            except Exception as e:
+                # 無人実行を止めない: 警告 + runlog
+                print(f"⚠️  週次コンテキストの書き込みに失敗: {e}", file=sys.stderr)
+                log_run(
+                    cfg.logs_path,
+                    "weekly-context",
+                    ok=False,
+                    duration_seconds=monotonic() - t0,
+                    error=f"{type(e).__name__}: {e}",
+                    retention_days=cfg.log_retention_days,
+                )
+                return 0
         return 0
 
     if args.command == "block":

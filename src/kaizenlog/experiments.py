@@ -36,6 +36,7 @@ METRIC_DESCRIPTIONS = {
     "ai_tool_errors": "Claude Codeのツールエラー回数",
     "ai_interruptions": "Claude Codeのユーザー中断・拒否回数",
     "ai_avg_turns": "Claude Codeセッションの平均往復数",
+    "ai_output_tokens": "AI応答トークン量",
     "category_minutes:<カテゴリ名>": "指定カテゴリの時間（分）例: category_minutes:エンタメ",
     "site_minutes:<ドメイン>": "指定サイトの時間（分）例: site_minutes:youtube.com（要 aw-watcher-web）",
     "focus_blocks": "集中ブロック数（25分以上入力が続いた区間。要 aw-watcher-input）",
@@ -168,6 +169,8 @@ def compute_metric(
         if not cc_sessions:
             return 0.0
         return round(sum(s.user_turns for s in cc_sessions) / len(cc_sessions), 1)
+    if metric == "ai_output_tokens":
+        return float(sum(int(s.output_tokens or 0) for s in cc_sessions))
     if metric.startswith("category_minutes:"):
         category = metric.split(":", 1)[1].strip()
         # 未知カテゴリを 0.0 にすると PASS: cat <= N が恒久偽PASSになる
@@ -192,12 +195,13 @@ def metric_from_stats(
       ai_retry_chains ← ai.retry_chains（旧 stats は None）,
       ai_tool_errors ← ai.tool_errors,
       ai_interruptions ← ai.interruptions,
+      ai_avg_turns ← ai.avg_turns / turns_total÷sessions / v1 projects turns 近似,
+      ai_output_tokens ← ai.output_tokens（v2。v1 は None）,
       category_minutes:<名> ← by_category,
       site_minutes:<域> ← by_site,
       focus_blocks / focus_minutes / input_keypresses ← input（保存時のみ）
 
-    非対応（常に None）:
-      ai_avg_turns — セッション単位の往復平均は stats に再構成可能な形で残していない
+    キー欠損は version 分岐せず None/フォールバック（v1 互換）。
     """
     if not isinstance(stats, dict):
         return None
@@ -229,8 +233,35 @@ def metric_from_stats(
         v = ai.get("interruptions")
         return float(v) if isinstance(v, (int, float)) else None
     if metric == "ai_avg_turns":
-        # セッション別 user_turns が stats に無いため復元不能
+        # 1) v2 直接キー
+        v = ai.get("avg_turns")
+        if isinstance(v, (int, float)):
+            return float(v)
+        # 2) turns_total ÷ sessions
+        turns = ai.get("turns_total")
+        sessions = ai.get("sessions")
+        if (
+            isinstance(turns, (int, float))
+            and isinstance(sessions, (int, float))
+            and float(sessions) > 0
+        ):
+            return round(float(turns) / float(sessions), 1)
+        if isinstance(sessions, (int, float)) and float(sessions) == 0:
+            return 0.0
+        # 3) v1 近似: projects[*].turns 合計 ÷ sessions
+        projects = ai.get("projects")
+        if isinstance(projects, dict) and isinstance(sessions, (int, float)):
+            if float(sessions) <= 0:
+                return 0.0
+            tsum = 0.0
+            for p in projects.values():
+                if isinstance(p, dict) and isinstance(p.get("turns"), (int, float)):
+                    tsum += float(p["turns"])
+            return round(tsum / float(sessions), 1)
         return None
+    if metric == "ai_output_tokens":
+        v = ai.get("output_tokens")
+        return float(v) if isinstance(v, (int, float)) else None
     if metric.startswith("category_minutes:"):
         cat = metric.split(":", 1)[1].strip()
         # 未知カテゴリは未計測（None）。既知名でキー欠落のみ 0.0

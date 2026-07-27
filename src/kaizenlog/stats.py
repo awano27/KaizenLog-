@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -121,8 +122,25 @@ def build_stats(
         )
         bucket["retry_chains"] += 1
 
+    # v2: セッション横断のテレメトリ集約（週次・実験・baseline 用）
+    n_sess = len(cc_sessions)
+    turns_total = sum(int(s.user_turns or 0) for s in cc_sessions)
+    output_tokens = sum(int(s.output_tokens or 0) for s in cc_sessions)
+    api_calls = sum(int(s.api_calls or 0) for s in cc_sessions)
+    tool_total: Counter[str] = Counter()
+    models_set: set[str] = set()
+    for s in cc_sessions:
+        if s.tool_counts:
+            tool_total.update(s.tool_counts)
+        if s.models:
+            models_set.update(str(m) for m in s.models if m)
+    avg_turns = round(turns_total / n_sess, 1) if n_sess else None
+    # 上位5ツール（合算回数）
+    tool_counts = {name: int(cnt) for name, cnt in tool_total.most_common(5)}
+
     stats = {
-        "version": 1,
+        # v2: ai に turns/tokens/tools/models を追加。読込側はキー欠損を許容（分岐しない）
+        "version": 2,
         "day": day.isoformat(),
         "total_minutes": round(summary.total_minutes, 1),
         "context_switches": summary.context_switches,
@@ -144,7 +162,7 @@ def build_stats(
             for b in summary.blocks
         ],
         "ai": {
-            "sessions": len(cc_sessions),
+            "sessions": n_sess,
             "fragmented": sum(1 for s in cc_sessions if s.is_fragmented),
             "tool_errors": sum(s.tool_errors for s in cc_sessions),
             "interruptions": sum(s.interruptions for s in cc_sessions),
@@ -156,6 +174,13 @@ def build_stats(
             # output tokens ベースの概算（input/cache 未計上）。旧 stats は欠落可
             "est_cost_usd": est_cost,
             "uncosted_tokens": uncosted,
+            # v2 テレメトリ（キー欠損時は v1 と同様に無視）
+            "turns_total": turns_total,
+            "avg_turns": avg_turns,
+            "output_tokens": output_tokens,
+            "api_calls": api_calls,
+            "tool_counts": tool_counts,
+            "models": sorted(models_set),
         },
     }
     if input_stats is not None:

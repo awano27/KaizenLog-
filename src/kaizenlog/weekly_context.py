@@ -11,8 +11,9 @@ from .experiments import (
     load_experiments,
     target_met,
 )
-from .memory import compute_action_stats, load_entries
+from .memory import load_entries
 from .stats import load_stats
+from .vault import WEEKLY_CONTEXT_MARKER, atomic_write_text, upsert_section
 
 
 def monday_of(d: date) -> date:
@@ -32,6 +33,61 @@ def parse_iso_week(week: str) -> date:
     return date.fromisocalendar(year, w, 1)
 
 
+def iso_week_label(week_start: date) -> str:
+    iso = week_start.isocalendar()
+    return f"{iso[0]}-W{iso[1]:02d}"
+
+
+def weekly_review_path(daily_notes_dir: Path, week_start: date) -> Path:
+    """Weekly Reviews/YYYY-Www.md"""
+    return Path(daily_notes_dir) / "Weekly Reviews" / f"{iso_week_label(week_start)}.md"
+
+
+def expired_recommendation(hits: int, n: int) -> str:
+    """expired 実験の採否推奨ラベル（表示のみ。frontmatter は書かない）。
+
+    自動で status を adopted/rejected に書き換えない理由:
+    frontmatter 簡易パーサでの書換はノート破損リスクが高く、
+    採否の最終決定は人間 / weekly-kaizen スキルに残す。
+    """
+    if n <= 0:
+        return "実測不足"
+    if hits * 2 > n:
+        return "✅採用推奨"
+    return "❌棄却推奨"
+
+
+def _format_token_count(n: float) -> str:
+    """123456 → 123k のような短縮。"""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
+    if n >= 1000:
+        # 整数寄りは k
+        if abs(n - round(n / 1000) * 1000) < 50:
+            return f"{int(round(n / 1000))}k"
+        return f"{n / 1000:.1f}k"
+    return f"{int(n)}"
+
+
+def format_ai_tokens_week_line(stats_list: list[dict]) -> str:
+    """AI トークン週計行。v1（output_tokens 無し）の日は分母除外。全日欠損は -。"""
+    totals: list[float] = []
+    for s in stats_list:
+        ai = s.get("ai") if isinstance(s.get("ai"), dict) else {}
+        v = ai.get("output_tokens")
+        if isinstance(v, (int, float)):
+            totals.append(float(v))
+    if not totals:
+        return "AIトークン: -"
+    week_sum = sum(totals)
+    day_avg = week_sum / len(totals)
+    return (
+        f"AIトークン: 週計 {_format_token_count(week_sum)}"
+        f" / 日平均 {_format_token_count(day_avg)}"
+        f"（{len(totals)}日分の v2 統計）"
+    )
+
+
 def render_weekly_context(
     stats_dir: Path,
     memory_dir: Path,
@@ -40,7 +96,7 @@ def render_weekly_context(
 ) -> str:
     """対象週（月曜始まり7日）の集約 Markdown。LLM 不使用。"""
     days = [week_start + timedelta(days=i) for i in range(7)]
-    week_label = f"{week_start.isocalendar()[0]}-W{week_start.isocalendar()[1]:02d}"
+    week_label = iso_week_label(week_start)
     lines: list[str] = [
         f"# 週次コンテキスト {week_label}",
         f"対象: {days[0].isoformat()} 〜 {days[-1].isoformat()}（月曜始まり）",
@@ -51,12 +107,14 @@ def render_weekly_context(
 
     week_cat: dict[str, float] = {}
     ai_rows: list[str] = []
+    week_stats: list[dict] = []
     for d in days:
         loaded = load_stats(stats_dir, 1, d)
         if not loaded:
             lines.append(f"- {d.isoformat()}: 記録なし")
             continue
         s = loaded[0]
+        week_stats.append(s)
         by_cat = s.get("by_category") if isinstance(s.get("by_category"), dict) else {}
         total = s.get("total_minutes", 0)
         cat_bits = ", ".join(
@@ -98,11 +156,11 @@ def render_weekly_context(
         lines.extend(ai_rows)
     else:
         lines.append("| （記録なし） |  |  |  |  |  |  |  |")
+    lines.append("")
+    lines.append(f"- {format_ai_tokens_week_line(week_stats)}")
 
     # アクション実績（superseded 除外は compute_action_stats 側）
     entries = load_entries(memory_dir)
-    # 週末日を「今日」相当にして窓内集計: 週内提案は end+1 を today として window 14 で
-    # より正確には週内 date の proposed/done を直接集計
     week_start_s = days[0].isoformat()
     week_end_s = days[-1].isoformat()
     week_entries = [
@@ -134,7 +192,7 @@ def render_weekly_context(
     else:
         lines.append("- （なし）")
 
-    # 実験
+    # 実験（採否は表示のみ。frontmatter status は書き換えない — 人間/スキルが最終決定）
     experiments = load_experiments(experiments_dir)
     lines.extend(["", "## 実験サマリー", ""])
     running = [e for e in experiments if e.status == "running"]
@@ -155,7 +213,10 @@ def render_weekly_context(
         es = format_effect_size(exp)
         es_part = f" / {es}" if es else ""
         if not exp.measurements:
-            lines.append(f"- expired 「{exp.title}」: 実測なし（達成率 -）{es_part}")
+            rec = expired_recommendation(0, 0)
+            lines.append(
+                f"- expired 「{exp.title}」: 実測なし（達成率 -）{es_part} → {rec}"
+            )
             continue
         hits = sum(
             1
@@ -163,9 +224,10 @@ def render_weekly_context(
             if target_met(v, exp.target_op, exp.target_value)
         )
         n = len(exp.measurements)
+        rec = expired_recommendation(hits, n)
         lines.append(
             f"- expired 「{exp.title}」: 達成率 {hits}/{n}"
-            f"（{round(100 * hits / n)}%）{es_part}"
+            f"（{round(100 * hits / n)}%）{es_part} → {rec}"
         )
     regs = detect_regressions(adopted, window=7, as_of=days[-1])
     if regs:
@@ -177,5 +239,36 @@ def render_weekly_context(
     lines.append(
         "- 注意: PC前景のみ計測。カテゴリ時間の減少はデバイス移行（風船効果）の可能性あり。"
     )
+    lines.append(
+        "- 採否推奨は表示のみ（frontmatter の status は自動変更しない）。"
+    )
     lines.append("")
     return "\n".join(lines)
+
+
+def _default_weekly_frontmatter(week_start: date) -> str:
+    label = iso_week_label(week_start)
+    return (
+        "---\n"
+        f'title: "{label} Weekly Review"\n'
+        f"date: {week_start.isoformat()}\n"
+        "tags: [type/weekly-review]\n"
+        "---\n"
+    )
+
+
+def write_weekly_context(
+    daily_notes_dir: Path,
+    body_md: str,
+    week_start: date,
+) -> Path:
+    """Weekly Reviews ノートの weekly-context マーカー区間へ upsert（マーカー外は不変）。"""
+    path = weekly_review_path(daily_notes_dir, week_start)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        content = path.read_text(encoding="utf-8")
+    else:
+        content = _default_weekly_frontmatter(week_start) + "\n"
+    updated = upsert_section(content, WEEKLY_CONTEXT_MARKER, body_md, position="top")
+    atomic_write_text(path, updated)
+    return path

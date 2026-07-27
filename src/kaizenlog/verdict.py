@@ -249,7 +249,8 @@ def backfill_verdicts(
 ) -> BackfillResult:
     """verdict 未設定かつ提案日が as_of から window 内のエントリを後追い判定。
 
-    実測は保存済み stats の metric_from_stats のみ（ai_avg_turns 等は非対応でスキップ）。
+    実測は保存済み stats の metric_from_stats のみ。
+    ai_avg_turns は v2 キー / 導出 / v1 projects 近似で復元可能。不能時はスキップ。
     測定日の stats が無ければスキップ（次回 generate で再試行）。
     """
     window_start = (as_of - timedelta(days=window_days)).isoformat()
@@ -287,8 +288,13 @@ def backfill_verdicts(
             continue
         value = metric_from_stats(metric, stats, known_categories=known_categories)
         if value is None:
-            # ai_avg_turns 等 stats 非対応、または未知カテゴリ
-            if metric == "ai_avg_turns" or metric.startswith("focus_") or metric == "input_keypresses":
+            # focus_*/input は input キー欠落、ai_avg_turns は復元不能日、未知カテゴリ
+            if (
+                metric == "ai_avg_turns"
+                or metric == "ai_output_tokens"
+                or metric.startswith("focus_")
+                or metric == "input_keypresses"
+            ):
                 result.skipped_unsupported += 1
             elif metric.startswith("category_minutes:") and known_categories is not None:
                 cat = metric.split(":", 1)[1].strip()
