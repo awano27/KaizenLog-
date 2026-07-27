@@ -1,0 +1,62 @@
+{
+  "id": "sample_short_day",
+  "day": "2026-07-22",
+  "schema_version": 1,
+  "timezone": "Asia/Tokyo",
+  "source_status": "verified",
+  "known_categories": ["開発", "AI作業", "ブラウジング", "エンタメ", "その他"],
+  "current_stats": {
+    "version": 1,
+    "day": "2026-07-22",
+    "total_minutes": 90.0,
+    "context_switches": 22,
+    "ai_activity_blocks": 4,
+    "by_category": {
+      "開発": 50.0,
+      "ブラウジング": 25.0,
+      "その他": 15.0
+    },
+    "by_app": {
+      "Code.exe": 50.0,
+      "chrome.exe": 25.0
+    },
+    "by_site": {},
+    "blocks": [
+      {"start": "2026-07-22T13:00:00+09:00", "category": "開発", "app": "Code.exe"},
+      {"start": "2026-07-22T14:00:00+09:00", "category": "ブラウジング", "app": "chrome.exe"}
+    ],
+    "input": {
+      "focus_blocks": 0,
+      "focus_minutes": 0.0,
+      "active_input_minutes": 40.0
+    },
+    "ai": {
+      "sessions": 0,
+      "fragmented": 0,
+      "tool_errors": 0,
+      "interruptions": 0
+    }
+  },
+  "prior_stats": [
+    {
+      "day": "2026-07-19",
+      "total_minutes": 200.0,
+      "context_switches": 55
+    },
+    {
+      "day": "2026-07-20",
+      "total_minutes": 180.0,
+      "context_switches": 70
+    },
+    {
+      "day": "2026-07-21",
+      "total_minutes": 210.0,
+      "context_switches": 48
+    }
+  ],
+  "today_md": "## 📊 Activity Log\n\n**合計アクティブ時間**: 1h30m / コンテキストスイッチ: 22回\n\n### カテゴリ別\n\n| カテゴリ | 時間 | 割合 |\n| --- | ---: | ---: |\n| 開発 | 50m | 56% |\n| ブラウジング | 25m | 28% |\n",
+  "recent_summaries": [],
+  "intent": null,
+  "experiments_ctx": null,
+  "memory_ctx": null
+}

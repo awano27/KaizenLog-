@@ -5,7 +5,12 @@ from __future__ import annotations
 from datetime import date, timedelta
 from pathlib import Path
 
-from .experiments import detect_regressions, load_experiments, target_met
+from .experiments import (
+    detect_regressions,
+    format_effect_size,
+    load_experiments,
+    target_met,
+)
 from .memory import compute_action_stats, load_entries
 from .stats import load_stats
 
@@ -136,16 +141,21 @@ def render_weekly_context(
     expired = [e for e in experiments if e.status == "expired"]
     adopted = [e for e in experiments if e.status == "adopted"]
     for exp in running:
+        es = format_effect_size(exp)
+        es_part = f" / {es}" if es else ""
         if exp.measurements:
             last_d = max(exp.measurements)
             lines.append(
                 f"- running 「{exp.title}」: 直近 {last_d} = {exp.measurements[last_d]:g}"
+                f"{es_part}"
             )
         else:
-            lines.append(f"- running 「{exp.title}」: 実測なし")
+            lines.append(f"- running 「{exp.title}」: 実測なし{es_part}")
     for exp in expired:
+        es = format_effect_size(exp)
+        es_part = f" / {es}" if es else ""
         if not exp.measurements:
-            lines.append(f"- expired 「{exp.title}」: 実測なし（達成率 -）")
+            lines.append(f"- expired 「{exp.title}」: 実測なし（達成率 -）{es_part}")
             continue
         hits = sum(
             1
@@ -154,7 +164,8 @@ def render_weekly_context(
         )
         n = len(exp.measurements)
         lines.append(
-            f"- expired 「{exp.title}」: 達成率 {hits}/{n}（{round(100 * hits / n)}%）"
+            f"- expired 「{exp.title}」: 達成率 {hits}/{n}"
+            f"（{round(100 * hits / n)}%）{es_part}"
         )
     regs = detect_regressions(adopted, window=7, as_of=days[-1])
     if regs:
@@ -163,5 +174,8 @@ def render_weekly_context(
     elif adopted:
         lines.append(f"- adopted: {len(adopted)}件（直近7日の退行なし）")
 
+    lines.append(
+        "- 注意: PC前景のみ計測。カテゴリ時間の減少はデバイス移行（風船効果）の可能性あり。"
+    )
     lines.append("")
     return "\n".join(lines)

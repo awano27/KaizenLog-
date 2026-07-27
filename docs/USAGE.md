@@ -2,16 +2,28 @@
 
 Windowsの毎日の操作を自動記録し、Obsidianのデイリーノートに日誌として残し、LLMが改善提案（Kaizen）を行うツールのセットアップと日々の使い方です。所要時間は初期セットアップ約10〜30分。
 
-## 最短セットアップ（推奨）
+## 最短セットアップ（開発版）
+
+現行は **1.5.0rc1（RC）** です。PyPI 公開パッケージは未確認のため、GitHub から clone して入れます。
+
+リポジトリ: [https://github.com/awano27/KaizenLog-](https://github.com/awano27/KaizenLog-)
 
 ```powershell
-pipx install kaizenlog
-kaizenlog setup              # 対話ウィザード（検出優先・不足だけ質問）
+git clone https://github.com/awano27/KaizenLog-.git
+cd KaizenLog-
+pipx install .
+kaizenlog setup
 kaizenlog doctor
-kaizenlog run                # ActivityWatch 起動後
+kaizenlog run
 ```
 
-設定の既定先は **`%APPDATA%\kaizenlog\config.toml`**（Windows）です。CWD の `kaizenlog.toml` は移行期間のフォールバックです。
+1. `git clone` — 上記リポジトリを取得  
+2. `pipx install .` — クローン直下を開発版としてインストール  
+3. `kaizenlog setup` — 対話ウィザード（検出優先・不足だけ質問）  
+4. `kaizenlog doctor` — 環境診断  
+5. `kaizenlog run` — ActivityWatch 起動後に初回実行  
+
+設定の既定先は **`%APPDATA%\kaizenlog\config.toml`**（Windows）です。CWD の `kaizenlog.toml` は移行期間のフォールバックです。設定が無い通常コマンドは終了コード 2 で止まります（診断だけは `kaizenlog doctor`）。
 
 ### `kaizenlog setup` フラグ
 
@@ -91,13 +103,14 @@ KaizenLogはClaude Codeを「LLMバックエンドの1つ」としても「自�
 ## Step 2: KaizenLog のインストール
 
 ```powershell
-pipx install kaizenlog       # 推奨
-# 開発時: git clone → pip install -e .
-kaizenlog --help             # ヘルプが出れば成功
-kaizenlog setup              # 設定・依存の一括構成（推奨）
+git clone https://github.com/awano27/KaizenLog-.git
+cd KaizenLog-
+pipx install .
+kaizenlog --help
+kaizenlog setup
 ```
 
-開発用クローンから入れる場合は Obsidian ボールトとは別ディレクトリで構いません（`vault_dir` でボールトを指定）。
+開発用クローンは Obsidian ボールトとは別ディレクトリで構いません（`vault_dir` でボールトを指定）。`pip install -e .` も可です。
 
 ## Step 3: 設定ファイル（手動が必要なとき）
 
@@ -245,7 +258,21 @@ PCがその時刻にスリープしていた場合は、次回起動時に実行
 
 何もしなくてOK。21:30に自動で日誌と改善提案が書き込まれます。翌朝デイリーノートの「🚀 Kaizen」セクションを読むだけ。
 
-### 翌朝: 最小アクションにチェックを付ける（10秒）
+### 朝 CLI（追いつき → 📌 → 通知）
+
+```powershell
+kaizenlog morning                 # 既定: 昨日の追いつき（AW/LLM・書き込みの場合あり）→再描画→件数トースト
+kaizenlog morning --skip-catch-up # 追いつきなし（表示と通知のみ）
+```
+
+### 日中: 候補と消化
+
+```powershell
+kaizenlog today              # 今日の候補（最大3件）+ 保留件数。既定でノート [x] を Memory 同期
+kaizenlog today --no-sync    # 同期せず表示のみ
+kaizenlog today --all        # 直近7日 / 8〜30日前 / 31日以上 を全件表示
+kaizenlog done KZN-…001      # ターミナルから消化（末尾でも可・一意時）
+```
 
 提案の「### 明日試すこと」にはID付きチェックボックスが並びます：
 
@@ -253,9 +280,9 @@ PCがその時刻にスリープしていた場合は、次回起動時に実行
 - [ ] KZN-20260707-001: 開発開始時に25分タイマーを1回設定する｜PASS: 25分以上の集中ブロックが1回以上｜FAIL: 0回
 ```
 
-内部のF-IDは保存前に除去されます。PASS/FAILは翌日の判定条件です。実行したら `[x]` にするだけ。**完了として記録され（Kaizen Memory）、LLMは同じ提案を繰り返さなくなります**。放置した提案も記録され、蒸し返しではなく「（継続）」として扱われます。
+内部のF-IDは保存前に除去されます。PASS/FAILは翌日の判定条件です。実行したら `[x]` にするか `kaizenlog done` するだけ。**完了として記録され（Kaizen Memory）、LLMは同じ提案を繰り返さなくなります**。
 
-Kaizen Memoryの実体は `Kaizen/Memory/suggestions.jsonl`（1行1提案、ID・状態・日付）です。設定の`[general] memory_dir`で保存先を変更できます。中身を直接見たり編集したりする必要は基本ありません — `kaizenlog advise`が読み書きを自動でやります。
+Kaizen Memoryの実体は `Kaizen/Memory/suggestions.jsonl`（1行1提案、ID・状態・日付）です。設定の`[general] memory_dir`で保存先を変更できます。
 
 ### 提案に納得したら実験にする（1コマンド）
 
@@ -311,8 +338,13 @@ kaizenlog prompts --days 14   # 「5回/5日: ニュースを要約して… →
 | `kaizenlog run` | ログ生成＋改善提案（毎晩の定期実行と同じ） |
 | `kaizenlog generate [--date YYYY-MM-DD]` | ログ生成のみ（実験計測・統計蓄積を含む） |
 | `kaizenlog advise [--date YYYY-MM-DD]` | 改善提案のみ |
+| `kaizenlog morning [--skip-catch-up]` | 朝: 追いつき→📌再描画→通知 |
+| `kaizenlog today [--no-sync] [--all]` | 未完了一覧（既定でノートチェック同期） |
+| `kaizenlog done <id>` | アクションを消化 |
 | `kaizenlog experiment new --title ... --metric ... --target ...` | 実験の起票 |
-| `kaizenlog experiment list` | 実験一覧（使える指標のヘルプも） |
+| `kaizenlog experiment list` | 実験一覧（効果量付き） |
+| `kaizenlog eval record [--date]` | 対象日の advise 入力をケース化（redact 済み） |
+| `kaizenlog eval run [--cases DIR] [--repeat N] [--min-pass-rate X]` | 契約合格率の集計（開発者向け） |
 | `kaizenlog patterns [--days N]` | 繰り返しパターン検出レポート |
 | `kaizenlog report [--no-llm] [--write]` | 提出用の日報ドラフト生成 |
 | `kaizenlog prompts [--days N] [--min-count N]` | Claude Codeへの繰り返し依頼の発掘 |
@@ -320,10 +352,23 @@ kaizenlog prompts --days 14   # 「5回/5日: ニュースを要約して… →
 | `kaizenlog skill show` / `skill doctor` | 同梱スキルの一覧／インストール状態の確認 |
 | `kaizenlog setup` | 対話式セットアップウィザード（導入の正規経路） |
 | `kaizenlog doctor` | 環境の一発診断（AW接続・LLM認証・パス等を✅/⚠️/❌で表示） |
-| `kaizenlog status` | 実行履歴の確認（最終成功・直近の失敗理由） |
+| `kaizenlog status` | 実行履歴の確認（最終成功・直近の失敗理由・partial） |
 | `kaizenlog backfill [--days N]` | 欠損日の日誌・統計をまとめて補完 |
 | `kaizenlog advise --dry-run` | LLMに送る内容を送信せずに確認（監査用） |
 | `kaizenlog init-config [--output PATH]` | 設定ファイルの雛形生成（既定: AppData/XDG） |
+| `kaizenlog --config PATH <cmd>` | 明示設定パス（サブコマンドより前） |
+
+## 開発者向け: プロンプト変更後の評価
+
+プロンプト（`prompts/*.md`）や契約検証を変えたら、前後比較のために:
+
+```powershell
+kaizenlog eval record --date 2026-07-21   # 実日をケース化（vault/.kaizenlog/eval/cases、gitignore 済み）
+kaizenlog eval run --repeat 3             # 現バックエンドで反復（一発/修復後/縮退率）
+kaizenlog eval run --cases path\to\cases --min-pass-rate 0.8
+```
+
+同梱の合成サンプルはパッケージ内 `eval_samples/` にあります。pytest はモックのみで、**実 LLM は `eval run` の手動実行時のみ**呼び出します。
 
 ## トラブルシューティング
 

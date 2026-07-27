@@ -26,7 +26,7 @@ kaizenlog = "kaizenlog.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-kaizenlog = ["prompts/*.md", "skills/*/SKILL.md"]
+kaizenlog = ["prompts/*.md", "skills/*/SKILL.md", "eval_samples/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

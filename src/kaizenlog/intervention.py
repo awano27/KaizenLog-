@@ -286,4 +286,9 @@ def render_plan(sinks: list[TimeSink], rules: list[BlockRule]) -> str:
     if approx:
         lines.append("⚠️  一部はウィンドウタイトルからの推定です。"
                      "aw-watcher-web 拡張を入れるとドメイン実測になり精度が上がります。")
+    lines.append("")
+    lines.append(
+        "⚠️  PCでのブロックはスマホ等への移行（風船効果）を測定できない。"
+        "実験が成功して見えても体感と合わない場合はデバイス移行を疑うこと。"
+    )
     return "\n".join(lines)

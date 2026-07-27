@@ -332,6 +332,71 @@ def open_actions_in_window(
     return open_entries
 
 
+@dataclass(frozen=True)
+class OpenActionBuckets:
+    """未完了 proposed の表示用群分け（Memory は変更しない）。
+
+    recent / stale / older はいずれも新しい提案（ID 降順）から並べる。
+    """
+
+    recent: list[MemoryEntry]
+    stale: list[MemoryEntry]
+    older: list[MemoryEntry]
+
+    @property
+    def total(self) -> int:
+        return len(self.recent) + len(self.stale) + len(self.older)
+
+
+# today 既定表示の候補件数（優先度推定ではなく、新しい文脈から最大 N 件）
+TODAY_CANDIDATE_CAP = 3
+# stale 窓の外側境界（target - 30 〜 target - 8）
+STALE_LOOKBACK_DAYS = 30
+
+
+def partition_open_actions(
+    entries: list[MemoryEntry],
+    target_day: date,
+    *,
+    recent_include_today: bool = True,
+) -> OpenActionBuckets:
+    """未完了を recent / stale / older に分ける（表示専用・Memory 非破壊）。
+
+    - recent: recent_include_today なら target-7〜target（today と同じ8暦日）、
+      そうでなければ target-7〜target-1（Obsidian 📌 と同じ7暦日）
+    - stale: target-30 〜 recent 開始の前日（8〜30日前）
+    - older: target-31 日以前
+    """
+    if recent_include_today:
+        recent_start = (target_day - timedelta(days=ACTIONS_HANDOFF_DAYS)).isoformat()
+        recent_end = target_day.isoformat()
+    else:
+        recent_start = (target_day - timedelta(days=ACTIONS_HANDOFF_DAYS)).isoformat()
+        recent_end = (target_day - timedelta(days=1)).isoformat()
+    stale_start = (target_day - timedelta(days=STALE_LOOKBACK_DAYS)).isoformat()
+    # recent 開始の前日 = target - 8（include_today / 否 いずれも recent 開始は target-7）
+    stale_end = (target_day - timedelta(days=ACTIONS_HANDOFF_DAYS + 1)).isoformat()
+
+    recent: list[MemoryEntry] = []
+    stale: list[MemoryEntry] = []
+    older: list[MemoryEntry] = []
+    for e in entries:
+        if e.status != "proposed" or not e.date or not _is_iso_date(e.date):
+            continue
+        if recent_start <= e.date <= recent_end:
+            recent.append(e)
+        elif stale_start <= e.date <= stale_end:
+            stale.append(e)
+        elif e.date < stale_start:
+            older.append(e)
+    # 新しい提案から（決定論: ID 降順 = 日付+連番の新しい順）
+    key = lambda e: e.id  # noqa: E731
+    recent.sort(key=key, reverse=True)
+    stale.sort(key=key, reverse=True)
+    older.sort(key=key, reverse=True)
+    return OpenActionBuckets(recent=recent, stale=stale, older=older)
+
+
 def format_today_action_line(entry: MemoryEntry) -> str:
     """today 一覧の1行。ID は done へコピペできる完全形。"""
     try:
@@ -443,17 +508,16 @@ def render_actions_section(
     """翌日ノート用「今日のアクション」転記 Markdown。
 
     対象は proposed かつ提案日が target_day-ACTIONS_HANDOFF_DAYS 〜 target_day-1。
-    0件なら None（既存セクションは消さない）。
+    チェックボックスは新しい提案から最大 TODAY_CANDIDATE_CAP 件
+    （優先度推定ではなく、現在の文脈に近い候補を表示する決定論ルール）。
+    0件なら None（既存セクションは消さない。ただし stale/older のみある場合は
+    件数案内セクションを返す）。
     note_content に同じ KZN の [x] があればチェック状態を保持する。
     """
-    window_start = (target_day - timedelta(days=ACTIONS_HANDOFF_DAYS)).isoformat()
-    window_end = (target_day - timedelta(days=1)).isoformat()
-    open_entries = [
-        e for e in entries
-        if e.status == "proposed" and window_start <= e.date <= window_end
-    ]
-    open_entries.sort(key=lambda e: e.id)
-    if not open_entries:
+    buckets = partition_open_actions(
+        entries, target_day, recent_include_today=False
+    )
+    if buckets.total == 0:
         return None
 
     checked_ids: set[str] = set()
@@ -479,7 +543,10 @@ def render_actions_section(
             f" / 自動判定 {stats.judged}件"
             f" / PASS率 {_pct_label(stats.pass_rate)}"
         )
-    for e in open_entries:
+
+    # 新しい提案から最大3件（決定論。優先度推定ではない）
+    shown = buckets.recent[:TODAY_CANDIDATE_CAP]
+    for e in shown:
         mark = "x" if e.id in checked_ids else " "
         try:
             d = date.fromisoformat(e.date)
@@ -493,4 +560,16 @@ def render_actions_section(
         else:
             tag = f"{md}提案"
         lines.append(f"- [{mark}] {e.id}: {e.action}（{tag}）")
+
+    rest_recent = max(0, len(buckets.recent) - len(shown))
+    if rest_recent or buckets.stale or buckets.older or not shown:
+        if not shown:
+            hold = len(buckets.stale) + len(buckets.older)
+            lines.append(f"今日の候補なし。保留 {hold}件")
+        lines.append(
+            f"ほか直近7日の未完了 {rest_recent}件"
+            f" / 8〜30日前 {len(buckets.stale)}件"
+            f" / 31日以上 {len(buckets.older)}件"
+        )
+        lines.append("全件表示: `kaizenlog today --all`")
     return "\n".join(lines)

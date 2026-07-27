@@ -149,6 +149,12 @@ def _fmt_time(dt: datetime, tz: tzinfo) -> str:
     return dt.astimezone(tz).strftime("%H:%M")
 
 
+def _markdown_table_cell(value: object) -> str:
+    """Markdown 表セル用に一行化し、| と制御文字を無害化する。"""
+    text = " ".join(str(value).split())
+    return text.replace("|", "\\|")
+
+
 def render_markdown(
     summary: DailySummary,
     tz: tzinfo,
@@ -162,7 +168,12 @@ def render_markdown(
     lines.append("")
 
     if summary.total_minutes <= 0:
-        lines.append("記録された活動はありませんでした。")
+        # 収集成功/watcher停止は断定しない（ここでは0分という事実だけ）
+        lines.append("ActivityWatchから対象日のアクティブ時間を0分取得しました。")
+        lines.append(
+            "PCを使わなかった場合は正常です。"
+            "使用した場合は `kaizenlog doctor` でwatcherと対象日を確認してください。"
+        )
         lines.append("")
         return "\n".join(lines)
 
@@ -186,7 +197,9 @@ def render_markdown(
     lines.append("| --- | ---: | ---: |")
     for cat, minutes in sorted(summary.by_category.items(), key=lambda x: -x[1]):
         pct = minutes / summary.total_minutes * 100
-        lines.append(f"| {cat} | {_fmt_minutes(minutes)} | {pct:.0f}% |")
+        lines.append(
+            f"| {_markdown_table_cell(cat)} | {_fmt_minutes(minutes)} | {pct:.0f}% |"
+        )
     lines.append("")
 
     # サイト別（aw-watcher-web 導入時のみ）
@@ -196,8 +209,9 @@ def render_markdown(
         lines.append("| サイト | 時間 |")
         lines.append("| --- | ---: |")
         for site, minutes in sorted(summary.by_site.items(), key=lambda x: -x[1])[:10]:
-            site_escaped = site.replace("|", "\\|")
-            lines.append(f"| {site_escaped} | {_fmt_site_minutes(minutes)} |")
+            lines.append(
+                f"| {_markdown_table_cell(site)} | {_fmt_site_minutes(minutes)} |"
+            )
         lines.append("")
         lines.append("※ watcherが取得できた部分だけで、ブラウザ時間の完全な内訳ではありません。")
         lines.append("")
@@ -214,16 +228,37 @@ def render_markdown(
         lines.append("| ツール | 時間 |")
         lines.append("| --- | ---: |")
         for tool, minutes in sorted(summary.ai_tool_minutes.items(), key=lambda x: -x[1]):
-            lines.append(f"| {tool} | {_fmt_minutes(minutes)} |")
+            lines.append(
+                f"| {_markdown_table_cell(tool)} | {_fmt_minutes(minutes)} |"
+            )
         lines.append("")
 
-    # タイムライン（主要ブロックのみ）
-    rows = [b for b in summary.blocks if b.minutes >= min_block_minutes]
-    if len(rows) > max_timeline_rows:
-        rows = sorted(rows, key=lambda b: -b.minutes)[:max_timeline_rows]
+    # タイムライン（主要ブロックのみ）— 件数は実配列から決定論的に算出
+    total_blocks = len(summary.blocks)
+    eligible = [b for b in summary.blocks if b.minutes >= min_block_minutes]
+    eligible_blocks = len(eligible)
+    min_label = (
+        f"{int(min_block_minutes)}分"
+        if float(min_block_minutes).is_integer()
+        else f"{min_block_minutes}分"
+    )
+    rows = eligible
+    overflow_omitted = 0
+    if eligible_blocks > max_timeline_rows:
+        rows = sorted(eligible, key=lambda b: -b.minutes)[:max_timeline_rows]
         rows.sort(key=lambda b: b.start)
+        overflow_omitted = eligible_blocks - max_timeline_rows
+    shown_blocks = len(rows)
     if rows:
         lines.append("### タイムライン")
+        lines.append("")
+        lines.append(f"{min_label}以上の画面ブロックを時刻順に表示。")
+        if overflow_omitted > 0:
+            lines.append(
+                f"全{total_blocks}件中、{min_label}以上は{eligible_blocks}件です。"
+                f"長時間の上位{shown_blocks}件を時刻順に表示し、"
+                f"対象内の{overflow_omitted}件を省略しています。"
+            )
         lines.append("")
         lines.append("| 時刻 | 時間 | カテゴリ | アプリ | 内容 |")
         lines.append("| --- | ---: | --- | --- | --- |")
@@ -231,12 +266,12 @@ def render_markdown(
             title = b.titles[0] if b.titles else ""
             if len(title) > 60:
                 title = title[:57] + "..."
-            # 改行・パイプはMarkdownテーブルの行構造を壊すため無害化する
-            title = " ".join(title.split()).replace("|", "\\|")
-            app = " ".join(b.app.split()).replace("|", "\\|")
             lines.append(
                 f"| {_fmt_time(b.start, tz)}-{_fmt_time(b.end, tz)} "
-                f"| {_fmt_minutes(b.minutes)} | {b.category} | {app} | {title} |"
+                f"| {_fmt_minutes(b.minutes)} "
+                f"| {_markdown_table_cell(b.category)} "
+                f"| {_markdown_table_cell(b.app)} "
+                f"| {_markdown_table_cell(title)} |"
             )
         lines.append("")
 

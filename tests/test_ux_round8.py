@@ -143,7 +143,8 @@ def test_build_morning_notification():
     ]
     msg = build_morning_notification(entries, today)
     assert msg is not None
-    assert "今日のアクション 1件" in msg or "今日のアクション 3件" in msg
+    assert "今日の候補" in msg
+    assert "保留" in msg
     assert "✅1" in msg and "❌1" in msg
     assert "secret" not in msg
     assert build_morning_notification([], today) is None
@@ -191,7 +192,9 @@ def test_cmd_morning_rewrites_actions_and_notifies(tmp_path, monkeypatch):
         actions_position="top",
     )
     notified = []
-    monkeypatch.setattr(cli_mod, "catch_up_yesterday", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cli_mod, "catch_up_yesterday", lambda *a, **k: cli_mod.CatchUpResult()
+    )
     monkeypatch.setattr(
         cli_mod, "notify", lambda title, msg, **kw: notified.append((title, msg)) or True
     )
@@ -200,7 +203,7 @@ def test_cmd_morning_rewrites_actions_and_notifies(tmp_path, monkeypatch):
     text = (daily / f"{today.isoformat()}.md").read_text(encoding="utf-8")
     assert "- [x] KZN-20260725-001:" in text
     assert text.index("kaizenlog:actions") < text.index("# Daily")
-    assert notified and "今日のアクション" in notified[0][1]
+    assert notified and "今日の候補" in notified[0][1]
 
 
 def test_catch_up_yesterday_calls_generate_and_advise(tmp_path, monkeypatch):

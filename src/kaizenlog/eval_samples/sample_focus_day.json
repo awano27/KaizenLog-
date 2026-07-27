@@ -1,0 +1,72 @@
+{
+  "id": "sample_focus_day",
+  "day": "2026-07-21",
+  "schema_version": 1,
+  "timezone": "Asia/Tokyo",
+  "source_status": "verified",
+  "known_categories": ["開発", "AI作業", "ブラウジング", "エンタメ", "その他"],
+  "current_stats": {
+    "version": 1,
+    "day": "2026-07-21",
+    "total_minutes": 210.0,
+    "context_switches": 48,
+    "ai_activity_blocks": 12,
+    "by_category": {
+      "開発": 110.0,
+      "AI作業": 40.0,
+      "ブラウジング": 35.0,
+      "その他": 25.0
+    },
+    "by_app": {
+      "Code.exe": 110.0,
+      "chrome.exe": 50.0
+    },
+    "by_site": {
+      "github.com": 12.0,
+      "docs.python.org": 5.0
+    },
+    "blocks": [
+      {"start": "2026-07-21T09:00:00+09:00", "category": "開発", "app": "Code.exe"},
+      {"start": "2026-07-21T10:00:00+09:00", "category": "AI作業", "app": "Code.exe"},
+      {"start": "2026-07-21T11:00:00+09:00", "category": "ブラウジング", "app": "chrome.exe"},
+      {"start": "2026-07-21T14:00:00+09:00", "category": "開発", "app": "Code.exe"}
+    ],
+    "input": {
+      "focus_blocks": 2,
+      "focus_minutes": 55.0,
+      "active_input_minutes": 120.0
+    },
+    "ai": {
+      "sessions": 3,
+      "fragmented": 1,
+      "tool_errors": 0,
+      "interruptions": 0,
+      "retry_chains": 0
+    }
+  },
+  "prior_stats": [
+    {
+      "day": "2026-07-18",
+      "total_minutes": 240.0,
+      "context_switches": 60
+    },
+    {
+      "day": "2026-07-19",
+      "total_minutes": 200.0,
+      "context_switches": 55
+    },
+    {
+      "day": "2026-07-20",
+      "total_minutes": 180.0,
+      "context_switches": 70
+    }
+  ],
+  "today_md": "## 📊 Activity Log\n\n**合計アクティブ時間**: 3h30m / コンテキストスイッチ: 48回\n\n### カテゴリ別\n\n| カテゴリ | 時間 | 割合 |\n| --- | ---: | ---: |\n| 開発 | 1h50m | 52% |\n| AI作業 | 40m | 19% |\n| ブラウジング | 35m | 17% |\n",
+  "recent_summaries": [
+    "2026-07-20: 合計 3h / 開発中心",
+    "2026-07-19: 合計 3h20m / スイッチ多め"
+  ],
+  "intent": "## Today's Focus\n- 集中枠を1件入れる\n",
+  "experiments_ctx": null,
+  "memory_ctx": null
+}

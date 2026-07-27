@@ -89,6 +89,7 @@ def log_run(
     *,
     notify_failed: bool = False,
     note: str | None = None,
+    partial: bool = False,
 ) -> None:
     now = now or datetime.now(timezone.utc)
     entry: dict = {
@@ -103,6 +104,8 @@ def log_run(
         entry["notify_failed"] = True
     if note:
         entry["note"] = str(note)[:500]
+    if partial:
+        entry["partial"] = True
     _append_run_entry(logs_dir, entry, retention_days=retention_days, now=now)
 
 
@@ -244,11 +247,22 @@ def render_status(runs: list[dict]) -> str:
     for cmd in commands:
         cmd_runs = [r for r in runs if r.get("command") == cmd]
         last = cmd_runs[-1]
-        last_ok = next((r for r in reversed(cmd_runs) if r.get("ok")), None)
-        mark = "✅" if last.get("ok") else "❌"
+        last_ok = next(
+            (r for r in reversed(cmd_runs) if r.get("ok") and not r.get("partial")),
+            None,
+        )
+        # partial は ok=True でも成功扱いしない（追いつき未完了など）
+        if last.get("partial"):
+            mark = "⚠"
+        elif last.get("ok"):
+            mark = "✅"
+        else:
+            mark = "❌"
         lines.append(f"## {cmd}")
         lines.append(f"- 直近の実行: {mark} {_fmt_ts(last['ts'])}"
                      f"（{last.get('duration_seconds', '?')}秒）")
+        if last.get("partial") and last.get("note"):
+            lines.append(f"- 部分成功: {last['note']}")
         if last_ok:
             lines.append(f"- 最後に成功: {_fmt_ts(last_ok['ts'])}")
         else:

@@ -80,6 +80,8 @@ class Experiment:
     measurements: dict[date, float] = field(default_factory=dict)
     # prompt_cluster 計測用: 正規化済み代表文（機密を含む生文を書かないこと）
     cluster_rep: str | None = None
+    # frontmatter `date`（実験開始日）。不正・欠落は None
+    start: date | None = None
 
 
 class ExperimentError(ValueError):
@@ -281,6 +283,54 @@ def baseline_median_from_stats(
     return float(median(values))
 
 
+def weekday_baseline(
+    metric: str, day: date, stats_list: list[dict]
+) -> float | None:
+    """同曜日の metric 中央値（呼び出し側が開始前28日分などを渡す）。
+
+    day と同じ weekday のサンプルが 2 日未満なら None。
+    """
+    target_wd = day.weekday()
+    values: list[float] = []
+    for s in stats_list:
+        raw = s.get("day")
+        if not raw:
+            continue
+        try:
+            d = date.fromisoformat(str(raw)[:10])
+        except ValueError:
+            continue
+        if d.weekday() != target_wd:
+            continue
+        v = metric_from_stats(metric, s)
+        if v is not None:
+            values.append(float(v))
+    if len(values) < 2:
+        return None
+    return float(median(values))
+
+
+def effect_size(exp: Experiment) -> float | None:
+    """実測中央値 vs baseline の変化率（%）。baseline が None/0 または実測なしは None。"""
+    if exp.baseline is None or exp.baseline == 0:
+        return None
+    if not exp.measurements:
+        return None
+    med = float(median(exp.measurements.values()))
+    return round((med - float(exp.baseline)) / float(exp.baseline) * 100.0, 1)
+
+
+def format_effect_size(exp: Experiment) -> str | None:
+    """表示用 `効果量 -32%`。算出不能なら None。"""
+    es = effect_size(exp)
+    if es is None:
+        return None
+    # 符号付き（正は +）
+    if es > 0:
+        return f"効果量 +{es:g}%"
+    return f"効果量 {es:g}%"
+
+
 def should_measure_experiment(exp: Experiment, day: date) -> bool:
     """generate が実測を追記する対象か。running 全件 + adopted は期限後30日以内のみ。"""
     if exp.status == "running":
@@ -398,6 +448,12 @@ def load_experiments(experiments_dir: Path) -> list[Experiment]:
                 baseline = float(fields["baseline"])
             except ValueError:
                 pass
+        start = None
+        if fields.get("date"):
+            try:
+                start = date.fromisoformat(fields["date"][:10])
+            except ValueError:
+                start = None
         cluster_rep = fields.get("cluster_rep") or None
         if cluster_rep is not None:
             cluster_rep = cluster_rep.strip() or None
@@ -413,28 +469,44 @@ def load_experiments(experiments_dir: Path) -> list[Experiment]:
                 deadline=deadline,
                 measurements=_parse_measurements(content),
                 cluster_rep=cluster_rep,
+                start=start,
             )
         )
     return experiments
 
 
-def record_measurement(exp: Experiment, day: date, value: float) -> bool:
+def record_measurement(
+    exp: Experiment,
+    day: date,
+    value: float,
+    *,
+    weekday_baselines: dict[date, float | None] | None = None,
+) -> bool:
     """実測値を実験ノートのMeasurementsテーブルにupsertする。
 
     baselineが未設定なら最初の実測値で埋める。期限を過ぎた実験は
     status: expired に更新する。目標達成ならTrueを返す。
+
+    テーブルは4列（日付|値|目標達成|同曜日基準）。旧3列ノートの読込は
+    `_parse_measurements` が先頭2列だけ見るため互換。
     """
     content = exp.path.read_text(encoding="utf-8")
 
     exp.measurements[day] = value
     met = target_met(value, exp.target_op, exp.target_value)
+    wb_map = weekday_baselines or {}
 
-    rows = ["| 日付 | 値 | 目標達成 |", "| --- | ---: | :-: |"]
+    rows = [
+        "| 日付 | 値 | 目標達成 | 同曜日基準 |",
+        "| --- | ---: | :-: | ---: |",
+    ]
     for d in sorted(exp.measurements):
         v = exp.measurements[d]
         mark = "✅" if target_met(v, exp.target_op, exp.target_value) else "❌"
         v_str = f"{v:g}"
-        rows.append(f"| {d.isoformat()} | {v_str} | {mark} |")
+        wb = wb_map.get(d)
+        wb_str = f"{wb:g}" if wb is not None else "-"
+        rows.append(f"| {d.isoformat()} | {v_str} | {mark} | {wb_str} |")
     section = "## Measurements（自動計測）\n\n" + "\n".join(rows)
     content = upsert_section(content, MEASUREMENTS_MARKER, section)
 
@@ -476,6 +548,7 @@ deadline: {deadline}
 
 ## Notes
 
+- 開始曜日・週内の仕事量変動が交絡し得る。同曜日基準列と効果量で判断する
 -
 """
 
@@ -526,8 +599,13 @@ def render_experiments_context(experiments: list[Experiment], max_points: int = 
             f"{d.strftime('%m/%d')}={e.measurements[d]:g}" for d in recent
         ) or "実測なし"
         baseline = f"開始時 {e.baseline:g} / " if e.baseline is not None else ""
+        es = format_effect_size(e)
+        es_part = f"、{es}" if es else ""
         lines.append(
             f"- 「{e.title}」[{e.status}] 目標: {target}"
-            f"（{baseline}直近: {points}、期限: {e.deadline or '未設定'}）"
+            f"（{baseline}直近: {points}{es_part}、期限: {e.deadline or '未設定'}）"
         )
+    lines.append(
+        "※ PC前景のみ計測。カテゴリ時間の減少はスマホ等への移行（風船効果）の可能性を排除できない。"
+    )
     return "\n".join(lines)

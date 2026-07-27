@@ -106,6 +106,22 @@ class AdviceResult:
     violations: list[str] = field(default_factory=list)
 
 
+@dataclass
+class PipelineReport:
+    """日次契約パイプラインの計測レポート（eval / デバッグ用）。"""
+
+    parse_ok: bool = False
+    first_pass: bool = False  # 初回生成で契約合格
+    repaired: bool = False
+    final_ok: bool = False
+    first_violations: list[str] = field(default_factory=list)
+    final_violations: list[str] = field(default_factory=list)
+    duration_seconds: float = 0.0
+    # ok | repaired | degraded（契約未達）| passthrough（日次契約外）
+    outcome: str = "ok"
+    markdown: str | None = None
+
+
 class BackendUnavailable(AdvisorError):
     """バックエンドがそもそも利用できない（未インストール・未起動）。
 
@@ -873,6 +889,119 @@ def prepare_advice_request(
     return system_prompt, prompt, evidence_ctx
 
 
+def _run_daily_pipeline(
+    cfg: LLMConfig,
+    system_prompt: str,
+    prompt: str,
+    evidence: AdviceEvidence,
+    *,
+    redactor: Callable[[str], str] | None = None,
+    generate_fn: Callable[[LLMConfig, str, str], str] | None = None,
+) -> tuple[str | None, PipelineReport]:
+    """生成→解析→検証→修復1回→レンダリングを実行し、本文と計測レポートを返す。
+
+    契約未達時は markdown=None と outcome=degraded を返し、例外は投げない
+    （呼び出し側 generate_advice が AdviceContractError に変換する）。
+    """
+    from .advice_format import (
+        normalize_advice_cardinality,
+        parse_advice_json,
+        render_advice_markdown,
+        validate_advice,
+    )
+
+    gen = generate_fn or generate_text
+    t0 = time.monotonic()
+    report = PipelineReport()
+
+    def _try_parse_and_validate(text: str) -> tuple[dict | None, list[str]]:
+        try:
+            data = parse_advice_json(text)
+        except AdviceContractError as e:
+            return None, [str(e)]
+        data = normalize_advice_cardinality(data, evidence)
+        return data, validate_advice(data, evidence)
+
+    def _repair_once(source: str, errs: list[str]) -> str:
+        print(f"⚠️  出力契約違反を検出、1回だけ修復を試みます: {errs[0]}")
+        repair_prompt = _contract_repair_prompt(evidence, source, errs)
+        if redactor:
+            repair_prompt = redactor(repair_prompt)
+        return gen(cfg, system_prompt, repair_prompt)
+
+    raw = gen(cfg, system_prompt, prompt)
+    data, errors = _try_parse_and_validate(raw)
+    report.parse_ok = data is not None and not errors
+    report.first_violations = list(errors)
+    report.first_pass = bool(data is not None and not errors)
+    repaired = False
+    first_errors = list(errors)
+
+    if errors:
+        raw = _repair_once(raw, errors)
+        repaired = True
+        report.repaired = True
+        data, errors = _try_parse_and_validate(raw)
+
+    if errors or data is None:
+        report.final_ok = False
+        report.final_violations = list(errors or first_errors)
+        report.outcome = "degraded"
+        report.duration_seconds = round(time.monotonic() - t0, 3)
+        return None, report
+
+    try:
+        markdown = render_advice_markdown(data, evidence)
+    except AdviceContractError as e:
+        if repaired:
+            report.final_ok = False
+            report.final_violations = list(e.violations or first_errors)
+            report.outcome = "degraded"
+            report.duration_seconds = round(time.monotonic() - t0, 3)
+            return None, report
+        err_list = [
+            line.lstrip("- ").strip()
+            for line in str(e).splitlines()
+            if line.strip()
+        ]
+        if err_list and "保存条件" in err_list[0]:
+            err_list = err_list[1:] or [str(e)]
+        raw = _repair_once(raw, err_list)
+        repaired = True
+        report.repaired = True
+        data, errors = _try_parse_and_validate(raw)
+        if errors or data is None:
+            report.final_ok = False
+            report.final_violations = list(errors or err_list)
+            report.outcome = "degraded"
+            report.duration_seconds = round(time.monotonic() - t0, 3)
+            return None, report
+        try:
+            markdown = render_advice_markdown(data, evidence)
+        except AdviceContractError as e2:
+            report.final_ok = False
+            report.final_violations = list(e2.violations or err_list)
+            report.outcome = "degraded"
+            report.duration_seconds = round(time.monotonic() - t0, 3)
+            return None, report
+        full = f"## 🚀 Kaizen（AIからの改善提案）\n\n{markdown}"
+        report.final_ok = True
+        report.outcome = "repaired"
+        report.markdown = full
+        report.first_violations = err_list
+        report.duration_seconds = round(time.monotonic() - t0, 3)
+        return full, report
+
+    full = f"## 🚀 Kaizen（AIからの改善提案）\n\n{markdown}"
+    report.final_ok = True
+    report.outcome = "repaired" if repaired else "ok"
+    report.markdown = full
+    if not repaired:
+        report.first_violations = []
+    report.duration_seconds = round(time.monotonic() - t0, 3)
+    return full, report
+
+
 def generate_advice(
     cfg: LLMConfig,
     today_md: str,
@@ -893,78 +1022,27 @@ def generate_advice(
         redactor,
         evidence,
     )
-    raw = generate_text(cfg, system_prompt, prompt)
 
     # 日次プロンプト以外は従来どおり素通し
     if not requires_daily_contract(cfg):
+        raw = generate_text(cfg, system_prompt, prompt)
         return AdviceResult(
             markdown=f"## 🚀 Kaizen（AIからの改善提案）\n\n{raw}",
             outcome="ok",
         )
 
-    from .advice_format import (
-        normalize_advice_cardinality,
-        parse_advice_json,
-        render_advice_markdown,
-        validate_advice,
-    )
-
     assert evidence_ctx is not None
-
-    def _try_parse_and_validate(text: str) -> tuple[dict | None, list[str]]:
-        try:
-            data = parse_advice_json(text)
-        except AdviceContractError as e:
-            return None, [str(e)]
-        data = normalize_advice_cardinality(data, evidence_ctx)
-        return data, validate_advice(data, evidence_ctx)
-
-    def _repair_once(source: str, errs: list[str]) -> str:
-        print(f"⚠️  出力契約違反を検出、1回だけ修復を試みます: {errs[0]}")
-        repair_prompt = _contract_repair_prompt(evidence_ctx, source, errs)
-        if redactor:
-            repair_prompt = redactor(repair_prompt)
-        return generate_text(cfg, system_prompt, repair_prompt)
-
-    data, errors = _try_parse_and_validate(raw)
-    repaired = False
-    first_errors = list(errors)
-    if errors:
-        # 形式違反は1回だけ JSON 修復を試みる（失敗後は L2 縮退保存が受ける）
-        raw = _repair_once(raw, errors)
-        repaired = True
-        data, errors = _try_parse_and_validate(raw)
-    if errors or data is None:
+    markdown, report = _run_daily_pipeline(
+        cfg, system_prompt, prompt, evidence_ctx, redactor=redactor
+    )
+    if not report.final_ok or markdown is None:
+        errs = report.final_violations or report.first_violations or ["契約未達"]
         raise AdviceContractError(
-            "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errors),
-            violations=errors or first_errors,
-        )
-    try:
-        markdown = render_advice_markdown(data, evidence_ctx)
-    except AdviceContractError as e:
-        # validate 通過後でもレンダ側で意味違反が残るケース → 未修復なら1回だけ再試行
-        if repaired:
-            raise AdviceContractError(str(e), violations=e.violations or first_errors) from e
-        err_list = [line.lstrip("- ").strip() for line in str(e).splitlines() if line.strip()]
-        # 先頭の説明行を除き違反リストを渡す
-        if err_list and "保存条件" in err_list[0]:
-            err_list = err_list[1:] or [str(e)]
-        raw = _repair_once(raw, err_list)
-        repaired = True
-        data, errors = _try_parse_and_validate(raw)
-        if errors or data is None:
-            raise AdviceContractError(
-                "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errors),
-                violations=errors or err_list,
-            )
-        markdown = render_advice_markdown(data, evidence_ctx)
-        return AdviceResult(
-            markdown=f"## 🚀 Kaizen（AIからの改善提案）\n\n{markdown}",
-            outcome="repaired",
-            violations=err_list,
+            "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errs),
+            violations=errs,
         )
     return AdviceResult(
-        markdown=f"## 🚀 Kaizen（AIからの改善提案）\n\n{markdown}",
-        outcome="repaired" if repaired else "ok",
-        violations=first_errors if repaired else [],
+        markdown=markdown,
+        outcome=report.outcome if report.outcome in ("ok", "repaired") else "ok",
+        violations=report.first_violations if report.repaired else [],
     )

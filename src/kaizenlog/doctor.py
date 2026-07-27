@@ -64,8 +64,10 @@ def _check_config(c: Check, config_path: str | None) -> None:
                          "そちらが使われる可能性があります。内容を同期するか片方を削除してください。"
                          " 修復: kaizenlog setup")
     else:
-        c.warn("設定ファイルが見つかりません（デフォルト設定で動作中）。"
-               "`kaizenlog setup` または `kaizenlog init-config` で作成してください")
+        c.error(
+            "設定ファイルがありません。まず `kaizenlog setup` を実行してください"
+            "（診断のみはこの doctor で続行します）"
+        )
 
 
 def _check_vault(c: Check, cfg: Config) -> None:
@@ -244,7 +246,14 @@ def _check_history(c: Check, cfg: Config) -> None:
         c.warn("実行履歴がまだありません")
         return
     last = runs[-1]
-    if last.get("ok"):
+    if last.get("ok") and last.get("partial"):
+        note = last.get("note") or ""
+        extra = f" — {note}" if note else ""
+        c.warn(
+            f"直近の実行は部分成功: {last.get('command')} @ {last.get('ts', '')[:16]}"
+            f"{extra}（詳細は `kaizenlog status`）"
+        )
+    elif last.get("ok"):
         c.ok(f"直近の実行: 成功（{last.get('command')} @ {last.get('ts', '')[:16]}）")
     else:
         c.error(f"直近の実行が失敗しています: {last.get('command')} — "
@@ -269,15 +278,39 @@ def _check_advise_health(c: Check, cfg: Config) -> None:
         c.ok("提案ヘルス: 縮退の連続なし")
 
 
-def run_doctor(cfg: Config, config_path: str | None = None) -> tuple[str, bool]:
-    """全チェックを実行し、(レポート文字列, エラー有無) を返す。"""
+def run_doctor(
+    cfg: Config,
+    config_path: str | None = None,
+    *,
+    config_absent: bool = False,
+    missing_config_message: str | None = None,
+) -> tuple[str, bool]:
+    """全チェックを実行し、(レポート文字列, エラー有無) を返す。
+
+    config_absent / missing_config_message 指定時は設定エラーを必須とし、
+    CWD をボールトとして正常判定しない。設定依存チェックはスキップする。
+    """
     c = Check()
-    _check_config(c, config_path)
-    _check_vault(c, cfg)
-    _check_activitywatch(c, cfg)
-    _check_llm(c, cfg)
-    _check_aiwork(c, cfg)
-    _check_history(c, cfg)
-    _check_advise_health(c, cfg)
+    if missing_config_message:
+        c.error(missing_config_message)
+    elif config_absent:
+        c.error(
+            "設定ファイルがありません。まず `kaizenlog setup` を実行してください"
+        )
+    else:
+        _check_config(c, config_path)
+
+    if config_absent or missing_config_message:
+        # 設定なし: 書き込み可能ボールト判定はしない（CWD 誤認防止）
+        c.warn("ボールト / LLM / AIテレメトリ / 履歴 / 提案ヘルス: 設定作成後に確認")
+        # 環境だけは既定 URL で確認（設定不要の意味ある診断）
+        _check_activitywatch(c, cfg)
+    else:
+        _check_vault(c, cfg)
+        _check_activitywatch(c, cfg)
+        _check_llm(c, cfg)
+        _check_aiwork(c, cfg)
+        _check_history(c, cfg)
+        _check_advise_health(c, cfg)
     verdict = "\n❌ 修正が必要な項目があります。" if c.has_error else "\n✅ すべて正常です。"
     return "\n".join(c.lines) + verdict, c.has_error

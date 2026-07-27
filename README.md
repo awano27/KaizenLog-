@@ -47,26 +47,45 @@ ActivityWatch + Obsidian + LLM。ローカルファースト。マーカー区�
   <img src="./assets/readme/section-start.svg" width="100%" alt="Quick start with four commands">
 </p>
 
-### 最短セットアップ
+### 最短セットアップ（開発版）
+
+現行は **1.5.0rc1（RC）** です。PyPI への公開パッケージは未確認のため、GitHub から clone して入れます。
+
+リポジトリ: [https://github.com/awano27/KaizenLog-](https://github.com/awano27/KaizenLog-)
 
 ```powershell
-pipx install kaizenlog       # または pip install kaizenlog
-kaizenlog setup              # ボールト・LLM・AW・スキル・夜間/朝タスク
-kaizenlog doctor             # 環境診断
-kaizenlog run                # ActivityWatch 起動後に初回実行
+git clone https://github.com/awano27/KaizenLog-.git
+cd KaizenLog-
+pipx install .
+kaizenlog setup
+kaizenlog doctor
+kaizenlog run
 ```
 
-`setup` は `%APPDATA%\kaizenlog\config.toml` に設定を書きます。手動設定・トラブルシュートは [docs/USAGE.md](docs/USAGE.md)。
+1. `git clone` — 上記リポジトリを取得  
+2. `pipx install .` — クローン直下を開発版としてインストール  
+3. `kaizenlog setup` — ボールト・LLM・AW・スキル・夜間/朝タスク（設定は `%APPDATA%\kaizenlog\config.toml`）  
+4. `kaizenlog doctor` — 環境診断（設定なしでは通常コマンドは動きません）  
+5. `kaizenlog run` — ActivityWatch 起動後に初回実行  
+
+手動設定・トラブルシュートは [docs/USAGE.md](docs/USAGE.md)。
 
 ### 日々のコマンド
 
 ```powershell
-kaizenlog run                # 夜: 収集 + 提案（タスクスケジューラと同じ）
-kaizenlog morning            # 朝: 追いつき + 📌 再描画 + 件数トースト
-kaizenlog today              # 日中: 未完了アクション一覧（チェック同期込み）
-kaizenlog done KZN-…001      # ターミナルから消化（末尾 001 でも可・一意時）
-kaizenlog status             # 実行ログ・提案ヘルス・消化率
+kaizenlog run
+kaizenlog morning
+kaizenlog today
+kaizenlog done KZN-…001
+kaizenlog status
 ```
+
+- **run** — 夜: 収集 + 提案（タスクスケジューラと同じ）  
+- **morning** — 朝: 追いつき（AW/LLM・書き込みを含む場合あり）→ 📌 再描画 → 件数トースト（`--skip-catch-up` で追いつきなし）  
+- **today** — 日中: 今日の候補と保留件数（既定でノートのチェックを Memory へ同期。`--no-sync` / `--all` あり）  
+- **done** — ターミナルから消化（末尾 `001` でも可・一意時）  
+- **status** — 実行ログ・提案ヘルス・消化率  
+
 
 ### LLM バックエンド
 
@@ -121,11 +140,17 @@ F-ID などの機械トークンは検証層に留め、ノート本文は平易
 | 領域 | コマンド / 機能 |
 | --- | --- |
 | 日誌・提案 | `run` / `generate` / `advise` / `morning` / `today` / `done` |
-| 実験・介入 | `experiment` · `block`（LeechBlock ルール案） |
+| 実験・介入 | `experiment`（同曜日基準・効果量） · `block`（LeechBlock ルール案） |
 | 運用 | `doctor` · `status` · `backfill` · 失敗通知 · ヘルスレジャー |
 | AI 作業の質 | Claude Code / Codex CLI テレメトリ、リトライ連鎖 |
 | 拡張 | `report`（日報）· `prompts` · `patterns` · `/kaizen-autopilot` |
+| 開発 | `eval record` / `eval run`（プロンプト回帰の契約合格率） |
 | 安全 | プライバシーマスク · `advise --dry-run` · マーカー外不変 |
+
+### 測定の限界
+
+- **PC 前景のみ** — スマホ・他デバイス・離席中の行動は未測定。カテゴリ時間の減少はデバイス移行（風船効果）の可能性を排除できない
+- **ActivityWatch Android + 同期で拡張可能**（本ツールは未対応）
 
 ### 分類のカスタム
 
