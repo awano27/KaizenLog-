@@ -10,10 +10,17 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 
-from .aiwork import AISession, RetryChain, estimate_sessions_cost
+from .aiwork import (
+    AISession,
+    RetryChain,
+    estimate_sessions_cost,
+    prompt_length_observation,
+    session_digests_for_stats,
+)
 from .focus import InputStats
 from .report import DailySummary
 from .vault import atomic_write_text
@@ -37,6 +44,7 @@ def build_stats(
     retry_chains: list[RetryChain] | None = None,
     afk_watcher_available: bool | None = None,
     pricing: dict[str, float] | None = None,
+    title_redactor: Callable[[str], str] | None = None,
 ) -> dict:
     projects: dict[str, dict] = {}
     for s in cc_sessions:
@@ -181,8 +189,15 @@ def build_stats(
             "api_calls": api_calls,
             "tool_counts": tool_counts,
             "models": sorted(models_set),
+            # 週次摩擦ワースト用（title は redact して保存）
+            "session_digests": session_digests_for_stats(
+                cc_sessions, day.isoformat(), redactor=title_redactor
+            ),
         },
     }
+    obs = prompt_length_observation(cc_sessions)
+    if obs:
+        stats["ai"]["prompt_length_observation"] = obs
     if input_stats is not None:
         stats["input"] = {
             "keypresses": input_stats.keypresses,
@@ -210,6 +225,7 @@ def write_stats(
     retry_chains: list[RetryChain] | None = None,
     afk_watcher_available: bool | None = None,
     pricing: dict[str, float] | None = None,
+    title_redactor: Callable[[str], str] | None = None,
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
@@ -224,6 +240,7 @@ def write_stats(
                 activity_md,
                 retry_chains,
                 afk_watcher_available=afk_watcher_available,
+                title_redactor=title_redactor,
                 pricing=pricing,
             ),
             ensure_ascii=False,

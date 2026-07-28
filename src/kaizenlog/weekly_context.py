@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from pathlib import Path
 
+from .aiwork import top_friction_sessions
 from .experiments import (
     detect_regressions,
     format_effect_size,
@@ -158,6 +159,49 @@ def render_weekly_context(
         lines.append("| （記録なし） |  |  |  |  |  |  |  |")
     lines.append("")
     lines.append(f"- {format_ai_tokens_week_line(week_stats)}")
+
+    # 摩擦ワースト: 日次は決定論シグナルのみ。質の LLM 判定は週次スキルへ
+    # （ai_work_deep_review の観点でマーカー外に書く）
+    digests: list[dict] = []
+    for s in week_stats:
+        ai = s.get("ai") if isinstance(s.get("ai"), dict) else {}
+        raw = ai.get("session_digests")
+        if isinstance(raw, list):
+            for d in raw:
+                if isinstance(d, dict):
+                    digests.append(d)
+    worst = top_friction_sessions(digests, limit=3)
+    lines.extend(
+        [
+            "",
+            "## ⚠ 摩擦ワーストセッション",
+            "",
+            "スコア = ツールエラー + 中断×5 + リトライ関与×5。"
+            "日次は数値・内容抜粋のみ。入力/出力の質の判定は週次 LLM に委ねる。",
+            "",
+        ]
+    )
+    if not worst:
+        lines.append("- （摩擦セッションなし、または session_digests 未保存）")
+    else:
+        for i, d in enumerate(worst, 1):
+            day = d.get("day") or "?"
+            proj = d.get("project") or "?"
+            title = (d.get("title") or "（内容なし）").strip() or "（内容なし）"
+            # 一行化
+            title = " ".join(str(title).split())
+            err = int(d.get("tool_errors") or 0)
+            inter = int(d.get("interruptions") or 0)
+            retry = int(d.get("retry_touch") or 0)
+            score = err + inter * 5 + retry * 5
+            ended = " / 末尾エラー" if d.get("ended_in_error") else ""
+            tests = " / テスト実行あり" if d.get("tests_run") else ""
+            edits = int(d.get("edits") or 0)
+            lines.append(
+                f"{i}. {day} 「{proj}」 score={score} "
+                f"（エラー{err}・中断{inter}・変更{edits}{tests}{ended}）: {title}"
+            )
+    lines.append("")
 
     # アクション実績（superseded 除外は compute_action_stats 側）
     entries = load_entries(memory_dir)

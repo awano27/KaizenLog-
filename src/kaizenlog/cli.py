@@ -189,6 +189,12 @@ def cmd_generate(
     day_retry_chains = []
     retry_chain_count: int | None = None
     pricing = cfg.aiwork.pricing or None
+    from .privacy import make_redactor
+
+    # 依頼抜粋は日誌・stats に載るため privacy redact を適用（画面タイトル原文方針の例外）
+    title_redactor = make_redactor(
+        cfg.privacy.redact_patterns, cfg.privacy.replacement
+    )
     if cfg.aiwork.enabled:
         adapters = available_adapters(cfg)
         ai_sessions, day_prompts = collect_ai_telemetry(adapters, day_start, day_end)
@@ -199,6 +205,9 @@ def cmd_generate(
             tz,
             retry_chain_count=retry_chain_count,
             pricing=pricing,
+            session_titles=bool(getattr(cfg.aiwork, "session_titles", True)),
+            redactor=title_redactor,
+            retry_chains=day_retry_chains,
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
@@ -221,6 +230,7 @@ def cmd_generate(
         retry_chains=day_retry_chains if cfg.aiwork.enabled else None,
         afk_watcher_available=afk_ok,
         pricing=pricing,
+        title_redactor=title_redactor if cfg.aiwork.enabled else None,
     )
 
     # 実験の実測追記: running 全件 + adopted（deadline から30日以内のみ）

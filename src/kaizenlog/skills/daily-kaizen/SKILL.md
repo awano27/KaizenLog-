@@ -95,12 +95,13 @@ allowed-tools: "Read Glob Grep Edit"
 - 最小アクションは各1行にし、サブ見出しや追加チェックボックスを挟まない
 - アクションは if-then: 実在の日課・時刻の `trigger`（合図）→ 行動。例:
   「朝一のメール確認の後→25分枠を1件入れる」
-- PASS は可能な限り機械構文 `指標 演算子 数値`（例: `context_switches <= 40`、
-  `category_minutes:エンタメ <= 30`）。翌晩 `kaizenlog generate` が自動判定する。
+- PASS は**必ず**機械構文 `指標 演算子 数値`（例: `context_switches <= 40`、
+  `category_minutes:エンタメ <= 30`、`ai_tool_errors <= 60`）。自由文 PASS は禁止。
+  翌晩 `kaizenlog generate` が自動判定する。
   指標: context_switches / total_active_minutes / ai_cc_sessions /
   ai_fragmented_sessions / ai_retry_chains / ai_tool_errors / ai_interruptions /
   ai_avg_turns / ai_output_tokens / focus_blocks / focus_minutes /
   input_keypresses / category_minutes:<名> / site_minutes:<ドメイン>。
-  測れない行動のみ自由文＋数値
+  上記で測れない行動は提案しない
 - `suggestions.jsonl` は読むだけ。書き込みは `kaizenlog advise` 側のID採番に任せる
 - 合計400〜800字程度に収める。長文化しない

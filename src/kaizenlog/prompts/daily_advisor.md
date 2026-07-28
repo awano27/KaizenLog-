@@ -93,13 +93,14 @@ KaizenLog が決定論的に組み立てます。
 - `trigger` は必須。実行意図（if-then）の合図。当日ログや Today's Focus に実在する
   行動・時刻をアンカーにする（例: 「朝一のメール確認の後」）。見つからなければ
   「朝いちばんに」等の汎用でよい。改行禁止・短い文（目安15字）
-- `pass` は**可能な限り**機械構文 `指標 演算子 数値`（例: `context_switches <= 40`、
-  `category_minutes:エンタメ <= 30`）。翌晩に自動判定される
+- `pass` は**必ず**機械構文 `指標 演算子 数値`（例: `context_switches <= 40`、
+  `category_minutes:エンタメ <= 30`、`ai_tool_errors <= 60`）。自由文 PASS は契約違反
+  （自動判定不能のため保存しない）。翌晩に自動判定される
   使用可能指標: `context_switches` / `total_active_minutes` / `ai_cc_sessions` /
   `ai_fragmented_sessions` / `ai_retry_chains` / `ai_tool_errors` / `ai_interruptions` /
   `ai_avg_turns` / `ai_output_tokens` / `focus_blocks` / `focus_minutes` /
   `input_keypresses` / `category_minutes:<カテゴリ名>` / `site_minutes:<ドメイン>`
-  測れない行動のみ、数値を含む自由文でよい
+  上記で測れない行動は提案しない（自由文 PASS への退避は禁止）
 - PASS 数値は推奨帯 F10 を基準に決める。根拠なく大きな削減目標を設定しない
 - PASS実績が0%の指標を使い続けない。本人が直接制御できる行動に近い指標
   （サイト分・集中ブロック等）を優先する

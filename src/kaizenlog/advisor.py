@@ -512,27 +512,28 @@ def advice_contract_errors(
         if not pass_value or not fail_value:
             errors.append(f"最小アクション{index}に翌日の PASS:/FAIL: 条件がありません")
         else:
-            # 機械構文らしい PASS は既知指標のみ。注記括弧（…）は除去して判定。
-            from .verdict import is_known_metric, looks_like_machine_pass, strip_pass_annotation
+            # PASS は parse_pass_condition が通る機械構文のみ（自由文は全ガード迂回のため禁止）
+            from .verdict import (
+                looks_like_machine_pass,
+                parse_pass_condition,
+                strip_pass_annotation,
+            )
             core_pass = strip_pass_annotation(pass_value)
-            if looks_like_machine_pass(core_pass):
-                m_metric = re.match(r"^(\S+)\s*(?:<=|>=|<|>|==?)", core_pass.strip())
-                metric_name = m_metric.group(1) if m_metric else core_pass.split()[0]
-                if not is_known_metric(metric_name):
-                    errors.append(
-                        f"最小アクション{index}の PASS: 指標名が使用可能な指標にありません"
-                    )
-                if not _is_measurable_condition(fail_value):
-                    errors.append(
-                        f"最小アクション{index}の PASS:/FAIL: は数値条件にしてください"
-                    )
-            elif (
-                not _is_measurable_condition(pass_value)
-                or not _is_measurable_condition(fail_value)
-            ):
+            core_fail = strip_pass_annotation(fail_value)
+            if parse_pass_condition(f"x｜PASS: {core_pass}｜FAIL: 0") is None:
+                errors.append(
+                    f"最小アクション{index}の PASS: は機械構文（指標 演算子 数値）"
+                    f"にしてください。自由文は自動判定できず契約違反です"
+                )
+            elif not _is_measurable_condition(fail_value):
                 errors.append(
                     f"最小アクション{index}の PASS:/FAIL: は数値条件にしてください"
                 )
+            elif looks_like_machine_pass(core_fail):
+                if parse_pass_condition(f"x｜PASS: {core_fail}｜FAIL: 0") is None:
+                    errors.append(
+                        f"最小アクション{index}の FAIL: は機械構文として解析できません"
+                    )
         if re.search(r"KZN-\d{8}-\d+", action):
             errors.append(f"最小アクション{index}にモデル生成のKZN IDがあります")
         # evidence ゲート付き内容チェックは PASS 注記を剥がしてから（レンダラ由来ラベル誤爆防止）
@@ -828,9 +829,10 @@ def _contract_repair_prompt(
         f"{allowed_ids}\n"
         "- interpretation / ai_review.text に算用数字を書かない"
         "（観測値の再掲禁止）\n"
-        "- pass/fail は数値条件。pass は可能な限り "
-        "`指標 演算子 数値` の機械構文\n"
-        "- PASS 目標はベースラインより挑戦的に設定する"
+        "- pass は機械構文のみ: `指標名 演算子 数値`"
+        "（例: `ai_tool_errors <= 60`、`category_minutes:エンタメ <= 35`）。"
+        "使用可能な指標は根拠セクションに列挙されたもののみ。自由文 PASS は禁止\n"
+        "- fail は数値条件（機械構文可）。PASS 目標はベースラインより挑戦的に"
         "（減らす目標は baseline×1.2 超を禁止、増やす目標は baseline×0.8 未満を禁止）\n"
         "- KZN ID と HTML コメントは禁止\n"
         "- AI関連画面ブロックは会話数・セッション数・往復数ではない\n\n"

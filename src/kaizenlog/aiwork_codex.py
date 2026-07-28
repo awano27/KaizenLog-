@@ -22,7 +22,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .aiwork import AISession, UserPrompt, _parse_ts
+from .aiwork import (
+    AISession,
+    UserPrompt,
+    _looks_like_test_command,
+    _note_tool_use,
+    _parse_ts,
+    normalize_prompt_text,
+    session_title_from_text,
+)
 
 
 def _payload(record: dict) -> dict:
@@ -103,6 +111,11 @@ class _SessionAccum:
     token_peak: int | None = None
     models: set[str] = field(default_factory=set)
     touched: bool = False
+    title: str | None = None
+    first_prompt_len: int = 0
+    edits: int = 0
+    tests_run: bool = False
+    ended_in_error: bool = False
 
     def add_token(self, ts: datetime, ot: int, day_start: datetime, day_end: datetime) -> None:
         if ts < day_start:
@@ -122,6 +135,33 @@ class _SessionAccum:
             return self.api_calls_response_item
         return self.api_calls_event_msg
 
+    def note_user_message(self, text: str) -> None:
+        self.user_turns += 1
+        if self.title is not None:
+            return
+        cleaned = normalize_prompt_text(text)
+        if not cleaned:
+            return
+        self.first_prompt_len = len(cleaned)
+        self.title = session_title_from_text(cleaned)
+
+    def note_tool(self, name: str, tool_input: object = None) -> None:
+        # AISession と同じ分類を一時オブジェクトで再利用
+        tmp = AISession(
+            session_id=self.session_id,
+            project=self.project,
+            start=self.start or datetime.now(timezone.utc),
+            end=self.end or datetime.now(timezone.utc),
+            tool_counts=self.tool_counts,
+            edits=self.edits,
+            tests_run=self.tests_run,
+        )
+        _note_tool_use(tmp, name, tool_input)
+        self.edits = tmp.edits
+        self.tests_run = tmp.tests_run
+        if isinstance(tool_input, str) and _looks_like_test_command(tool_input):
+            self.tests_run = True
+
     def to_session(self) -> AISession | None:
         if not self.touched or self.start is None or self.end is None:
             return None
@@ -140,6 +180,11 @@ class _SessionAccum:
             output_tokens=self.day_output_tokens(),
             models=set(self.models),
             source="codex",
+            title=self.title,
+            first_prompt_len=self.first_prompt_len,
+            edits=self.edits,
+            tests_run=self.tests_run,
+            ended_in_error=self.ended_in_error,
         )
 
 
@@ -271,7 +316,9 @@ class CodexAdapter:
                 if top == "event_msg":
                     et = payload.get("type")
                     if et == "user_message":
-                        a.user_turns += 1
+                        msg = payload.get("message")
+                        text = msg if isinstance(msg, str) else ""
+                        a.note_user_message(text)
                     elif et == "turn_aborted":
                         a.interruptions += 1
                     elif et == "agent_message":
@@ -285,19 +332,30 @@ class CodexAdapter:
                         a.api_calls_response_item += 1
                     elif pt == "function_call":
                         name = str(payload.get("name") or "function")
-                        a.tool_counts[name] += 1
+                        args = payload.get("arguments") or payload.get("input")
+                        a.note_tool(name, args)
+                        a.ended_in_error = False
                     elif pt == "custom_tool_call":
                         name = str(payload.get("name") or "custom_tool")
-                        a.tool_counts[name] += 1
+                        a.note_tool(name, payload.get("input"))
                         status = str(payload.get("status") or "").lower()
                         if status and status not in ("completed", "success", "ok"):
                             a.tool_errors += 1
+                            a.ended_in_error = True
+                        else:
+                            a.ended_in_error = False
                     elif pt == "function_call_output":
                         if _tool_output_is_error(payload.get("output")):
                             a.tool_errors += 1
+                            a.ended_in_error = True
+                        else:
+                            a.ended_in_error = False
                     elif pt == "custom_tool_call_output":
                         if _tool_output_is_error(payload.get("output")):
                             a.tool_errors += 1
+                            a.ended_in_error = True
+                        else:
+                            a.ended_in_error = False
 
     def _prompts_from_file(
         self,

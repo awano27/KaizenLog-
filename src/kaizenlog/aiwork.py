@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from difflib import SequenceMatcher
@@ -19,6 +20,38 @@ from typing import Protocol, runtime_checkable
 # 言い直し・言い換えクラスタではなく、短時間のほぼ同一依頼を対象にするため。
 _RETRY_WINDOW_MINUTES = 30
 _RETRY_SIMILARITY = 0.85
+
+# セッション内容列: 最初の依頼文の先頭 N 字
+SESSION_TITLE_MAX = 40
+# 依頼長さの層別閾値（字）。因果断定せず観察値のみ出す。
+PROMPT_LENGTH_SHORT = 80
+
+# 変更系ツール（成果プロキシ「編集した」）。正しさの判定はしない。
+_EDIT_TOOLS = frozenset(
+    {
+        "Edit",
+        "Write",
+        "MultiEdit",
+        "NotebookEdit",
+        "apply_patch",
+        "ApplyPatch",
+        "str_replace",
+        "create_file",
+        "delete_file",
+    }
+)
+_TEST_CMD_MARKERS = (
+    "pytest",
+    "python -m pytest",
+    "npm test",
+    "npm run test",
+    "pnpm test",
+    "yarn test",
+    "cargo test",
+    "go test",
+    "vitest",
+    "jest",
+)
 
 # ユーザーがツール実行を拒否/中断したときに tool_result に入る典型文言
 _INTERRUPT_MARKERS = (
@@ -110,6 +143,16 @@ class AISession:
     # 分かれて記録され、各行が同じusageを繰り返し持つ
     seen_message_ids: set[str] = field(default_factory=set)
     source: str = "claude-code"  # テレメトリアダプタ ID
+    # 内容: 最初のユーザー依頼の先頭字（ラッパー除去後）。未抽出は None
+    title: str | None = None
+    # 層別用: 初回依頼の文字数（タイトル切詰前）
+    first_prompt_len: int = 0
+    # 成果プロキシ（正しさは判定しない — 変更した/テストした/末尾エラーのみ）
+    edits: int = 0
+    tests_run: bool = False
+    ended_in_error: bool = False
+    # 走査中: 直近ツール結果がエラーか（セッション終了時に ended_in_error へ）
+    _last_tool_error: bool = field(default=False, repr=False)
 
     @property
     def minutes(self) -> float:
@@ -119,6 +162,14 @@ class AISession:
     def is_fragmented(self) -> bool:
         """2往復以下の「細切れ」セッションか。"""
         return self.user_turns <= 2
+
+    def friction_score(self, retry_chain_touch: int = 0) -> int:
+        """摩擦スコア: エラー + 中断×5 + リトライ連鎖関与×5。"""
+        return (
+            int(self.tool_errors)
+            + int(self.interruptions) * 5
+            + int(retry_chain_touch) * 5
+        )
 
 
 def _parse_ts(record: dict) -> datetime | None:
@@ -169,6 +220,66 @@ def _is_command_wrapper(text: str) -> bool:
     )
 
 
+def normalize_prompt_text(text: str) -> str:
+    """改行・連続空白を畳んで一行化する。"""
+    return " ".join((text or "").split())
+
+
+def session_title_from_text(text: str, max_chars: int = SESSION_TITLE_MAX) -> str:
+    """依頼文から表用 title（先頭 max_chars 字）。ラッパーは呼び出し側で除外済み想定。"""
+    t = normalize_prompt_text(text)
+    if len(t) <= max_chars:
+        return t
+    return t[:max_chars]
+
+
+def _looks_like_test_command(command: str) -> bool:
+    low = (command or "").lower()
+    return any(m in low for m in _TEST_CMD_MARKERS)
+
+
+def _count_edit_tool(name: str) -> bool:
+    n = name or ""
+    if n in _EDIT_TOOLS:
+        return True
+    low = n.lower()
+    return low in {x.lower() for x in _EDIT_TOOLS} or "apply_patch" in low
+
+
+def _note_tool_use(session: AISession, name: str, tool_input: object = None) -> None:
+    session.tool_counts[str(name or "unknown")] += 1
+    if _count_edit_tool(str(name or "")):
+        session.edits += 1
+    # Bash 等のコマンドからテスト実行を検出
+    if str(name) in ("Bash", "bash", "Shell", "shell", "local_shell"):
+        cmd = ""
+        if isinstance(tool_input, dict):
+            cmd = str(
+                tool_input.get("command")
+                or tool_input.get("cmd")
+                or tool_input.get("input")
+                or ""
+            )
+        elif isinstance(tool_input, str):
+            cmd = tool_input
+        if _looks_like_test_command(cmd):
+            session.tests_run = True
+    # Codex の test 系ツール名
+    if "test" in str(name).lower() and str(name).lower() not in ("get_test",):
+        if any(m in str(name).lower() for m in ("pytest", "jest", "vitest")):
+            session.tests_run = True
+
+
+def _maybe_set_title(session: AISession, text: str) -> None:
+    if session.title is not None:
+        return
+    cleaned = normalize_prompt_text(text)
+    if not cleaned or _is_command_wrapper(text):
+        return
+    session.first_prompt_len = len(cleaned)
+    session.title = session_title_from_text(cleaned)
+
+
 def _update_session(session: AISession, record: dict, ts: datetime) -> None:
     session.start = min(session.start, ts)
     session.end = max(session.end, ts)
@@ -178,12 +289,16 @@ def _update_session(session: AISession, record: dict, ts: datetime) -> None:
         items = _content_items(record)
         tool_results = [i for i in items if isinstance(i, dict) and i.get("type") == "tool_result"]
         if tool_results:
+            any_err = False
             for tr in tool_results:
                 text = json.dumps(tr.get("content", ""), ensure_ascii=False)
                 if _is_interruption(text):
                     session.interruptions += 1
                 elif tr.get("is_error"):
                     session.tool_errors += 1
+                    any_err = True
+            session._last_tool_error = any_err
+            session.ended_in_error = any_err
         else:
             texts = [
                 i.get("text", "") for i in items
@@ -195,6 +310,7 @@ def _update_session(session: AISession, record: dict, ts: datetime) -> None:
             elif joined.strip() and not _is_command_wrapper(joined):
                 # コマンドラッパーはユーザー往復に数えない
                 session.user_turns += 1
+                _maybe_set_title(session, joined)
 
     elif rtype == "assistant":
         msg = record.get("message")
@@ -220,7 +336,14 @@ def _update_session(session: AISession, record: dict, ts: datetime) -> None:
         # tool_useブロックは行ごとに一度しか現れないため、行単位の計上でよい
         for item in _content_items(record):
             if isinstance(item, dict) and item.get("type") == "tool_use":
-                session.tool_counts[str(item.get("name", "unknown"))] += 1
+                _note_tool_use(
+                    session,
+                    str(item.get("name", "unknown")),
+                    item.get("input"),
+                )
+                # ツール起動時点では未解決扱いに戻す（結果待ち）
+                session._last_tool_error = False
+                session.ended_in_error = False
 
 
 def scan_sessions(
@@ -483,16 +606,129 @@ def _fmt_minutes(minutes: float) -> str:
     return f"{h}h{m:02d}m" if h else f"{m}m"
 
 
+def _md_cell(value: object) -> str:
+    """表セル用: 一行化と | エスケープ。"""
+    text = " ".join(str(value if value is not None else "").split())
+    return text.replace("|", "\\|")
+
+
+def prompt_length_observation(sessions: Sequence[AISession]) -> str | None:
+    """依頼長さ層別の観察1行。両層に2セッション以上ある日のみ。
+
+    因果（短いから失敗）は断定しない。平均エラー等の併記のみ。
+    """
+    short = [s for s in sessions if 0 < s.first_prompt_len < PROMPT_LENGTH_SHORT]
+    long = [s for s in sessions if s.first_prompt_len >= PROMPT_LENGTH_SHORT]
+    if len(short) < 2 or len(long) < 2:
+        return None
+
+    def _avg_err(xs: list[AISession]) -> float:
+        return sum(s.tool_errors for s in xs) / len(xs)
+
+    def _avg_turns(xs: list[AISession]) -> float:
+        return sum(s.user_turns for s in xs) / len(xs)
+
+    return (
+        f"依頼の長さ別: 短い依頼({PROMPT_LENGTH_SHORT}字未満) {len(short)}回"
+        f"（平均往復{_avg_turns(short):.1f}・平均エラー{_avg_err(short):.1f}）"
+        f" / 詳細な依頼 {len(long)}回"
+        f"（平均往復{_avg_turns(long):.1f}・平均エラー{_avg_err(long):.1f}）"
+        "。観察値のみ（因果は断定しない）"
+    )
+
+
+def retry_chain_excerpts(
+    chains: Sequence[RetryChain],
+    *,
+    redactor: Callable[[str], str] | None = None,
+    max_chains: int = 3,
+) -> list[str]:
+    """連鎖起点依頼の抜粋（40字・任意 redact）。"""
+    out: list[str] = []
+    for chain in list(chains)[:max_chains]:
+        if not chain.prompts:
+            continue
+        raw = session_title_from_text(chain.prompts[0].text)
+        if redactor is not None:
+            raw = redactor(raw)
+        proj = chain.project
+        out.append(f"連鎖起点（{proj}）: {_md_cell(raw)}")
+    return out
+
+
+def session_digests_for_stats(
+    sessions: Sequence[AISession],
+    day: str,
+    *,
+    redactor: Callable[[str], str] | None = None,
+) -> list[dict]:
+    """stats 保存用のセッション要約（週次ワースト選定用）。"""
+    digests: list[dict] = []
+    for s in sessions:
+        title = s.title or ""
+        if redactor is not None and title:
+            title = redactor(title)
+        digests.append(
+            {
+                "day": day,
+                "session_id": s.session_id,
+                "project": s.project,
+                "title": title,
+                "tool_errors": int(s.tool_errors),
+                "interruptions": int(s.interruptions),
+                "user_turns": int(s.user_turns),
+                "edits": int(s.edits),
+                "tests_run": bool(s.tests_run),
+                "ended_in_error": bool(s.ended_in_error),
+                "source": s.source or "claude-code",
+                "first_prompt_len": int(s.first_prompt_len),
+                "friction": s.friction_score(),
+            }
+        )
+    return digests
+
+
+def top_friction_sessions(
+    digests: Sequence[dict],
+    *,
+    limit: int = 3,
+) -> list[dict]:
+    """摩擦スコア上位セッション。同点はエラー多い順。score=0 は除外。"""
+    scored = []
+    for d in digests:
+        if not isinstance(d, dict):
+            continue
+        err = int(d.get("tool_errors") or 0)
+        inter = int(d.get("interruptions") or 0)
+        retry = int(d.get("retry_touch") or 0)
+        score = err + inter * 5 + retry * 5
+        if score <= 0:
+            continue
+        scored.append((score, err, d))
+    scored.sort(key=lambda x: (-x[0], -x[1], str(x[2].get("day", ""))))
+    return [d for _score, _e, d in scored[:limit]]
+
+
 def render_aiwork_markdown(
     sessions: list[AISession],
     tz: tzinfo,
     max_rows: int = 15,
     retry_chain_count: int = 0,
     pricing: dict[str, float] | None = None,
+    *,
+    session_titles: bool = True,
+    redactor: Callable[[str], str] | None = None,
+    retry_chains: Sequence[RetryChain] | None = None,
 ) -> str:
     """「AI作業の質」セクションのMarkdownを生成する。セッションが無ければ空文字。
 
     細切れ（2往復以下）は中立の観測値。摩擦の主指標はリトライ連鎖。
+    内容列 title は依頼文の抜粋。日誌本体は通常原文だが、依頼逐語は
+    画面タイトルより機密性が高くボールト同期で漏れ得るため、ここだけ
+    privacy redact を適用する（session_titles=false で列ごと非表示可）。
+
+    成果列は決定論プロキシ（変更数・テスト・末尾エラー）のみ。
+    出力の正しさの LLM 判定は日次では行わない（週次レビューへ集約）。
     """
     if not sessions:
         return ""
@@ -541,21 +777,54 @@ def render_aiwork_markdown(
         )
     if top_tools:
         lines.append(f"主なツール: {top_tools}")
+    obs = prompt_length_observation(sessions)
+    if obs:
+        lines.append(obs)
+    if retry_chains:
+        for excerpt in retry_chain_excerpts(retry_chains, redactor=redactor):
+            lines.append(f"リトライ{excerpt}")
     lines.append("")
 
     rows = sessions[:max_rows]
-    lines.append("| 時刻 | プロジェクト | 往復 | ツール実行 | エラー | 中断 |")
-    lines.append("| --- | --- | ---: | ---: | ---: | ---: |")
+    if session_titles:
+        lines.append(
+            "| 時刻 | プロジェクト | 内容 | 往復 | ツール | エラー | 中断 | 変更 |"
+        )
+        lines.append("| --- | --- | --- | ---: | ---: | ---: | ---: | --- |")
+    else:
+        lines.append(
+            "| 時刻 | プロジェクト | 往復 | ツール | エラー | 中断 | 変更 |"
+        )
+        lines.append("| --- | --- | ---: | ---: | ---: | ---: | --- |")
     for s in rows:
         start = s.start.astimezone(tz).strftime("%H:%M")
         end = s.end.astimezone(tz).strftime("%H:%M")
-        project = s.project.replace("|", "\\|")
+        project = _md_cell(s.project)
         if (s.source or "claude-code") != "claude-code":
             project = f"{project} ({s.source})"
-        lines.append(
-            f"| {start}-{end} | {project} | {s.user_turns} "
-            f"| {sum(s.tool_counts.values())} | {s.tool_errors} | {s.interruptions} |"
-        )
+        # 変更プロキシ + 末尾エラー⚠ / テスト✓
+        # 正しさは見ない（変更した・テストした・エラーで終わった、まで）
+        outcome_bits: list[str] = [f"変更{int(s.edits)}"]
+        if s.tests_run:
+            outcome_bits.append("✓")
+        if s.ended_in_error:
+            outcome_bits.append("⚠")
+        outcome = " ".join(outcome_bits)
+        tools_n = sum(s.tool_counts.values())
+        if session_titles:
+            title = s.title or "—"
+            if redactor is not None and title != "—":
+                title = redactor(title)
+            title = _md_cell(title)
+            lines.append(
+                f"| {start}-{end} | {project} | {title} | {s.user_turns} "
+                f"| {tools_n} | {s.tool_errors} | {s.interruptions} | {outcome} |"
+            )
+        else:
+            lines.append(
+                f"| {start}-{end} | {project} | {s.user_turns} "
+                f"| {tools_n} | {s.tool_errors} | {s.interruptions} | {outcome} |"
+            )
     if len(sessions) > max_rows:
         lines.append("")
         lines.append(f"（他 {len(sessions) - max_rows} セッション省略）")

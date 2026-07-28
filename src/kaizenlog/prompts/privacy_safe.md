@@ -73,7 +73,8 @@
 - proposals[i] と actions[i] は根拠IDを共有。ai_review は F4 または F5 を含む
 - `interpretation` / `ai_review.text` に算用数字を書かない
 - `trigger` 必須（if-then の合図。実在の日課・時刻か「朝いちばんに」等）
-- `pass` は可能な限り機械構文（`context_switches <= 40` 等）。使用可能指標は
+- `pass` は**必ず**機械構文 `指標 演算子 数値`（例: `context_switches <= 40`、
+  `ai_tool_errors <= 60`）。自由文 PASS は契約違反。使用可能指標は
   context_switches / total_active_minutes / ai_cc_sessions / ai_fragmented_sessions /
   ai_retry_chains / ai_tool_errors / ai_interruptions / ai_avg_turns /
   ai_output_tokens / focus_blocks / focus_minutes / input_keypresses /

@@ -60,8 +60,8 @@ VALID_ADVICE = """### 今日の改善提案
 2. [F9] 開発とブラウジングの往来が上位なので、確認事項をまとめて開く。翌日は同遷移を見る。
 
 ### 明日の最小アクション
-- [ ] [F3] 始業時に25分枠を予定へ1件入れる｜PASS: 集中ブロック2回以上｜FAIL: 1回以下
-- [ ] [F9] 調査リンクを開く前に3件まとめる｜PASS: 開発→ブラウジング1回以下｜FAIL: 2回以上
+- [ ] [F3] 始業時に25分枠を予定へ1件入れる｜PASS: focus_blocks >= 2｜FAIL: 1回以下
+- [ ] [F9] 調査リンクを開く前に3件まとめる｜PASS: context_switches <= 40｜FAIL: 41回以上
 
 ### AI作業の改善
 - [F5] 会話の往復数は測定不能なので、品質の良否は断定しない。
@@ -89,15 +89,15 @@ VALID_ADVICE_JSON = """{
       "fact_ids": ["F3"],
       "trigger": "始業の直後",
       "action": "集中枠を予定へ一件入れる",
-      "pass": "集中ブロック2回以上",
+      "pass": "focus_blocks >= 2",
       "fail": "1回以下"
     },
     {
       "fact_ids": ["F9"],
       "trigger": "調査を始める前",
       "action": "リンクを三件まとめる",
-      "pass": "開発→ブラウジング1回以下",
-      "fail": "2回以上"
+      "pass": "context_switches <= 40",
+      "fail": "41回以上"
     }
   ],
   "ai_review": [
@@ -113,7 +113,7 @@ MISSING_EVIDENCE_ADVICE = """### 今日の改善提案
 1. [F0] 当日の機械可読統計がないため、まず生成状態を確認する。
 
 ### 明日の最小アクション
-- [ ] [F0] 始業時に統計ファイルを1件確認する｜PASS: 1件確認｜FAIL: 0件
+- [ ] [F0] 始業時に統計ファイルを1件確認する｜PASS: context_switches <= 200｜FAIL: 201回以上
 
 ### AI作業の改善
 - [F5] AI会話の往復数と品質は測定不能なので断定しない。
@@ -134,8 +134,8 @@ MISSING_EVIDENCE_JSON = """{
       "fact_ids": ["F0"],
       "trigger": "始業の直後",
       "action": "統計ファイルを一件確認する",
-      "pass": "1件確認",
-      "fail": "0件"
+      "pass": "context_switches <= 200",
+      "fail": "201回以上"
     }
   ],
   "ai_review": [
@@ -151,7 +151,7 @@ SHORT_DAY_ADVICE = """### 今日の改善提案
 1. [F3] 集中できた時間帯の開始条件を明日も再現する。
 
 ### 明日の最小アクション
-- [ ] [F3] 開発開始時に25分タイマーを1回設定する｜PASS: 25分以上の集中ブロックが1回以上｜FAIL: 0回
+- [ ] [F3] 開発開始時に25分タイマーを1回設定する｜PASS: focus_blocks >= 1｜FAIL: 0回
 
 ### AI作業の改善
 - [F5] AI会話の品質は測定不能なので評価しない。
@@ -326,7 +326,7 @@ def test_short_day_reader_output_is_plain_and_limits_actions():
     assert "### 計測上の注意" in rendered
     assert "[F3]" not in rendered
     assert "[F5]" not in rendered
-    assert "25分以上の集中ブロックが1回以上" in rendered
+    assert "focus_blocks >= 1" in rendered
 
 
 @pytest.mark.parametrize(
@@ -352,7 +352,7 @@ def test_short_day_rejects_unmeasured_or_low_priority_actions(replacement, expec
 def test_without_previous_day_rejects_relative_action_condition():
     evidence = build_advice_evidence(CURRENT, source_status="verified")
     advice = SHORT_DAY_ADVICE.replace(
-        "PASS: 25分以上の集中ブロックが1回以上｜FAIL: 0回",
+        "PASS: focus_blocks >= 1｜FAIL: 0回",
         "PASS: 前日比で増加｜FAIL: 前日比で減少または同数",
     )
 
@@ -362,7 +362,7 @@ def test_without_previous_day_rejects_relative_action_condition():
 def test_missing_evidence_uses_safe_unmeasured_context():
     # F-ID 存在性は JSON 層（validate_advice）で担保。Markdown 契約では見出し等を見る
     invalid = MISSING_EVIDENCE_ADVICE.replace(
-        "｜PASS: 1件確認｜FAIL: 0件", "｜PASS: ｜FAIL:"
+        "｜PASS: context_switches <= 200｜FAIL: 201回以上", "｜PASS: ｜FAIL:"
     )
     errors = advice_contract_errors(invalid)
     assert any("PASS:/FAIL:" in error for error in errors)
@@ -373,7 +373,7 @@ def test_contract_rejects_unknown_fact_missing_outcome_and_mismatched_action():
     # Markdown 契約は PASS/FAIL と件数。F-ID 対応は JSON 層。
     # PASS 欠落は outcome エラー。件数不一致は別ケースで検証する。
     invalid = VALID_ADVICE.replace(
-        "｜PASS: 集中ブロック2回以上｜FAIL: 1回以下", ""
+        "｜PASS: focus_blocks >= 2｜FAIL: 1回以下", ""
     )
     errors = advice_contract_errors(invalid, evidence)
     assert any("PASS:/FAIL:" in error for error in errors)
@@ -382,7 +382,7 @@ def test_contract_rejects_unknown_fact_missing_outcome_and_mismatched_action():
 def test_contract_rejects_mismatched_proposal_action_counts():
     # 提案2件・アクション1件 → 件数1対1違反
     invalid = VALID_ADVICE.replace(
-        "- [ ] [F9] 調査リンクを開く前に3件まとめる｜PASS: 開発→ブラウジング1回以下｜FAIL: 2回以上\n",
+        "- [ ] [F9] 調査リンクを開く前に3件まとめる｜PASS: context_switches <= 40｜FAIL: 41回以上\n",
         "",
     )
     errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
@@ -392,7 +392,7 @@ def test_contract_rejects_mismatched_proposal_action_counts():
 def test_contract_rejects_empty_outcomes():
     evidence = build_advice_evidence(CURRENT)
     invalid = VALID_ADVICE.replace(
-        "PASS: 集中ブロック2回以上｜FAIL: 1回以下", "PASS: ｜FAIL:"
+        "PASS: focus_blocks >= 2｜FAIL: 1回以下", "PASS: ｜FAIL:"
     )
     assert any(
         "PASS:/FAIL:" in error
@@ -429,8 +429,8 @@ def test_contract_rejects_category_changes_as_notification_interruptions():
         "[F3] 開始条件を固定して集中枠の再現性を試す。翌日は集中ブロック2回以上を目標にする。",
         "[F1] 192回の通知割り込みで生産性が低下したため、明日は通知を切る。",
     ).replace(
-        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: 集中ブロック2回以上｜FAIL: 1回以下",
-        "[F1] 通知を切る｜PASS: カテゴリ変更100回以下｜FAIL: 101回以上",
+        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: focus_blocks >= 2｜FAIL: 1回以下",
+        "[F1] 通知を切る｜PASS: context_switches <= 100｜FAIL: 101回以上",
     )
     errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
     assert any("通知・割り込み" in error for error in errors)
@@ -455,8 +455,8 @@ def test_switch_guard_allows_independently_measured_f5_interruptions():
         "[F3] 開始条件を固定して集中枠の再現性を試す。翌日は集中ブロック2回以上を目標にする。",
         "[F5] Claude Codeで中断が記録されたため、明日は原因を記録する。",
     ).replace(
-        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: 集中ブロック2回以上｜FAIL: 1回以下",
-        "[F5] 中断理由を記録する｜PASS: 1件記録｜FAIL: 0件",
+        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: focus_blocks >= 2｜FAIL: 1回以下",
+        "[F5] 中断理由を記録する｜PASS: ai_interruptions <= 100｜FAIL: 101回以上",
     ).replace(
         "[F5] 会話の往復数は測定不能なので、品質の良否は断定しない。",
         "[F5] 中断回数は明示テレメトリで測定済み。",
@@ -472,8 +472,8 @@ def test_semantic_guard_allows_measurement_and_maintenance_actions():
         "[F3] 開始条件を固定して集中枠の再現性を試す。翌日は集中ブロック2回以上を目標にする。",
         "[F4] セッション計測を設定し、明日から1往復ごとに記録する。",
     ).replace(
-        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: 集中ブロック2回以上｜FAIL: 1回以下",
-        "[F4] セッション計測を設定する｜PASS: 明日1件記録｜FAIL: 0件記録",
+        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: focus_blocks >= 2｜FAIL: 1回以下",
+        "[F4] セッション計測を設定する｜PASS: ai_cc_sessions >= 1｜FAIL: 0回",
     ).replace(
         "[F5] 会話の往復数は測定不能なので、品質の良否は断定しない。",
         "[F5] 明日から1往復ごとにログへ記録する。",
@@ -486,8 +486,8 @@ def test_semantic_guard_allows_zero_entertainment_maintenance():
         "[F3] 開始条件を固定して集中枠の再現性を試す。翌日は集中ブロック2回以上を目標にする。",
         "[F7] 娯楽利用の定量根拠がない状態を維持するため、分類精度を明日確認する。",
     ).replace(
-        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: 集中ブロック2回以上｜FAIL: 1回以下",
-        "[F7] 分類設定を確認する｜PASS: エンタメ0分｜FAIL: 誤分類1件以上",
+        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: focus_blocks >= 2｜FAIL: 1回以下",
+        "[F7] 分類設定を確認する｜PASS: category_minutes:エンタメ <= 0｜FAIL: 1分以上",
     )
     assert advice_contract_errors(advice, build_advice_evidence(CURRENT)) == []
 
@@ -544,11 +544,21 @@ def test_contract_rejects_unknown_heading_and_extra_checkbox():
 
 def test_contract_rejects_subjective_pass_fail_conditions():
     invalid = VALID_ADVICE.replace(
-        "PASS: 集中ブロック2回以上｜FAIL: 1回以下",
+        "PASS: focus_blocks >= 2｜FAIL: 1回以下",
         "PASS: うまくできた｜FAIL: うまくできなかった",
     )
     errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
-    assert any("数値条件" in error for error in errors)
+    assert any("数値条件" in error or "機械構文" in error for error in errors)
+
+
+def test_contract_rejects_measurable_freeform_pass():
+    """数字を含む自由文 PASS も遮断（計測不能ガード迂回防止）。"""
+    invalid = VALID_ADVICE.replace(
+        "PASS: focus_blocks >= 2｜FAIL: 1回以下",
+        "PASS: ChatGPT履歴にタグ付きが2件以上｜FAIL: 0件",
+    )
+    errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
+    assert any("機械構文" in error for error in errors)
 
 
 def test_contract_rejects_unknown_fact_in_ai_section():
@@ -581,7 +591,7 @@ def test_missing_ai_mapping_still_blocks_fabricated_turn_count():
         ),
         (
             VALID_ADVICE.replace(
-                "- [ ] [F9] 調査リンクを開く前に3件まとめる｜PASS: 開発→ブラウジング1回以下｜FAIL: 2回以上\n",
+                "- [ ] [F9] 調査リンクを開く前に3件まとめる｜PASS: context_switches <= 40｜FAIL: 41回以上\n",
                 "",
             ),
             "件数を1対1",

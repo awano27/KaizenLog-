@@ -13,7 +13,7 @@ import re
 from typing import Any
 
 from .advice_evidence import AdviceEvidence
-from .verdict import is_known_metric, looks_like_machine_pass
+from .verdict import is_known_metric, looks_like_machine_pass, parse_pass_condition
 
 # advisor とは循環 import になるため、AdviceContractError / 契約検証は関数内で遅延 import
 
@@ -422,67 +422,82 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
         from .verdict import strip_pass_annotation
 
         pass_core = strip_pass_annotation(pass_v)
-        if looks_like_machine_pass(pass_core):
-            m = re.match(r"^(\S+)\s*(?:<=|>=|<|>|==?)", pass_core.strip())
-            metric = m.group(1) if m else pass_core.split()[0]
-            if not is_known_metric(metric):
-                raise _contract_error(
-                    f"actions[{i}] の pass: 指標名が使用可能な指標にありません"
-                )
-            # 実在検証: 未知カテゴリの偽PASS・未観測ドメイン・計測不能指標の入口ガード
-            # （計測不能な PASS を保存すると compute_metric=None で永久未判定になる）
-            _INPUT_PASS_METRICS = frozenset(
-                {"focus_blocks", "focus_minutes", "input_keypresses"}
+        fail_core = strip_pass_annotation(fail_v)
+        # 自由文PASSは実在・計測可否・挑戦性ガードを全迂回するため禁止。
+        # parse_pass_condition が通る機械構文のみ受理し、以降のガードを必ず適用する。
+        parsed = parse_pass_condition(f"x｜PASS: {pass_core}｜FAIL: 0")
+        if parsed is None:
+            raise _contract_error(
+                f"actions[{i}] の pass は機械構文（指標 演算子 数値）にしてください"
+                f"（例: ai_tool_errors <= 60）。自由文は自動判定できず契約違反です"
             )
-            _STRUCTURED_AI_PASS_METRICS = frozenset(
-                {
-                    "ai_cc_sessions",
-                    "ai_fragmented_sessions",
-                    "ai_retry_chains",
-                    "ai_tool_errors",
-                    "ai_interruptions",
-                    "ai_avg_turns",
-                    "ai_output_tokens",
-                }
-            )
-            if metric in _INPUT_PASS_METRICS and not evidence.input_metrics_available:
+        # FAIL も機械構文なら既知指標であることを要求（自由文＋数値は可）
+        if looks_like_machine_pass(fail_core):
+            fail_parsed = parse_pass_condition(f"x｜PASS: {fail_core}｜FAIL: 0")
+            if fail_parsed is None:
                 raise _contract_error(
-                    f"actions[{i}] の pass: {metric} は入力watcherが無いため計測不能です"
+                    f"actions[{i}] の fail は機械構文として解析できません"
+                    f"（未知指標または形式不正）"
                 )
-            if (
-                metric in _STRUCTURED_AI_PASS_METRICS
-                and not evidence.structured_ai_metrics_available
-            ):
-                raise _contract_error(
-                    f"actions[{i}] の pass: {metric} は構造化AIテレメトリが無いため計測不能です"
-                )
-            if metric.startswith("category_minutes:"):
-                cat = metric.split(":", 1)[1].strip()
-                known = evidence.known_categories
-                if known is not None and cat not in known:
-                    raise _contract_error(
-                        f"actions[{i}] の pass: カテゴリ {cat!r} は設定に存在しません"
-                    )
-            if metric.startswith("site_minutes:"):
-                if not evidence.site_metrics_available:
-                    raise _contract_error(
-                        f"actions[{i}] の pass: site_minutes はブラウザwatcher統計が無いため計測不能です"
-                    )
-                site = metric.split(":", 1)[1].strip().lower()
-                # 提案日当日に観測されたドメインのみ（0分になった既知サイトの後日判定は
-                # 判定側の話。入口では「当日観測」を要求する）
-                sites = evidence.observed_sites
-                if sites is not None and site not in sites:
-                    raise _contract_error(
-                        f"actions[{i}] の pass: サイト {site!r} は当日観測されていません"
-                    )
-            # 挑戦性: ベースラインより大幅に緩い閾値を拒否（空虚PASS防止）
-            # ベースライン未取得の指標は検査しない（初日・新指標を弾かない）
-            challenge_err = _pass_challenge_error(
-                metric, pass_core, i, evidence.metric_baselines
+        metric, _op, _target = parsed
+        if not is_known_metric(metric):
+            raise _contract_error(
+                f"actions[{i}] の pass: 指標名が使用可能な指標にありません"
             )
-            if challenge_err:
-                raise _contract_error(challenge_err)
+        # 実在検証: 未知カテゴリの偽PASS・未観測ドメイン・計測不能指標の入口ガード
+        # （計測不能な PASS を保存すると compute_metric=None で永久未判定になる）
+        _INPUT_PASS_METRICS = frozenset(
+            {"focus_blocks", "focus_minutes", "input_keypresses"}
+        )
+        _STRUCTURED_AI_PASS_METRICS = frozenset(
+            {
+                "ai_cc_sessions",
+                "ai_fragmented_sessions",
+                "ai_retry_chains",
+                "ai_tool_errors",
+                "ai_interruptions",
+                "ai_avg_turns",
+                "ai_output_tokens",
+            }
+        )
+        if metric in _INPUT_PASS_METRICS and not evidence.input_metrics_available:
+            raise _contract_error(
+                f"actions[{i}] の pass: {metric} は入力watcherが無いため計測不能です"
+            )
+        if (
+            metric in _STRUCTURED_AI_PASS_METRICS
+            and not evidence.structured_ai_metrics_available
+        ):
+            raise _contract_error(
+                f"actions[{i}] の pass: {metric} は構造化AIテレメトリが無いため計測不能です"
+            )
+        if metric.startswith("category_minutes:"):
+            cat = metric.split(":", 1)[1].strip()
+            known = evidence.known_categories
+            if known is not None and cat not in known:
+                raise _contract_error(
+                    f"actions[{i}] の pass: カテゴリ {cat!r} は設定に存在しません"
+                )
+        if metric.startswith("site_minutes:"):
+            if not evidence.site_metrics_available:
+                raise _contract_error(
+                    f"actions[{i}] の pass: site_minutes はブラウザwatcher統計が無いため計測不能です"
+                )
+            site = metric.split(":", 1)[1].strip().lower()
+            # 提案日当日に観測されたドメインのみ（0分になった既知サイトの後日判定は
+            # 判定側の話。入口では「当日観測」を要求する）
+            sites = evidence.observed_sites
+            if sites is not None and site not in sites:
+                raise _contract_error(
+                    f"actions[{i}] の pass: サイト {site!r} は当日観測されていません"
+                )
+        # 挑戦性: ベースラインより大幅に緩い閾値を拒否（空虚PASS防止）
+        # ベースライン未取得の指標は検査しない（初日・新指標を弾かない）
+        challenge_err = _pass_challenge_error(
+            metric, pass_core, i, evidence.metric_baselines
+        )
+        if challenge_err:
+            raise _contract_error(challenge_err)
         # evidence ゲート付き内容チェック（注記付与前の生フィールド）
         from .advisor import evidence_gated_action_errors
 

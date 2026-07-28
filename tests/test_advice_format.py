@@ -140,7 +140,8 @@ def test_validate_unknown_machine_metric():
     data = _valid_data()
     data["actions"][0]["pass"] = "pomodoro_count <= 4"
     errs = validate_advice(data, _evidence())
-    assert any("指標名" in e for e in errs)
+    # 未知指標は parse 不能 → 機械構文エラー（指標名経路と同等の拒否）
+    assert any("機械構文" in e or "指標名" in e for e in errs)
 
 
 def test_validate_interpretation_digits():

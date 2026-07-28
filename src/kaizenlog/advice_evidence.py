@@ -318,7 +318,7 @@ def _build_reader_summary(
         )
         if top and top[1] > 0:
             parts.append(
-                f"カテゴリでは「{top[0]}」が{_fmt(top[1])}分と最多が記録されています。"
+                f"カテゴリ別では「{top[0]}」が最多（{_fmt(top[1])}分）でした。"
             )
         if (
             len(parts) < 3
@@ -581,6 +581,11 @@ def build_advice_evidence(
             "明示されたAIテレメトリ（Claude Code / Codex CLI 等）の範囲外の"
             "発話数・往復数・品質は判断不能。"
         )
+    # 依頼長さ層別（決定論観察。因果断定禁止。LLM が粒度提案する際の根拠）
+    if ai_stats_valid:
+        plo = ai_telemetry.get("prompt_length_observation")
+        if isinstance(plo, str) and plo.strip():
+            lines.append(f"- [F11] {plo.strip()}")
 
     by_site_value = stats.get("by_site")
     site_stats_valid = _valid_number_mapping(by_site_value)

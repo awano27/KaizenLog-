@@ -121,6 +121,11 @@ def classify_violation_kind(message: str) -> str:
         ("watcher", ("watcher", "ブラウザ実測")),
         ("category", ("カテゴリ", "存在しません")),
         ("site", ("サイト", "観測されていません")),
+        # 自由文PASS遮断（pass_fail より先に判定。発生率をヘルスで観測）
+        (
+            "pass_not_machine_readable",
+            ("機械構文", "自由文は自動判定", "自動判定できず"),
+        ),
         ("pass_fail", ("PASS", "FAIL", "数値条件", "指標名")),
         ("heading", ("見出し",)),
         ("kzn", ("KZN",)),

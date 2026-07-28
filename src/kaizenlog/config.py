@@ -130,6 +130,8 @@ class AIWorkConfig:
     codex_sessions_dir: str = "~/.codex/sessions"
     # モデル名部分一致 → USD / 100万 output tokens（既定表の上書き・追加）
     pricing: dict[str, float] = field(default_factory=dict)
+    # セッション表の「内容」列（初回依頼抜粋）。日誌への依頼逐語は redact 対象。
+    session_titles: bool = True
 
 
 @dataclass
@@ -297,6 +299,9 @@ base_url = "http://localhost:5600"
 enabled = true
 claude_projects_dir = "~/.claude/projects"
 codex_sessions_dir = "~/.codex/sessions"  # Codex CLI ロールアウトログ（無ければ無効）
+# セッション表の「内容」列（初回依頼の先頭40字）。false で非表示。
+# 依頼逐語は privacy.redact_patterns でマスクしてから日誌へ書く。
+session_titles = true
 # 推定コスト用単価（USD / 100万 output tokens）。既定表は目安で変動する。
 # 例: [aiwork.pricing] "claude-sonnet" = 3.0
 
@@ -431,6 +436,8 @@ def load_config(path: str | None = None) -> Config:
     cfg.aiwork.codex_sessions_dir = aiwork.get(
         "codex_sessions_dir", cfg.aiwork.codex_sessions_dir
     )
+    if "session_titles" in aiwork:
+        cfg.aiwork.session_titles = bool(aiwork.get("session_titles"))
     pricing = aiwork.get("pricing")
     if isinstance(pricing, dict):
         parsed: dict[str, float] = {}

@@ -241,19 +241,24 @@ def test_advice_contract_machine_pass_known_and_unknown():
 ### AI作業の改善
 - [F1] ok
 """
-    # freeform with number still ok without evidence
+    # freeform with number is no longer accepted (P1: machine syntax required)
     free = base.format(pass_cond="集中ブロック2回以上")
-    assert not any("指標名" in e for e in advice_contract_errors(free))
+    assert any("機械構文" in e for e in advice_contract_errors(free))
 
     good = base.format(pass_cond="context_switches <= 40")
+    assert not any("機械構文" in e for e in advice_contract_errors(good))
     assert not any("指標名" in e for e in advice_contract_errors(good))
 
     bad = base.format(pass_cond="pomodoro_count <= 4")
     errs = advice_contract_errors(bad)
-    assert any("指標名が使用可能な指標にありません" in e for e in errs)
+    # unknown metric fails parse_pass_condition → machine-syntax error path
+    assert any("機械構文" in e or "指標名" in e for e in errs)
 
     numberless = base.format(pass_cond="うまくできた")
-    assert any("数値条件" in e for e in advice_contract_errors(numberless))
+    assert any(
+        "数値条件" in e or "機械構文" in e
+        for e in advice_contract_errors(numberless)
+    )
 
 
 # ---- render_actions_section ----
