@@ -112,7 +112,19 @@ def log_run(
 def classify_violation_kind(message: str) -> str:
     """契約違反メッセージを短い種別タグに落とす（本文・提案は残さない）。"""
     m = message or ""
+    # 特異的な needle を先に評価する。
+    # 「機械構文として解析できません」は json の "解析できません" より前に判定する。
     rules = (
+        (
+            "pass_not_machine_readable",
+            (
+                "機械構文",
+                "自由文は自動判定",
+                "自動判定できず",
+                "機械構文として解析できません",
+            ),
+        ),
+        # JSON 破損: 一般の「解析できません」は残すが、機械構文文面は上で捕捉済み
         ("json", ("JSON", "json", "解析できません", "閉じていません")),
         ("cardinality", ("1対1", "件数", "1〜3", "1〜2")),
         ("notification", ("通知",)),
@@ -121,11 +133,6 @@ def classify_violation_kind(message: str) -> str:
         ("watcher", ("watcher", "ブラウザ実測")),
         ("category", ("カテゴリ", "存在しません")),
         ("site", ("サイト", "観測されていません")),
-        # 自由文PASS遮断（pass_fail より先に判定。発生率をヘルスで観測）
-        (
-            "pass_not_machine_readable",
-            ("機械構文", "自由文は自動判定", "自動判定できず"),
-        ),
         ("pass_fail", ("PASS", "FAIL", "数値条件", "指標名")),
         ("heading", ("見出し",)),
         ("kzn", ("KZN",)),

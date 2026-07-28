@@ -60,6 +60,9 @@ def test_p1_violation_kind_pass_not_machine_readable():
         "（例: ai_tool_errors <= 60）。自由文は自動判定できず契約違反です"
     )
     assert classify_violation_kind(msg) == "pass_not_machine_readable"
+    # FAIL 側「解析できません」が json に誤分類されないこと
+    fail_msg = "actions[1] の fail は機械構文として解析できません（未知指標または形式不正）"
+    assert classify_violation_kind(fail_msg) == "pass_not_machine_readable"
     assert classify_violation_kind("指標名が使用可能な指標にありません") == "pass_fail"
 
 

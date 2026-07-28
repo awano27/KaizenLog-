@@ -179,9 +179,20 @@ pip install -e ".[dev]"
 pytest
 ```
 
+### ブラウザ AI テレメトリ（オプション）
+
+ChatGPT / Claude.ai / Gemini をブラウザで使う日は、**ローカル専用の拡張**で会話イベントを JSONL に書き出し、`🧠 AI作業の質` に載せられます。
+
+- **仕組み**: DOM 監視 → `Downloads/kaizenlog-browser-ai/YYYY-MM-DD.jsonl`（ネットワーク送信なし・3 ドメイン限定）
+- **導入**: [browser-extension/README.md](browser-extension/README.md)（デベロッパーモードで読み込み）
+- **設定**: `[aiwork] browser_export_dir`（既定は上記 Downloads 配下）
+- **本文保存**: 拡張オプションでオフ可。**ボールトや Downloads をクラウド同期している場合は「本文を保存しない」を推奨**（依頼逐語は画面タイトルより機密性が高い）
+- トークン数は取得不能のため捏造しません（文字数のみ別集計）
+
 ## ロードマップ（要約）
 
 - [x] AI テレメトリ · 実験ループ · Memory/PASS · 運用パック · Claude/Codex 連携  
+- [x] ブラウザ AI（ChatGPT / Claude.ai / Gemini · 拡張 + アダプタ）  
 - [ ] Cursor 等その他 AI ログ · [screenpipe](https://github.com/mediar-ai/screenpipe) 連携  
 
 変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照。

@@ -28,8 +28,7 @@ from .aiwork import (
     _looks_like_test_command,
     _note_tool_use,
     _parse_ts,
-    normalize_prompt_text,
-    session_title_from_text,
+    extract_session_title,
 )
 
 
@@ -136,14 +135,22 @@ class _SessionAccum:
         return self.api_calls_event_msg
 
     def note_user_message(self, text: str) -> None:
+        # コマンドラッパーは往復に数えない（Claude 側 _update_session と対称）
+        from .aiwork import _is_command_wrapper, normalize_prompt_text
+
+        if _is_command_wrapper(text):
+            return
+        if not normalize_prompt_text(text):
+            return
         self.user_turns += 1
         if self.title is not None:
             return
-        cleaned = normalize_prompt_text(text)
-        if not cleaned:
+        extracted = extract_session_title(text)
+        if extracted is None:
             return
-        self.first_prompt_len = len(cleaned)
-        self.title = session_title_from_text(cleaned)
+        title, length = extracted
+        self.first_prompt_len = length
+        self.title = title
 
     def note_tool(self, name: str, tool_input: object = None) -> None:
         # AISession と同じ分類を一時オブジェクトで再利用

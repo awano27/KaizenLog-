@@ -387,12 +387,29 @@ kaizenlog eval run --cases path\to\cases --min-pass-rate 0.8
 | 提案の質が低い（ローカルLLM） | モデルを大きくするか、backend をCopilot/GitHub Modelsに切り替え |
 | 分類がおかしい（仕事のツールがエンタメ扱い等） | `config.toml` の `[[categories.rules]]` にルール追加（デフォルトより優先される） |
 | デイリーノートの日誌だけ消したい | ノート内の `<!-- kaizenlog:activity:start -->` 〜 `end -->` を削除（次回また生成される） |
-| 「AI作業の質」が出ない | Claude Code未使用の日は出ません。`~/.claude/projects` の場所が違う場合は `[aiwork] claude_projects_dir` を設定 |
+| 「AI作業の質」が出ない | Claude Code / Codex / ブラウザ拡張いずれも未使用の日は出ません。CLI は `claude_projects_dir` / `codex_sessions_dir`、ブラウザは `browser_export_dir` を確認 |
+| ブラウザの ChatGPT が表に乗らない | 拡張を読み込み、対象サイトで1往復後にオプション「今すぐエクスポート」。`Downloads/kaizenlog-browser-ai/*.jsonl` と `[aiwork] browser_export_dir` が一致しているか確認 |
+
+### ブラウザ AI テレメトリ（オプション）
+
+ChatGPT・Claude.ai・Gemini をブラウザで使う場合、リポジトリの `browser-extension/` を Chrome/Edge に読み込むと、会話イベントが
+`Downloads/kaizenlog-browser-ai/YYYY-MM-DD.jsonl` にローカル保存されます（**ネットワーク送信なし・3ドメイン限定**）。
+
+```toml
+[aiwork]
+browser_export_dir = "~/Downloads/kaizenlog-browser-ai"
+```
+
+- 詳細・手動確認手順: [browser-extension/README.md](../browser-extension/README.md)
+- 本文保存の既定はオン。**Downloads やボールトをクラウド同期している場合は拡張オプションで本文オフを推奨**
+- トークン数は取得しません（文字数のみ。コスト行に混ぜません）
+- ツールエラー列はブラウザ会話では `-`（欠損）表示
 
 ## プライバシーについて
 
 - 活動データ・統計はすべてPC内（ボールト内）に保存。外部送信はLLM呼び出し時のプロンプトのみ
 - **レダクション**: `config.toml` の `[privacy] redact_patterns` に正規表現を書くと、LLM送信前に該当箇所が `[REDACTED]` にマスクされます（日誌本体は原文のまま）。`kaizenlog advise --dry-run` でマスク後の送信内容を確認できます。さらに送信を絞るなら `[llm] system_prompt = "privacy_safe"` を併用してください
+- セッション「内容」列の依頼抜粋も同じ redact を通します（ブラウザ JSONL に本文がある場合）
 - 完全オフラインにしたい場合はOllamaバックエンドを選択
 - ウィンドウタイトルには機密が含まれ得ます。ボールトをGitHub同期している場合はプライベートリポジトリにしてください
 - 特定アプリを記録から外したい場合はActivityWatch側の設定でも、`min_block_minutes` を上げてタイムラインへの表示を減らすことでも調整できます

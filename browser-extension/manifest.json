@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "KaizenLog Browser AI Telemetry",
+  "version": "0.1.0",
+  "description": "Local-only capture of ChatGPT / Claude / Gemini chat events for KaizenLog. No network upload.",
+  "permissions": ["storage", "alarms", "downloads"],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["lib.js", "sites/common.js", "sites/chatgpt.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["lib.js", "sites/common.js", "sites/claude.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["lib.js", "sites/common.js", "sites/gemini.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

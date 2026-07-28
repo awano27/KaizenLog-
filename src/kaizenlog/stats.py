@@ -189,12 +189,28 @@ def build_stats(
             "api_calls": api_calls,
             "tool_counts": tool_counts,
             "models": sorted(models_set),
-            # 週次摩擦ワースト用（title は redact して保存）
+            # 週次摩擦ワースト用（title は redact して保存。retry_touch は連鎖関与）
             "session_digests": session_digests_for_stats(
-                cc_sessions, day.isoformat(), redactor=title_redactor
+                cc_sessions,
+                day.isoformat(),
+                redactor=title_redactor,
+                retry_chains=chains,
             ),
         },
     }
+    # ブラウザ AI: source 接尾辞 `-web` で判定（tools_measurable 非依存）。
+    # 命名規約: chatgpt-web / claude-web / gemini-web 等。トークン系キーとは分離。
+    web_sessions = [
+        s
+        for s in cc_sessions
+        if str(getattr(s, "source", "") or "").endswith("-web")
+    ]
+    if web_sessions:
+        stats["ai"]["web_sessions"] = len(web_sessions)
+        stats["ai"]["web_user_turns"] = sum(s.user_turns for s in web_sessions)
+        stats["ai"]["web_assistant_chars"] = sum(
+            int(s.assistant_chars or 0) for s in web_sessions
+        )
     obs = prompt_length_observation(cc_sessions)
     if obs:
         stats["ai"]["prompt_length_observation"] = obs

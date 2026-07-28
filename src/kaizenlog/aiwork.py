@@ -108,6 +108,9 @@ def estimate_sessions_cost(
     uncosted = 0
     per_source: dict[str, dict] = {}
     for s in sessions:
+        # ブラウザ等: output_tokens 未設定 → コスト集計から除外（文字数をトークンと偽らない）
+        if not s.tools_measurable and not s.output_tokens:
+            continue
         src = s.source or "claude-code"
         bucket = per_source.setdefault(
             src, {"est_cost_usd": 0.0, "uncosted_tokens": 0, "output_tokens": 0}
@@ -153,6 +156,10 @@ class AISession:
     ended_in_error: bool = False
     # 走査中: 直近ツール結果がエラーか（セッション終了時に ended_in_error へ）
     _last_tool_error: bool = field(default=False, repr=False)
+    # False: ブラウザ等でツール概念が無い → 表では 0 ではなく `-`
+    tools_measurable: bool = True
+    # ブラウザ応答の文字数（トークンではない。コスト/output_tokens に混ぜない）
+    assistant_chars: int = 0
 
     @property
     def minutes(self) -> float:
@@ -233,6 +240,21 @@ def session_title_from_text(text: str, max_chars: int = SESSION_TITLE_MAX) -> st
     return t[:max_chars]
 
 
+def extract_session_title(
+    text: str, max_chars: int = SESSION_TITLE_MAX
+) -> tuple[str, int] | None:
+    """初回依頼から (title, 整形後文字数) を返す。ラッパー・空は None。
+
+    Claude / Codex 両アダプタの共通整形（ラッパー除去→一行化→40字切詰）。
+    """
+    if not text or _is_command_wrapper(text):
+        return None
+    cleaned = normalize_prompt_text(text)
+    if not cleaned:
+        return None
+    return session_title_from_text(cleaned, max_chars=max_chars), len(cleaned)
+
+
 def _looks_like_test_command(command: str) -> bool:
     low = (command or "").lower()
     return any(m in low for m in _TEST_CMD_MARKERS)
@@ -273,11 +295,12 @@ def _note_tool_use(session: AISession, name: str, tool_input: object = None) -> 
 def _maybe_set_title(session: AISession, text: str) -> None:
     if session.title is not None:
         return
-    cleaned = normalize_prompt_text(text)
-    if not cleaned or _is_command_wrapper(text):
+    extracted = extract_session_title(text)
+    if extracted is None:
         return
-    session.first_prompt_len = len(cleaned)
-    session.title = session_title_from_text(cleaned)
+    title, length = extracted
+    session.first_prompt_len = length
+    session.title = title
 
 
 def _update_session(session: AISession, record: dict, ts: datetime) -> None:
@@ -579,6 +602,13 @@ def available_adapters(cfg) -> list[TelemetryAdapter]:
         from .aiwork_codex import CodexAdapter
 
         adapters.append(CodexAdapter(codex_dir))
+    browser_dir = Path(
+        getattr(cfg.aiwork, "browser_export_dir", "~/Downloads/kaizenlog-browser-ai")
+    ).expanduser()
+    if browser_dir.is_dir():
+        from .aiwork_browser import BrowserAIAdapter
+
+        adapters.append(BrowserAIAdapter(browser_dir))
     return adapters
 
 
@@ -656,18 +686,45 @@ def retry_chain_excerpts(
     return out
 
 
+def _retry_touch_for_session(
+    session: AISession, chains: Sequence[RetryChain]
+) -> int:
+    """セッション期間・プロジェクトが重なるリトライ連鎖の件数。
+
+    新規検出はせず、既存 RetryChain（detect_retry_chains の結果）から導出する。
+    """
+    if not chains:
+        return 0
+    touch = 0
+    for chain in chains:
+        if chain.project != session.project:
+            continue
+        if not chain.prompts:
+            continue
+        # いずれかのプロンプト時刻がセッション時間帯に入れば関与
+        for p in chain.prompts:
+            ts = p.timestamp
+            if session.start <= ts <= session.end:
+                touch += 1
+                break
+    return touch
+
+
 def session_digests_for_stats(
     sessions: Sequence[AISession],
     day: str,
     *,
     redactor: Callable[[str], str] | None = None,
+    retry_chains: Sequence[RetryChain] | None = None,
 ) -> list[dict]:
     """stats 保存用のセッション要約（週次ワースト選定用）。"""
+    chains = list(retry_chains or [])
     digests: list[dict] = []
     for s in sessions:
         title = s.title or ""
         if redactor is not None and title:
             title = redactor(title)
+        retry_touch = _retry_touch_for_session(s, chains)
         digests.append(
             {
                 "day": day,
@@ -682,7 +739,8 @@ def session_digests_for_stats(
                 "ended_in_error": bool(s.ended_in_error),
                 "source": s.source or "claude-code",
                 "first_prompt_len": int(s.first_prompt_len),
-                "friction": s.friction_score(),
+                "retry_touch": int(retry_touch),
+                "friction": s.friction_score(retry_touch),
             }
         )
     return digests
@@ -735,9 +793,8 @@ def render_aiwork_markdown(
 
     total_turns = sum(s.user_turns for s in sessions)
     fragmented = sum(1 for s in sessions if s.is_fragmented)
-    tool_errors = sum(s.tool_errors for s in sessions)
-    interruptions = sum(s.interruptions for s in sessions)
-    output_tokens = sum(s.output_tokens for s in sessions)
+    # output_tokens: ブラウザは 0 のまま（assistant_chars は混ぜない）
+    output_tokens = sum(int(s.output_tokens or 0) for s in sessions)
     avg_turns = total_turns / len(sessions) if sessions else 0.0
     est_cost, uncosted, _ = estimate_sessions_cost(sessions, pricing)
     all_tools = Counter()
@@ -745,7 +802,13 @@ def render_aiwork_markdown(
         all_tools.update(s.tool_counts)
     top_tools = ", ".join(f"{name}×{n}" for name, n in all_tools.most_common(5))
 
-    by_source: Counter = Counter(s.source or "claude-code" for s in sessions)
+    def _source_bucket(src: str) -> str:
+        s = src or "claude-code"
+        if s.endswith("-web") or s in ("chatgpt-web", "claude-web", "gemini-web"):
+            return "web"
+        return s
+
+    by_source: Counter = Counter(_source_bucket(s.source or "claude-code") for s in sessions)
     source_bits = " / ".join(
         f"{name} {count}" for name, count in sorted(by_source.items())
     )
@@ -757,8 +820,12 @@ def render_aiwork_markdown(
         f"セッション: {len(sessions)}回（{source_bits}） / ユーザー発話: {total_turns}回"
         f"（平均 {avg_turns:.1f}回/セッション、2往復以下: {fragmented}回）"
     )
+    # ツール系は measurable セッションのみ合算（ブラウザは欠損）
+    tool_sessions = [s for s in sessions if s.tools_measurable]
+    tool_errors_m = sum(s.tool_errors for s in tool_sessions)
+    interruptions_m = sum(s.interruptions for s in tool_sessions)
     lines.append(
-        f"ツールエラー: {tool_errors}回 / ユーザー中断・拒否: {interruptions}回"
+        f"ツールエラー: {tool_errors_m}回 / ユーザー中断・拒否: {interruptions_m}回"
         f" / リトライ連鎖: {retry_chain_count}回"
         f" / 出力トークン: {output_tokens:,}"
     )
@@ -800,30 +867,41 @@ def render_aiwork_markdown(
         start = s.start.astimezone(tz).strftime("%H:%M")
         end = s.end.astimezone(tz).strftime("%H:%M")
         project = _md_cell(s.project)
-        if (s.source or "claude-code") != "claude-code":
-            project = f"{project} ({s.source})"
-        # 変更プロキシ + 末尾エラー⚠ / テスト✓
-        # 正しさは見ない（変更した・テストした・エラーで終わった、まで）
-        outcome_bits: list[str] = [f"変更{int(s.edits)}"]
-        if s.tests_run:
-            outcome_bits.append("✓")
-        if s.ended_in_error:
-            outcome_bits.append("⚠")
-        outcome = " ".join(outcome_bits)
-        tools_n = sum(s.tool_counts.values())
+        src = s.source or "claude-code"
+        if src != "claude-code":
+            # web: "chatgpt (web)"、CLI: "proj (codex)"
+            if src.endswith("-web"):
+                label = src.replace("-web", "")
+                project = f"{label} (web)" if project in ("", "—", label) else f"{project} (web)"
+            else:
+                project = f"{project} ({src})"
+        if s.tools_measurable:
+            # 変更プロキシ + 末尾エラー⚠ / テスト✓（正しさは見ない）
+            outcome_bits: list[str] = [f"変更{int(s.edits)}"]
+            if s.tests_run:
+                outcome_bits.append("✓")
+            if s.ended_in_error:
+                outcome_bits.append("⚠")
+            outcome = " ".join(outcome_bits)
+            tools_n: object = sum(s.tool_counts.values())
+            err_s: object = s.tool_errors
+            inter_s: object = s.interruptions
+        else:
+            # ブラウザ等: 無い指標は 0 ではなく `-`（既存の欠損原則）
+            tools_n = err_s = inter_s = outcome = "-"
         if session_titles:
             title = s.title or "—"
-            if redactor is not None and title != "—":
+            if redactor is not None and title not in ("—", "（本文未保存）"):
                 title = redactor(title)
             title = _md_cell(title)
             lines.append(
                 f"| {start}-{end} | {project} | {title} | {s.user_turns} "
-                f"| {tools_n} | {s.tool_errors} | {s.interruptions} | {outcome} |"
+                f"| {tools_n} | {err_s} | {inter_s} | {outcome} |"
             )
         else:
             lines.append(
                 f"| {start}-{end} | {project} | {s.user_turns} "
-                f"| {tools_n} | {s.tool_errors} | {s.interruptions} | {outcome} |"
+                f"| {tools_n} | {err_s} | {inter_s} | {outcome} |"
             )
     if len(sessions) > max_rows:
         lines.append("")

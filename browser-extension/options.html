@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>KaizenLog Browser AI — 設定</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    label { display: flex; gap: 0.5rem; align-items: flex-start; margin: 1rem 0; }
+    .note { color: #444; font-size: 0.9rem; }
+    button { margin-top: 1rem; padding: 0.4rem 0.8rem; }
+  </style>
+</head>
+<body>
+  <h1>KaizenLog Browser AI</h1>
+  <p class="note">
+    この拡張は ChatGPT / Claude / Gemini の会話イベントを<strong>ローカルだけ</strong>に保存します。
+    ネットワーク送信はありません。書き出し先はブラウザ既定の Downloads 配下
+    <code>kaizenlog-browser-ai/YYYY-MM-DD.jsonl</code> です。
+  </p>
+  <label>
+    <input type="checkbox" id="saveBody" />
+    <span>
+      <strong>本文を保存する</strong>（オフにするとメタデータのみ: 時刻・サイト・会話ID・役割・文字数）
+      <div class="note">
+        ボールトや Downloads をクラウド同期している場合は、オフ（本文を保存しない）を推奨します。
+      </div>
+    </span>
+  </label>
+  <button id="exportNow" type="button">今すぐエクスポート</button>
+  <p id="status" class="note"></p>
+  <script src="options.js"></script>
+</body>
+</html>
