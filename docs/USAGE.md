@@ -398,7 +398,7 @@ kaizenlog eval run --cases path\to\cases --min-pass-rate 0.8
 
 ### ブラウザ AI テレメトリ（オプション）
 
-ChatGPT・Claude.ai・Gemini をブラウザで使う場合、リポジトリの `browser-extension/` を Chrome/Edge に読み込むと、会話イベントが
+ChatGPT・Claude.ai・Gemini をブラウザで使う場合、リポジトリの `browser-extension/` を Chrome/Brave/Edge に読み込むと、会話イベントが
 `Downloads/kaizenlog-browser-ai/YYYY-MM-DD.jsonl` にローカル保存されます（**ネットワーク送信なし・3ドメイン限定**）。
 
 ```toml
