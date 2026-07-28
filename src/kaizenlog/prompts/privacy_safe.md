@@ -75,6 +75,7 @@
 - `trigger` 必須（if-then の合図。実在の日課・時刻か「朝いちばんに」等）
 - `pass` は可能な限り機械構文（`context_switches <= 40` 等）。使用可能指標は
   context_switches / total_active_minutes / ai_cc_sessions / ai_fragmented_sessions /
-  ai_retry_chains / ai_tool_errors / ai_interruptions / ai_avg_turns / focus_blocks /
-  focus_minutes / input_keypresses / category_minutes:<名> / site_minutes:<ドメイン>
+  ai_retry_chains / ai_tool_errors / ai_interruptions / ai_avg_turns /
+  ai_output_tokens / focus_blocks / focus_minutes / input_keypresses /
+  category_minutes:<名> / site_minutes:<ドメイン>
 - KZN ID・HTMLコメント禁止。全テキスト合計 400〜900字程度

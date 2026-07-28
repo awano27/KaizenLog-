@@ -97,8 +97,8 @@ KaizenLog が決定論的に組み立てます。
   `category_minutes:エンタメ <= 30`）。翌晩に自動判定される
   使用可能指標: `context_switches` / `total_active_minutes` / `ai_cc_sessions` /
   `ai_fragmented_sessions` / `ai_retry_chains` / `ai_tool_errors` / `ai_interruptions` /
-  `ai_avg_turns` / `focus_blocks` / `focus_minutes` / `input_keypresses` /
-  `category_minutes:<カテゴリ名>` / `site_minutes:<ドメイン>`
+  `ai_avg_turns` / `ai_output_tokens` / `focus_blocks` / `focus_minutes` /
+  `input_keypresses` / `category_minutes:<カテゴリ名>` / `site_minutes:<ドメイン>`
   測れない行動のみ、数値を含む自由文でよい
 - PASS 数値は推奨帯 F10 を基準に決める。根拠なく大きな削減目標を設定しない
 - PASS実績が0%の指標を使い続けない。本人が直接制御できる行動に近い指標

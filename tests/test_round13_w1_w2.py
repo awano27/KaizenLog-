@@ -286,3 +286,113 @@ def test_w2_cli_write_logs(tmp_path, monkeypatch, capsys):
     log_run(cfg.logs_path, "weekly-context", ok=True, duration_seconds=0.1, note="write")
     runs = load_runs(cfg.logs_path)
     assert any(r.get("command") == "weekly-context" and r.get("ok") for r in runs)
+
+
+def _isolate_cfg(monkeypatch, tmp_path: Path, vault: Path) -> Path:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("KAIZENLOG_CONFIG", raising=False)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setattr("kaizenlog.config.sys.platform", "win32")
+    cfg_path = tmp_path / "AppData" / "kaizenlog" / "config.toml"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        f'[general]\nvault_dir = "{vault.as_posix()}"\ntimezone = "Asia/Tokyo"\n'
+        f'daily_notes_dir = "01 Daily Notes"\n'
+        f'stats_dir = ".kaizenlog/stats"\n'
+        f'logs_dir = ".kaizenlog/logs"\n'
+        f'memory_dir = "Kaizen/Memory"\n',
+        encoding="utf-8",
+    )
+    return cfg_path
+
+
+def test_w2_main_weekly_context_write_success(tmp_path, monkeypatch, capsys):
+    """CLI main 経路: --write 成功でノート upsert + runlog ok。"""
+    from kaizenlog import cli as cli_mod
+    from kaizenlog.vault import WEEKLY_CONTEXT_MARKER, extract_section
+
+    vault = tmp_path / "vault"
+    (vault / "01 Daily Notes").mkdir(parents=True)
+    (vault / ".kaizenlog" / "stats").mkdir(parents=True)
+    (vault / ".kaizenlog" / "logs").mkdir(parents=True)
+    (vault / "Kaizen" / "Memory").mkdir(parents=True)
+    _isolate_cfg(monkeypatch, tmp_path, vault)
+
+    code = cli_mod.main(
+        ["weekly-context", "--write", "--week", "2026-W30"]
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "週次コンテキスト" in out or "書き込み" in out
+    # 2026-W30 = week of 2026-07-20
+    note = vault / "01 Daily Notes" / "Weekly Reviews" / "2026-W30.md"
+    assert note.is_file()
+    text = note.read_text(encoding="utf-8")
+    sec = extract_section(text, WEEKLY_CONTEXT_MARKER)
+    assert sec is not None
+    runs = load_runs(vault / ".kaizenlog" / "logs")
+    assert any(
+        r.get("command") == "weekly-context" and r.get("ok") is True for r in runs
+    )
+
+
+def test_w2_main_weekly_context_write_failure_continues(
+    tmp_path, monkeypatch, capsys
+):
+    """CLI main 経路: 書込失敗でも exit 0 + stderr 警告 + runlog 失敗。"""
+    from kaizenlog import cli as cli_mod
+
+    vault = tmp_path / "vault"
+    (vault / "01 Daily Notes").mkdir(parents=True)
+    (vault / ".kaizenlog" / "stats").mkdir(parents=True)
+    (vault / ".kaizenlog" / "logs").mkdir(parents=True)
+    (vault / "Kaizen" / "Memory").mkdir(parents=True)
+    _isolate_cfg(monkeypatch, tmp_path, vault)
+
+    def boom(*a, **k):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(
+        "kaizenlog.weekly_context.write_weekly_context", boom
+    )
+    code = cli_mod.main(
+        ["weekly-context", "--write", "--week", "2026-W30"]
+    )
+    assert code == 0
+    err = capsys.readouterr().err
+    assert "失敗" in err or "permission" in err.lower() or "書き込み" in err
+    runs = load_runs(vault / ".kaizenlog" / "logs")
+    assert any(
+        r.get("command") == "weekly-context" and r.get("ok") is False for r in runs
+    )
+
+
+def test_s1_ai_output_tokens_gate():
+    """構造化AI無しでは ai_output_tokens PASS は契約違反。有りでは通過。"""
+    from kaizenlog.advice_evidence import build_advice_evidence
+    from kaizenlog.advice_format import validate_advice
+    from kaizenlog.classifier import known_category_names
+    from kaizenlog.config import DEFAULT_RULES
+    from tests.test_advice_evidence import CURRENT, HISTORY
+    from tests.test_advice_format import _valid_data
+
+    cats = known_category_names(DEFAULT_RULES)
+    # without ai section
+    stats_no = dict(CURRENT)
+    stats_no.pop("ai", None)
+    ev_no = build_advice_evidence(stats_no, HISTORY, known_categories=cats)
+    assert ev_no.structured_ai_metrics_available is False
+    data = _valid_data()
+    data["actions"] = [data["actions"][0]]
+    data["proposals"] = [data["proposals"][0]]
+    data["actions"][0]["pass"] = "ai_output_tokens <= 5000"
+    data["actions"][0]["fail"] = "5001以上"
+    data["actions"][0]["fact_ids"] = data["proposals"][0]["fact_ids"]
+    errs = validate_advice(data, ev_no)
+    assert any("ai_output_tokens" in e and "計測不能" in e for e in errs)
+
+    # with ai section (CURRENT has ai)
+    ev_yes = build_advice_evidence(CURRENT, HISTORY, known_categories=cats)
+    assert ev_yes.structured_ai_metrics_available is True
+    assert validate_advice(data, ev_yes) == []

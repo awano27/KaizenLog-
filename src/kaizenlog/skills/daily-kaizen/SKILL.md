@@ -99,7 +99,8 @@ allowed-tools: "Read Glob Grep Edit"
   `category_minutes:エンタメ <= 30`）。翌晩 `kaizenlog generate` が自動判定する。
   指標: context_switches / total_active_minutes / ai_cc_sessions /
   ai_fragmented_sessions / ai_retry_chains / ai_tool_errors / ai_interruptions /
-  ai_avg_turns / focus_blocks / focus_minutes / input_keypresses /
-  category_minutes:<名> / site_minutes:<ドメイン>。測れない行動のみ自由文＋数値
+  ai_avg_turns / ai_output_tokens / focus_blocks / focus_minutes /
+  input_keypresses / category_minutes:<名> / site_minutes:<ドメイン>。
+  測れない行動のみ自由文＋数値
 - `suggestions.jsonl` は読むだけ。書き込みは `kaizenlog advise` 側のID採番に任せる
 - 合計400〜800字程度に収める。長文化しない

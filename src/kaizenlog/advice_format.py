@@ -383,6 +383,7 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
                     "ai_tool_errors",
                     "ai_interruptions",
                     "ai_avg_turns",
+                    "ai_output_tokens",
                 }
             )
             if metric in _INPUT_PASS_METRICS and not evidence.input_metrics_available:
