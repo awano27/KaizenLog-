@@ -526,10 +526,19 @@ def render_aiwork_markdown(
         f" / リトライ連鎖: {retry_chain_count}回"
         f" / 出力トークン: {output_tokens:,}"
     )
-    lines.append(
-        f"推定コスト: ${est_cost:.2f}（output tokens ベース概算、"
-        f"対象外 {uncosted:,} tok。input/cache 未計上）"
-    )
+    # 対象外トークンが計上分を上回る日は $ 額を出さない。
+    # 総量の大半が単価不明だと「$0.04」がほぼ無意味で誤解を招くため。
+    costed_tokens = max(0, int(output_tokens) - int(uncosted))
+    if int(uncosted) > costed_tokens:
+        lines.append(
+            f"出力トークン: {output_tokens:,}"
+            f"（モデル単価不明分が大半のためコスト換算なし）"
+        )
+    else:
+        lines.append(
+            f"推定コスト: ${est_cost:.2f}（output tokens ベース概算、"
+            f"対象外 {uncosted:,} tok。input/cache 未計上）"
+        )
     if top_tools:
         lines.append(f"主なツール: {top_tools}")
     lines.append("")

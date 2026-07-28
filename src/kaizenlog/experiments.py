@@ -25,23 +25,25 @@ MEASUREMENTS_MARKER = "kaizenlog:measurements"
 _ADOPTED_MONITOR_DAYS = 30
 
 # 実験で追跡できる指標。値は (説明, 計算関数名) ではなく直接計算する。
+# ai_* は Claude Code / Codex 等アダプタ合算。単一製品名だけの説明にしない。
+# 注記ラベルは括弧前で切るため、説明文にネスト括弧を入れない（・ で補足）。
 METRIC_DESCRIPTIONS = {
     "context_switches": "コンテキストスイッチ回数",
     "total_active_minutes": "合計アクティブ時間（分）",
     "ai_activity_blocks": "AIツールの画面アクティビティブロック数",
     "ai_sessions": "AIツールの画面アクティビティブロック数（旧名・互換用）",
-    "ai_cc_sessions": "構造化テレメトリのセッション数（全ソース合計。旧: Claude Codeのみ）",
-    "ai_fragmented_sessions": "2往復以下の細切れClaude Codeセッション数",
+    "ai_cc_sessions": "AI CLIセッション数・Claude Code/Codex合算",
+    "ai_fragmented_sessions": "2往復以下の細切れAI CLIセッション数",
     "ai_retry_chains": "リトライ連鎖数（30分以内のほぼ同文の再依頼）",
-    "ai_tool_errors": "Claude Codeのツールエラー回数",
-    "ai_interruptions": "Claude Codeのユーザー中断・拒否回数",
-    "ai_avg_turns": "Claude Codeセッションの平均往復数",
-    "ai_output_tokens": "AI応答トークン量",
+    "ai_tool_errors": "AI CLI合算のツールエラー回数",
+    "ai_interruptions": "AI CLI合算のユーザー中断・拒否回数",
+    "ai_avg_turns": "AI CLIセッションの平均往復数",
+    "ai_output_tokens": "AI CLI合算の応答トークン量",
     "category_minutes:<カテゴリ名>": "指定カテゴリの時間（分）例: category_minutes:エンタメ",
     "site_minutes:<ドメイン>": "指定サイトの時間（分）例: site_minutes:youtube.com（要 aw-watcher-web）",
-    "focus_blocks": "集中ブロック数（25分以上入力が続いた区間。要 aw-watcher-input）",
-    "focus_minutes": "集中ブロックの合計時間（分。要 aw-watcher-input）",
-    "input_keypresses": "1日のキー入力数（要 aw-watcher-input）",
+    "focus_blocks": "集中ブロック数",
+    "focus_minutes": "集中ブロックの合計時間（分）",
+    "input_keypresses": "1日のキー入力数",
     "prompt_cluster:<slug>": (
         "指定クラスタに類似する生依頼の件数/日（要 frontmatter cluster_rep。"
         "スキル化後の効果測定用）"

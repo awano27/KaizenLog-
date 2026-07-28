@@ -29,6 +29,65 @@ def _contract_error(msg: str):
     return AdviceContractError(msg)
 
 
+# 減らす目標: 閾値が baseline * 1.2 超 → 緩すぎ
+# 増やす目標: 閾値が baseline * 0.8 未満 → 緩すぎ
+_CHALLENGE_LOOSE_LE = 1.2
+_CHALLENGE_LOOSE_GE = 0.8
+_PASS_OP_RE = re.compile(r"^(\S+)\s*(<=|>=|<|>|==?)\s*([\d.]+)\s*$")
+
+
+def _pass_challenge_error(
+    metric: str,
+    pass_core: str,
+    index: int,
+    baselines: object,
+) -> str | None:
+    """非挑戦的 PASS 閾値ならエラー文、検査不能・合格なら None。"""
+    if not isinstance(baselines, dict) and not (
+        hasattr(baselines, "get") and baselines is not None
+    ):
+        return None
+    try:
+        bl_map = baselines  # type: ignore[assignment]
+        baseline = bl_map.get(metric)  # type: ignore[union-attr]
+    except Exception:
+        return None
+    if baseline is None:
+        # ベースライン無しは検査しない（初日や新指標を弾かない）
+        return None
+    try:
+        bl = float(baseline)
+    except (TypeError, ValueError):
+        return None
+    if not (bl > 0):
+        # 比率判定不能（0 日は挑戦性を測れない）
+        return None
+    m = _PASS_OP_RE.match(pass_core.strip())
+    if not m:
+        return None
+    op = m.group(2)
+    try:
+        target = float(m.group(3))
+    except ValueError:
+        return None
+    if op in ("<=", "<"):
+        # ベースライン未満は挑戦的なので常に可。1.2倍超だけ拒否
+        if target > bl * _CHALLENGE_LOOSE_LE:
+            return (
+                f"actions[{index}] の pass: {metric} {op} {target:g} は"
+                f"ベースライン {bl:g} より緩すぎます"
+                f"（上限の目安は {bl * _CHALLENGE_LOOSE_LE:g} 以下）"
+            )
+    elif op in (">=", ">"):
+        if target < bl * _CHALLENGE_LOOSE_GE:
+            return (
+                f"actions[{index}] の pass: {metric} {op} {target:g} は"
+                f"ベースライン {bl:g} より緩すぎます"
+                f"（下限の目安は {bl * _CHALLENGE_LOOSE_GE:g} 以上）"
+            )
+    return None
+
+
 def parse_advice_json(text: str) -> dict:
     """LLM 応答から JSON オブジェクトを取り出す。
 
@@ -417,6 +476,13 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
                     raise _contract_error(
                         f"actions[{i}] の pass: サイト {site!r} は当日観測されていません"
                     )
+            # 挑戦性: ベースラインより大幅に緩い閾値を拒否（空虚PASS防止）
+            # ベースライン未取得の指標は検査しない（初日・新指標を弾かない）
+            challenge_err = _pass_challenge_error(
+                metric, pass_core, i, evidence.metric_baselines
+            )
+            if challenge_err:
+                raise _contract_error(challenge_err)
         # evidence ゲート付き内容チェック（注記付与前の生フィールド）
         from .advisor import evidence_gated_action_errors
 

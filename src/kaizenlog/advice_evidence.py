@@ -39,6 +39,8 @@ class AdviceEvidence:
     input_metrics_available: bool = False  # focus_blocks / focus_minutes / input_keypresses
     structured_ai_metrics_available: bool = False  # ai_cc_sessions 等（画面ブロック ai_activity は別）
     site_metrics_available: bool = False  # by_site 統計が有効（web watcher 経路）
+    # 指標 → 挑戦性検査用ベースライン（当日実測優先。無い指標は入口で検査しない）
+    metric_baselines: Mapping[str, float] | None = None
 
 
 def _evidence(
@@ -57,6 +59,7 @@ def _evidence(
     input_metrics_available: bool = False,
     structured_ai_metrics_available: bool = False,
     site_metrics_available: bool = False,
+    metric_baselines: Mapping[str, float] | None = None,
 ) -> AdviceEvidence:
     markdown = "\n".join(lines)
     return AdviceEvidence(
@@ -75,6 +78,7 @@ def _evidence(
         input_metrics_available=input_metrics_available,
         structured_ai_metrics_available=structured_ai_metrics_available,
         site_metrics_available=site_metrics_available,
+        metric_baselines=metric_baselines,
     )
 
 
@@ -190,6 +194,178 @@ def _previous_day_available(
         for item in (history or [])
         if isinstance(item, Mapping)
     )
+
+
+def _previous_day_stats(
+    stats: Mapping[str, Any],
+    history: Sequence[Mapping[str, Any]] | None,
+) -> Mapping[str, Any] | None:
+    try:
+        previous_day = date.fromisoformat(str(stats.get("day"))) - timedelta(days=1)
+    except ValueError:
+        return None
+    key = previous_day.isoformat()
+    for item in history or []:
+        if isinstance(item, Mapping) and item.get("day") == key:
+            return item
+    return None
+
+
+_BASELINE_SIMPLE_METRICS = (
+    "context_switches",
+    "total_active_minutes",
+    "ai_activity_blocks",
+    "ai_cc_sessions",
+    "ai_fragmented_sessions",
+    "ai_retry_chains",
+    "ai_tool_errors",
+    "ai_interruptions",
+    "ai_avg_turns",
+    "ai_output_tokens",
+    "focus_blocks",
+    "focus_minutes",
+    "input_keypresses",
+)
+
+
+def _metric_baselines_from_stats(stats: Mapping[str, Any]) -> dict[str, float]:
+    """当日実測から挑戦性検査用ベースラインを組み立てる。
+
+    履歴中央値や F10 帯は別経路。初日・新指標でキーが無い場合は入口検査をスキップ
+    （無い指標を弾かない）。
+    """
+    from .experiments import metric_from_stats
+
+    stats_dict = dict(stats) if not isinstance(stats, dict) else stats
+    out: dict[str, float] = {}
+    for metric in _BASELINE_SIMPLE_METRICS:
+        value = metric_from_stats(metric, stats_dict)
+        if value is not None and isfinite(float(value)):
+            out[metric] = float(value)
+    by_cat = stats.get("by_category")
+    if isinstance(by_cat, Mapping):
+        for name, minutes in by_cat.items():
+            if isinstance(minutes, (int, float)) and isfinite(float(minutes)):
+                out[f"category_minutes:{name}"] = float(minutes)
+    by_site = stats.get("by_site")
+    if isinstance(by_site, Mapping):
+        for name, minutes in by_site.items():
+            if isinstance(minutes, (int, float)) and isfinite(float(minutes)):
+                out[f"site_minutes:{str(name).lower()}"] = float(minutes)
+    return out
+
+
+def _tool_error_concentration_sentence(stats: Mapping[str, Any]) -> str | None:
+    """ツールエラーの過半が単一プロジェクトに集中していれば1文。"""
+    ai = stats.get("ai")
+    if not isinstance(ai, Mapping):
+        return None
+    total = ai.get("tool_errors")
+    if not isinstance(total, (int, float)) or float(total) <= 0:
+        return None
+    total_f = float(total)
+    projects = ai.get("projects")
+    if not isinstance(projects, Mapping) or not projects:
+        return None
+    best_name = ""
+    best_err = -1.0
+    for name, bucket in projects.items():
+        if not isinstance(bucket, Mapping):
+            continue
+        err = bucket.get("errors")
+        if isinstance(err, (int, float)) and float(err) > best_err:
+            best_err = float(err)
+            best_name = str(name)
+    if best_err <= 0 or best_err <= total_f * 0.5:
+        return None
+    # プロジェクト名は表セルと同様に一行化（改行で結論を壊さない）
+    safe = " ".join(best_name.split())
+    return (
+        f"ツールエラー{int(total_f)}回中{int(best_err)}回が『{safe}』に集中しています。"
+    )
+
+
+def _build_reader_summary(
+    *,
+    total_minutes: float,
+    short_record: bool,
+    stats: Mapping[str, Any],
+    history: Sequence[Mapping[str, Any]] | None,
+    by_category: Mapping[str, Any],
+    category_stats_valid: bool,
+    entertainment_minutes: float | None,
+    previous_day_available: bool,
+) -> str:
+    """「今日の結論」用の決定論文（最大3文）。数字は evidence 確定事実のみ。"""
+    if short_record:
+        return (
+            f"本日の記録は合計{_fmt(total_minutes)}分のため、"
+            "1日の働き方を評価するにはデータ不足です。"
+        )
+    parts: list[str] = [
+        f"本日は合計{_fmt(total_minutes)}分の作業が記録されています。"
+    ]
+    # 優先1: AI摩擦の集中
+    friction = _tool_error_concentration_sentence(stats)
+    if friction:
+        parts.append(friction)
+    # 優先2: カテゴリ特徴（断定禁止・記録調）
+    if len(parts) < 3 and category_stats_valid and by_category:
+        top = max(
+            ((str(k), float(v)) for k, v in by_category.items() if isinstance(v, (int, float))),
+            key=lambda x: x[1],
+            default=None,
+        )
+        if top and top[1] > 0:
+            parts.append(
+                f"カテゴリでは「{top[0]}」が{_fmt(top[1])}分と最多が記録されています。"
+            )
+        if (
+            len(parts) < 3
+            and entertainment_minutes is not None
+            and total_minutes > 0
+            and entertainment_minutes > total_minutes * 0.2
+        ):
+            parts.append(
+                f"エンタメカテゴリが{_fmt(entertainment_minutes)}分"
+                f"（合計の{_fmt(entertainment_minutes / total_minutes * 100)}%）"
+                "記録されています。"
+            )
+    # 優先3: 前日比（合計 or AIセッションのどちらか1つ）
+    if len(parts) < 3 and previous_day_available:
+        prev = _previous_day_stats(stats, history)
+        if prev is not None:
+            prev_total = prev.get("total_minutes")
+            if (
+                isinstance(prev_total, (int, float))
+                and isfinite(float(prev_total))
+            ):
+                delta = total_minutes - float(prev_total)
+                if abs(delta) >= 1.0:
+                    direction = "増加" if delta > 0 else "減少"
+                    parts.append(
+                        f"合計時間は前日比{_fmt(abs(delta))}分{direction}が"
+                        "記録されています。"
+                    )
+                else:
+                    ai = stats.get("ai") if isinstance(stats.get("ai"), Mapping) else {}
+                    prev_ai = prev.get("ai") if isinstance(prev.get("ai"), Mapping) else {}
+                    cur_s = ai.get("sessions") if isinstance(ai, Mapping) else None
+                    prev_s = (
+                        prev_ai.get("sessions") if isinstance(prev_ai, Mapping) else None
+                    )
+                    if (
+                        isinstance(cur_s, (int, float))
+                        and isinstance(prev_s, (int, float))
+                        and int(cur_s) != int(prev_s)
+                    ):
+                        d = int(cur_s) - int(prev_s)
+                        direction = "増加" if d > 0 else "減少"
+                        parts.append(
+                            f"AI CLIセッションは前日比{abs(d)}回{direction}が"
+                            "記録されています。"
+                        )
+    return " ".join(parts[:3])
 
 
 def build_advice_evidence(
@@ -367,13 +543,27 @@ def build_advice_evidence(
         cost_raw = ai_telemetry.get("est_cost_usd")
         if isinstance(cost_raw, (int, float)) and not isinstance(cost_raw, bool):
             uncosted = ai_telemetry.get("uncosted_tokens")
-            u_part = (
-                f"・対象外 {int(uncosted):,} tok"
+            out_tok = ai_telemetry.get("output_tokens")
+            uncosted_n = (
+                int(uncosted)
                 if isinstance(uncosted, (int, float)) and not isinstance(uncosted, bool)
-                else ""
+                else 0
             )
-            # input/cache 未計上の概算であることを明示
-            cost_part = f" / 推定コスト ${float(cost_raw):.2f}（output のみ{u_part}）"
+            out_n = (
+                int(out_tok)
+                if isinstance(out_tok, (int, float)) and not isinstance(out_tok, bool)
+                else 0
+            )
+            costed_n = max(0, out_n - uncosted_n)
+            # 対象外が計上分を上回る日は額を出さない（無意味な $ 表示を避ける）
+            if out_n > 0 and uncosted_n > costed_n:
+                cost_part = (
+                    f" / 出力トークン {out_n:,}"
+                    "（モデル単価不明分が大半のためコスト換算なし）"
+                )
+            else:
+                u_part = f"・対象外 {uncosted_n:,} tok" if uncosted_n else ""
+                cost_part = f" / 推定コスト ${float(cost_raw):.2f}（output のみ{u_part}）"
         lines.append(
             f"- [F5] 構造化AIテレメトリ: セッション {telemetry_sessions}回{source_part} / "
             f"2往復以下 {fragmented}回 / ツールエラー {tool_errors}回 / "
@@ -600,23 +790,16 @@ def build_advice_evidence(
         except Exception:
             pass
 
-    summary_parts = [
-        (
-            f"本日の記録は合計{_fmt(total_minutes)}分のため、"
-            "1日の働き方を評価するにはデータ不足です。"
-            if short_record
-            else f"本日は合計{_fmt(total_minutes)}分の作業が記録されています。"
-        )
-    ]
-    if focus_blocks is not None and focus_minutes is not None and focus_blocks > 0:
-        summary_parts.append(
-            f"一方、25分以上の集中ブロックを{focus_blocks}回"
-            f"（合計{_fmt(focus_minutes)}分）確保できており、維持したい実績です。"
-        )
-    elif focus_blocks == 0:
-        summary_parts.append(
-            "25分以上の集中ブロックは記録されていませんが、単日の原因は判断できません。"
-        )
+    reader_summary = _build_reader_summary(
+        total_minutes=total_minutes,
+        short_record=short_record,
+        stats=stats,
+        history=history,
+        by_category=by_category,
+        category_stats_valid=category_stats_valid,
+        entertainment_minutes=entertainment_minutes,
+        previous_day_available=previous_day_available,
+    )
 
     reader_notes: list[str] = []
     if not (ai_stats_valid and telemetry_sessions > 0):
@@ -674,12 +857,13 @@ def build_advice_evidence(
     )
     # input_metrics_available / structured_ai_metrics_available / site_metrics_available
     # は F10 直前で計算済み（入口ガードと同じ判定源）
+    metric_baselines = _metric_baselines_from_stats(stats)
 
     return _evidence(
         lines,
         ai_conversation_metrics_available=ai_stats_valid and telemetry_sessions > 0,
         entertainment_observed=entertainment_observed,
-        reader_summary=" ".join(summary_parts),
+        reader_summary=reader_summary,
         reader_notes=tuple(reader_notes),
         max_actions=max_actions,
         previous_day_available=previous_day_available,
@@ -690,4 +874,5 @@ def build_advice_evidence(
         input_metrics_available=input_metrics_available,
         structured_ai_metrics_available=structured_ai_metrics_available,
         site_metrics_available=site_metrics_available,
+        metric_baselines=metric_baselines or None,
     )

@@ -310,7 +310,9 @@ def test_short_day_reader_output_is_plain_and_limits_actions():
     assert evidence.previous_day_available is False
     assert evidence.browser_sample_sufficient is False
     assert "合計44分" in evidence.reader_summary
-    assert "集中ブロックを1回（合計32分）" in evidence.reader_summary
+    # 薄い日は結論1文のみ（N2: リッチ化は120分以上）
+    assert "集中ブロックを1回" not in evidence.reader_summary
+    assert "データ不足" in evidence.reader_summary
     assert any("前日比ではなく絶対値" in note for note in evidence.reader_notes)
     assert any("URL watcher" in note and "優先しません" in note for note in evidence.reader_notes)
     assert any("最大1件" in error for error in advice_contract_errors(VALID_ADVICE, evidence))

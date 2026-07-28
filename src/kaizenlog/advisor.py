@@ -771,6 +771,38 @@ def _semantic_contract_errors(advice: str, evidence: AdviceEvidence) -> list[str
     return errors
 
 
+def _baseline_repair_hint(evidence: AdviceEvidence) -> str:
+    """修復時に明示するベースライン一覧（数値はコード側の確定事実）。"""
+    basemap = evidence.metric_baselines
+    if not basemap:
+        return ""
+    # 主要指標だけ短く（プロンプト肥大防止）
+    keys = (
+        "context_switches",
+        "ai_tool_errors",
+        "ai_cc_sessions",
+        "focus_blocks",
+        "total_active_minutes",
+    )
+    bits = [
+        f"{k}={basemap[k]:g}"
+        for k in keys
+        if k in basemap and isinstance(basemap[k], (int, float))
+    ]
+    if not bits:
+        # 先頭数件
+        for k, v in list(basemap.items())[:5]:
+            if isinstance(v, (int, float)):
+                bits.append(f"{k}={float(v):g}")
+    if not bits:
+        return ""
+    return (
+        "## ベースライン（当日実測・PASS はこの値より挑戦的に）\n"
+        + " / ".join(bits)
+        + "\n\n"
+    )
+
+
 def _contract_repair_prompt(
     evidence: AdviceEvidence,
     advice: str,
@@ -798,8 +830,11 @@ def _contract_repair_prompt(
         "（観測値の再掲禁止）\n"
         "- pass/fail は数値条件。pass は可能な限り "
         "`指標 演算子 数値` の機械構文\n"
+        "- PASS 目標はベースラインより挑戦的に設定する"
+        "（減らす目標は baseline×1.2 超を禁止、増やす目標は baseline×0.8 未満を禁止）\n"
         "- KZN ID と HTML コメントは禁止\n"
         "- AI関連画面ブロックは会話数・セッション数・往復数ではない\n\n"
+        f"{_baseline_repair_hint(evidence)}"
         f"## 違反\n{rendered_errors}\n\n"
         "## 前回の回答（一部マスク済み）\n"
         f"{repair_source}"
