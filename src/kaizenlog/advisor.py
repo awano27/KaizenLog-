@@ -413,13 +413,7 @@ def generate_text(
 
 
 _FACT_ID_RE = re.compile(r"\[F\d+\]")
-_NUMBERED_ITEM_RE = re.compile(r"^\s*\d+[.)]\s+", re.MULTILINE)
 _ACTION_RE = re.compile(r"^\s*- \[ \]\s+(.+)$", re.MULTILINE)
-_ANY_CHECKBOX_RE = re.compile(r"^\s*- \[[ xX]\]\s+.+$", re.MULTILINE)
-_MEASURABLE_COMPARISON_RE = re.compile(
-    r"(?:前日|前回|基準).{0,12}(?:比|より|同数|同水準|同じ)"
-    r"|(?:同数|同水準|同数値|増加|減少|上昇|低下|変化なし)"
-)
 
 
 def _coerce_evidence(evidence: AdviceEvidence | None) -> AdviceEvidence:
@@ -440,128 +434,6 @@ def _level3_sections(markdown: str) -> dict[str, str]:
         elif current is not None:
             sections[current].append(line)
     return {name: "\n".join(lines).strip() for name, lines in sections.items()}
-
-
-def _numbered_items(section: str) -> list[str]:
-    matches = list(_NUMBERED_ITEM_RE.finditer(section))
-    return [
-        section[match.start(): matches[i + 1].start() if i + 1 < len(matches) else None].strip()
-        for i, match in enumerate(matches)
-    ]
-
-
-def advice_contract_errors(
-    advice: str,
-    evidence: AdviceEvidence | None = None,
-) -> list[str]:
-    """保存前に、根拠・行動・翌日判定が1対1で揃っているか検証する。"""
-    errors: list[str] = []
-    evidence_ctx = _coerce_evidence(evidence)
-    if "```" in advice or "~~~" in advice:
-        errors.append("日次回答をコードフェンスで囲まないでください")
-    headings = [
-        line[4:].strip()
-        for line in advice.splitlines()
-        if line.startswith("### ")
-    ]
-    allowed_headings = {"計画と実績", "今日の改善提案", "明日の最小アクション", "AI作業の改善"}
-    unexpected = sorted(set(headings) - allowed_headings)
-    if unexpected:
-        errors.append("許可されていない見出しがあります: " + "、".join(unexpected))
-    sections = _level3_sections(advice)
-    required = ("今日の改善提案", "明日の最小アクション", "AI作業の改善")
-    for heading in required:
-        if headings.count(heading) != 1:
-            errors.append(f"見出し「### {heading}」は1回だけ使用してください")
-        body = sections.get(heading, "")
-        if not body:
-            errors.append(f"必須見出し「### {heading}」がない、または空です")
-        elif any(line.lstrip().startswith("#") for line in body.splitlines()):
-            errors.append(f"「### {heading}」内にサブ見出しを置かないでください")
-    if headings.count("計画と実績") > 1:
-        errors.append("見出し「### 計画と実績」は最大1回にしてください")
-
-    improvements = _numbered_items(sections.get("今日の改善提案", ""))
-    if not 1 <= len(improvements) <= 3:
-        errors.append("「今日の改善提案」は番号付きで1〜3件にしてください")
-
-    actions = _ACTION_RE.findall(sections.get("明日の最小アクション", ""))
-    if not 1 <= len(actions) <= 3:
-        errors.append("「明日の最小アクション」は未チェックのチェックボックスで1〜3件にしてください")
-    elif len(actions) > evidence_ctx.max_actions:
-        errors.append(
-            f"当日のデータ量では改善アクションは最大{evidence_ctx.max_actions}件にしてください"
-        )
-    if improvements and actions and len(improvements) != len(actions):
-        errors.append("改善提案と最小アクションの件数を1対1にしてください")
-    if len(_ANY_CHECKBOX_RE.findall(advice)) != len(actions):
-        errors.append("チェックボックスは「明日の最小アクション」の未チェック行だけにしてください")
-    # F-ID 引用・観測数値再掲の検査は JSON 層で行う（U3: レンダ後テキストには F-ID を出さない）
-
-    for index, action in enumerate(actions, 1):
-        pass_position = action.find("PASS:")
-        fail_position = action.find("FAIL:")
-        pass_value = (
-            action[pass_position + len("PASS:"):fail_position].strip(" ｜|/\t")
-            if 0 <= pass_position < fail_position else ""
-        )
-        fail_value = (
-            action[fail_position + len("FAIL:"):].strip(" ｜|/\t")
-            if fail_position >= 0 else ""
-        )
-        if not pass_value or not fail_value:
-            errors.append(f"最小アクション{index}に翌日の PASS:/FAIL: 条件がありません")
-        else:
-            # PASS は parse_pass_condition が通る機械構文のみ（自由文は全ガード迂回のため禁止）
-            from .verdict import (
-                looks_like_machine_pass,
-                parse_pass_condition,
-                strip_pass_annotation,
-            )
-            core_pass = strip_pass_annotation(pass_value)
-            core_fail = strip_pass_annotation(fail_value)
-            if parse_pass_condition(f"x｜PASS: {core_pass}｜FAIL: 0") is None:
-                errors.append(
-                    f"最小アクション{index}の PASS: は機械構文（指標 演算子 数値）"
-                    f"にしてください。自由文は自動判定できず契約違反です"
-                )
-            elif not _is_measurable_condition(fail_value):
-                errors.append(
-                    f"最小アクション{index}の PASS:/FAIL: は数値条件にしてください"
-                )
-            elif looks_like_machine_pass(core_fail):
-                if parse_pass_condition(f"x｜PASS: {core_fail}｜FAIL: 0") is None:
-                    errors.append(
-                        f"最小アクション{index}の FAIL: は機械構文として解析できません"
-                    )
-        if re.search(r"KZN-\d{8}-\d+", action):
-            errors.append(f"最小アクション{index}にモデル生成のKZN IDがあります")
-        # evidence ゲート付き内容チェックは PASS 注記を剥がしてから（レンダラ由来ラベル誤爆防止）
-        errors.extend(
-            evidence_gated_action_errors(
-                _action_text_without_pass_annotation(action), index, evidence_ctx
-            )
-        )
-        # 改善提案とアクションの F-ID 対応は JSON 層で検証済み（表示文には F-ID 無し）
-
-    errors.extend(_semantic_contract_errors(advice, evidence_ctx))
-
-    return errors
-
-
-def _action_text_without_pass_annotation(action: str) -> str:
-    """アクション行の PASS セグメントから注記括弧を除去した走査用テキスト。"""
-    from .verdict import strip_pass_annotation
-
-    pass_position = action.find("PASS:")
-    fail_position = action.find("FAIL:")
-    if not (0 <= pass_position < fail_position):
-        return action
-    head = action[: pass_position + len("PASS:")]
-    # 全角｜区切りを落としてから注記 strip（末尾が ｜ だと括弧除去が効かない）
-    pass_value = action[pass_position + len("PASS:") : fail_position].strip(" ｜|/\t")
-    tail = action[fail_position:]
-    return f"{head} {strip_pass_annotation(pass_value)} {tail}"
 
 
 def evidence_gated_action_errors(
@@ -604,22 +476,6 @@ def evidence_gated_action_errors(
     return errors
 
 
-def collect_evidence_gated_errors(
-    advice: str, evidence: AdviceEvidence
-) -> list[str]:
-    """レンダ済み Markdown から evidence ゲート付きエラーだけを集める（分類用）。"""
-    sections = _level3_sections(advice)
-    actions = _ACTION_RE.findall(sections.get("明日の最小アクション", ""))
-    out: list[str] = []
-    for index, action in enumerate(actions, 1):
-        out.extend(
-            evidence_gated_action_errors(
-                _action_text_without_pass_annotation(action), index, evidence
-            )
-        )
-    return out
-
-
 def render_reader_advice(advice_md: str, evidence: AdviceEvidence) -> str:
     """検証済みの内部回答を、F-IDを見せない読者向け日次提案へ変換する。"""
     sections = _level3_sections(advice_md)
@@ -642,11 +498,6 @@ def render_reader_advice(advice_md: str, evidence: AdviceEvidence) -> str:
     )
 
 
-def _is_measurable_condition(value: str) -> bool:
-    """数値リテラルまたは前日値等との明示的な相対比較を判定可能とみなす。"""
-    return bool(re.search(r"\d", value) or _MEASURABLE_COMPARISON_RE.search(value))
-
-
 def _has_uncertainty_language(sentence: str) -> bool:
     return any(
         phrase in sentence
@@ -664,20 +515,6 @@ def _observed_clause(sentence: str) -> str:
         if (position := sentence.find(marker)) >= 0
     ]
     return sentence[:min(cutoffs)] if cutoffs else sentence
-
-
-def _observed_value_restatement_errors(sections: dict[str, str]) -> list[str]:
-    """観測値はコード生成のF本文だけに置き、LLMには数値を再入力させない。"""
-    for heading in ("今日の改善提案", "AI作業の改善"):
-        for sentence in re.split(r"[。\n]", sections.get(heading, "")):
-            clause = _observed_clause(sentence)
-            without_ids = _FACT_ID_RE.sub("", clause)
-            without_numbering = re.sub(r"^\s*\d+[.)]\s*", "", without_ids)
-            if re.search(r"\d", without_numbering):
-                return [
-                    f"「### {heading}」では観測数値を再掲せず、根拠ID [F#] だけを参照してください"
-                ]
-    return []
 
 
 # requires_daily_contract が真の同梱日本語プロンプト（daily_advisor / privacy_safe）専用。
@@ -841,37 +678,6 @@ def _contract_repair_prompt(
         "## 前回の回答（一部マスク済み）\n"
         f"{repair_source}"
     )
-
-
-def _sanitize_repair_source(advice: str) -> str:
-    """修復モデルが禁止済みの観測数値やKZN IDをそのまま複写しないようにする。"""
-    current_heading = ""
-    output: list[str] = []
-    for line in advice.splitlines():
-        if line.startswith("### "):
-            current_heading = line[4:].strip()
-            output.append(line)
-            continue
-        if current_heading not in {"今日の改善提案", "AI作業の改善"}:
-            output.append(line)
-            continue
-
-        sanitized = re.sub(r"KZN-\d{8}-\d+", "既存アクション", line)
-        facts: list[str] = []
-
-        def protect_fact(match: re.Match[str]) -> str:
-            facts.append(match.group(0))
-            return f"§FACT{chr(65 + len(facts) - 1)}§"
-
-        sanitized = _FACT_ID_RE.sub(protect_fact, sanitized)
-        numbering = re.match(r"^(\s*\d+[.)]\s*)", sanitized)
-        prefix = numbering.group(1) if numbering else ""
-        body = sanitized[len(prefix):]
-        body = re.sub(r"\d+(?:\.\d+)?", "数値省略", body)
-        for index, fact in enumerate(facts):
-            body = body.replace(f"§FACT{chr(65 + index)}§", fact)
-        output.append(prefix + body)
-    return "\n".join(output)
 
 
 def requires_daily_contract(cfg: LLMConfig) -> bool:

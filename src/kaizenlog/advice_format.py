@@ -1,8 +1,12 @@
 """日次改善提案の構造化出力: JSON 検証 → 決定論的 Markdown レンダリング。
 
-LLM は JSON だけを返し、見出し・チェックボックス・PASS/FAIL 行は
-KaizenLog が組み立てる。下流の KZN 付与・verdict 解析と完全互換な
-Markdown を出力する。
+本番経路（一本線）:
+  1. JSON 契約検証（validate_advice）— LLM 出力の意味・件数・PASS 機械構文
+  2. 決定論レンダ（render_advice_markdown）
+  3. 形状検査（_assert_render_shape）— レンダラ bug のみ検知
+
+旧 Markdown 契約は廃止済み。LLM 契約と
+レンダラ形状を二重に検査しない。
 """
 
 from __future__ import annotations
@@ -526,14 +530,35 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
             )
 
 
+def _assert_render_shape(markdown: str, *, n_actions: int) -> None:
+    """レンダラ出力の形状のみ検査（LLM 契約は validate_advice の責務）。
+
+    memory.assign_action_ids / verdict はチェックボックスと見出し形状に依存する。
+    契約の意味検査は JSON 層に一本化し、ここは形状破壊だけを renderer bug とする。
+    """
+    from .advisor import AdvisorError
+
+    if "<!-- kaizenlog:" in markdown:
+        raise AdvisorError("renderer bug: kaizenlog marker leaked into advice")
+    if re.search(r"\[F\d+", markdown):
+        raise AdvisorError("renderer bug: fact id [F leaked into advice")
+    if re.search(r"KZN-\d{8}-\d+", markdown):
+        raise AdvisorError("renderer bug: KZN id leaked into advice (pre-assign)")
+    # 内部レンダ見出し（render_reader_advice 変換前）。下流 ID 付与は
+    # LEGACY_ACTION_SECTION「明日の最小アクション」を含むこの形を起点にする。
+    for heading in ("今日の改善提案", "明日の最小アクション", "AI作業の改善"):
+        if f"### {heading}" not in markdown:
+            raise AdvisorError(f"renderer bug: missing heading ### {heading}")
+    checkboxes = re.findall(r"^- \[ \] ", markdown, re.MULTILINE)
+    if len(checkboxes) != n_actions:
+        raise AdvisorError(
+            f"renderer bug: checkbox count {len(checkboxes)} != actions {n_actions}"
+        )
+
+
 def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
     """検証済み JSON を現行契約互換の Markdown にレンダリングする。"""
-    from .advisor import (
-        AdviceContractError,
-        AdvisorError,
-        _semantic_contract_errors,
-        advice_contract_errors,
-    )
+    from .advisor import AdviceContractError
 
     # 念のため再検証（呼び出し側が validate 済みでも壊れを防ぐ）
     errs = validate_advice(data, evidence)
@@ -591,20 +616,6 @@ def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
         lines.append(f"- {item['text'].strip()}")
 
     rendered = "\n".join(lines).rstrip() + "\n"
-
-    # レンダラのインバリアント: 旧 Markdown 契約を満たすこと。
-    # 意味違反・evidence ゲート付き内容チェック → AdviceContractError（修復・L2 縮退へ）。
-    # 構造エラーが混じる場合だけ renderer bug。
-    from .advisor import collect_evidence_gated_errors
-
-    contract_errs = advice_contract_errors(rendered, evidence)
-    if contract_errs:
-        semantic_errs = set(_semantic_contract_errors(rendered, evidence))
-        semantic_errs.update(collect_evidence_gated_errors(rendered, evidence))
-        if set(contract_errs) <= semantic_errs:
-            raise AdviceContractError(
-                "LLMの改善提案が保存条件を満たしませんでした:\n- "
-                + "\n- ".join(contract_errs)
-            )
-        raise AdvisorError("renderer bug: " + "; ".join(contract_errs))
+    n_actions = len(data["actions"]) if isinstance(data.get("actions"), list) else 0
+    _assert_render_shape(rendered, n_actions=n_actions)
     return rendered

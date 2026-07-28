@@ -5,7 +5,6 @@ from copy import deepcopy
 
 from kaizenlog.advice_evidence import build_advice_evidence
 from kaizenlog.advice_format import validate_advice
-from kaizenlog.advisor import advice_contract_errors
 from kaizenlog.runlog import classify_violation_kind
 from tests.test_advice_evidence import CURRENT, HISTORY
 from tests.test_advice_format import _valid_data
@@ -26,18 +25,8 @@ def test_p1_machine_pass_still_ok():
     assert validate_advice(data, build_advice_evidence(CURRENT, HISTORY)) == []
 
 
-def test_p1_freeform_pass_rejected_markdown_path():
-    md = """### 今日の改善提案
-1. [F1] 根拠→提案
-
-### 明日の最小アクション
-- [ ] [F1] 履歴を確認する｜PASS: ChatGPT履歴にタグ付きが2件以上｜FAIL: 0件
-
-### AI作業の改善
-- [F1] ok
-"""
-    errs = advice_contract_errors(md, build_advice_evidence(CURRENT, HISTORY))
-    assert any("機械構文" in e for e in errs)
+# markdown 経路の旧契約検査は廃止。自由文 PASS 拒否は
+# test_p1_freeform_pass_rejected_json が JSON 契約層で担保する。
 
 
 def test_p1_fail_machine_unknown_metric_rejected():

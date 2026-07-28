@@ -9,3 +9,7 @@ venv/
 # 個人ログ由来の評価ケース（合成サンプルは eval/samples/ をコミット）
 eval/cases/
 .kaizenlog/eval/cases/
+# Codex/pytest 一時ディレクトリ（ACL で Permission denied 警告の元）
+.codex-pytest-tmp/
+# 別プロジェクトの実験ツリー
+grok-desktop-experiment/

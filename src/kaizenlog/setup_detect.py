@@ -122,17 +122,28 @@ def detect_vault_candidates(
     return uniq
 
 
-def is_task_registered(task_name: str = "KaizenLog Daily") -> bool:
-    """Best-effort Windows check; returns False on non-Windows or errors."""
+def query_task_registered(task_name: str = "KaizenLog Daily") -> bool | None:
+    """Windows タスク登録状態。
+
+    Returns:
+      True  — 登録あり
+      False — 未登録（クエリ成功・タスク無し）
+      None  — 検出不能（非 Windows / schtasks 失敗 / タイムアウト）
+    """
     if sys.platform != "win32":
-        return False
+        return None
     try:
+        # schtasks は日本語 Windows で CP932 を返すことがある → bytes + 判定のみ
         r = subprocess.run(
             ["schtasks", "/Query", "/TN", task_name],
             capture_output=True,
-            text=True,
             timeout=15,
         )
         return r.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        return None
+
+
+def is_task_registered(task_name: str = "KaizenLog Daily") -> bool:
+    """Best-effort Windows check; returns False on non-Windows or errors."""
+    return query_task_registered(task_name) is True

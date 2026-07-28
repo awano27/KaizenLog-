@@ -9,8 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from kaizenlog.advice_evidence import build_advice_evidence
-from kaizenlog.advice_format import render_advice_markdown, validate_advice
-from kaizenlog.advisor import advice_contract_errors
+from kaizenlog.advice_format import _assert_render_shape, render_advice_markdown, validate_advice
 from kaizenlog.config import Config, ConfigError, load_config
 from kaizenlog.memory import (
     MemoryEntry,
@@ -302,7 +301,8 @@ def test_readable_render_and_roundtrip():
     md = render_advice_markdown(data, evidence)
     assert "[F3]" not in md and "[F5]" not in md
     assert "コンテキストスイッチ回数" in md or "focus_blocks" in md
-    assert advice_contract_errors(md, evidence) == []
+    # 形状検査（旧 Markdown 契約の形状相当）
+    _assert_render_shape(md, n_actions=len(data["actions"]))
 
     full = f"## 🚀 Kaizen（AIからの改善提案）\n\n{md}"
     with_ids, entries = assign_action_ids(full, date(2026, 7, 21), [])

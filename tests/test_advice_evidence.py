@@ -7,11 +7,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from kaizenlog.advice_evidence import build_advice_evidence
+from kaizenlog.advice_format import parse_advice_json, validate_advice
 from kaizenlog.advisor import (
     AdviceContractError,
     AdvisorError,
     _contract_repair_prompt,
-    advice_contract_errors,
     build_prompt,
     generate_advice,
     render_reader_advice,
@@ -288,8 +288,10 @@ def test_evidence_is_before_human_readable_log():
 
 
 def test_valid_advice_contract():
+    """JSON 層で VALID サンプルが通る（旧 Markdown 契約の置き換え）。"""
     evidence = build_advice_evidence(CURRENT)
-    assert advice_contract_errors(VALID_ADVICE, evidence) == []
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    assert validate_advice(data, evidence) == []
 
 
 def test_short_day_reader_output_is_plain_and_limits_actions():
@@ -310,12 +312,13 @@ def test_short_day_reader_output_is_plain_and_limits_actions():
     assert evidence.previous_day_available is False
     assert evidence.browser_sample_sufficient is False
     assert "合計44分" in evidence.reader_summary
-    # 薄い日は結論1文のみ（N2: リッチ化は120分以上）
     assert "集中ブロックを1回" not in evidence.reader_summary
     assert "データ不足" in evidence.reader_summary
     assert any("前日比ではなく絶対値" in note for note in evidence.reader_notes)
     assert any("URL watcher" in note and "優先しません" in note for note in evidence.reader_notes)
-    assert any("最大1件" in error for error in advice_contract_errors(VALID_ADVICE, evidence))
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    errs = validate_advice(data, evidence)
+    assert any("最大" in e and "1" in e for e in errs)
 
     rendered = render_reader_advice(
         f"## 🚀 Kaizen（AIからの改善提案）\n\n{SHORT_DAY_ADVICE}",
@@ -330,117 +333,112 @@ def test_short_day_reader_output_is_plain_and_limits_actions():
 
 
 @pytest.mark.parametrize(
-    ("replacement", "expected"),
+    ("action_text", "expected"),
     [
         ("通知を切って25分作業する", "通知を計測していない"),
         ("AIへの依頼内容を1メッセージにまとめる", "AI会話を計測していない"),
         ("URL watcher拡張機能を確認する", "watcher設定を優先できません"),
     ],
 )
-def test_short_day_rejects_unmeasured_or_low_priority_actions(replacement, expected):
+def test_short_day_rejects_unmeasured_or_low_priority_actions(action_text, expected):
     current = deepcopy(CURRENT)
     current.update({
         "total_minutes": 44.0,
         "by_category": {"AI作業": 32.0, "開発": 5.0, "ブラウジング": 2.0},
     })
     evidence = build_advice_evidence(current, source_status="verified")
-    advice = SHORT_DAY_ADVICE.replace("開発開始時に25分タイマーを1回設定する", replacement)
-
-    assert any(expected in error for error in advice_contract_errors(advice, evidence))
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["proposals"] = data["proposals"][:1]
+    data["actions"] = [
+        {
+            "fact_ids": ["F3"],
+            "trigger": "始業の直後",
+            "action": action_text,
+            "pass": "focus_blocks >= 1",
+            "fail": "0回",
+        }
+    ]
+    assert any(expected in e for e in validate_advice(data, evidence))
 
 
 def test_without_previous_day_rejects_relative_action_condition():
     evidence = build_advice_evidence(CURRENT, source_status="verified")
-    advice = SHORT_DAY_ADVICE.replace(
-        "PASS: focus_blocks >= 1｜FAIL: 0回",
-        "PASS: 前日比で増加｜FAIL: 前日比で減少または同数",
-    )
-
-    assert any("前日比を使えません" in error for error in advice_contract_errors(advice, evidence))
-
-
-def test_missing_evidence_uses_safe_unmeasured_context():
-    # F-ID 存在性は JSON 層（validate_advice）で担保。Markdown 契約では見出し等を見る
-    invalid = MISSING_EVIDENCE_ADVICE.replace(
-        "｜PASS: context_switches <= 200｜FAIL: 201回以上", "｜PASS: ｜FAIL:"
-    )
-    errors = advice_contract_errors(invalid)
-    assert any("PASS:/FAIL:" in error for error in errors)
-
-
-def test_contract_rejects_unknown_fact_missing_outcome_and_mismatched_action():
-    evidence = build_advice_evidence(CURRENT)
-    # Markdown 契約は PASS/FAIL と件数。F-ID 対応は JSON 層。
-    # PASS 欠落は outcome エラー。件数不一致は別ケースで検証する。
-    invalid = VALID_ADVICE.replace(
-        "｜PASS: focus_blocks >= 2｜FAIL: 1回以下", ""
-    )
-    errors = advice_contract_errors(invalid, evidence)
-    assert any("PASS:/FAIL:" in error for error in errors)
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["proposals"] = data["proposals"][:1]
+    data["actions"] = [
+        {
+            "fact_ids": ["F3"],
+            "trigger": "始業の直後",
+            "action": "前日比で増やす",
+            "pass": "focus_blocks >= 1",
+            "fail": "0回",
+        }
+    ]
+    # 前日 を action に含める
+    data["actions"][0]["action"] = "前日比で集中を増やす"
+    assert any("前日比を使えません" in e for e in validate_advice(data, evidence))
 
 
 def test_contract_rejects_mismatched_proposal_action_counts():
-    # 提案2件・アクション1件 → 件数1対1違反
-    invalid = VALID_ADVICE.replace(
-        "- [ ] [F9] 調査リンクを開く前に3件まとめる｜PASS: context_switches <= 40｜FAIL: 41回以上\n",
-        "",
-    )
-    errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
-    assert any("件数を1対1" in error for error in errors)
-
-
-def test_contract_rejects_empty_outcomes():
-    evidence = build_advice_evidence(CURRENT)
-    invalid = VALID_ADVICE.replace(
-        "PASS: focus_blocks >= 2｜FAIL: 1回以下", "PASS: ｜FAIL:"
-    )
-    assert any(
-        "PASS:/FAIL:" in error
-        for error in advice_contract_errors(invalid, evidence)
-    )
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["actions"] = data["actions"][:1]
+    errs = validate_advice(data, build_advice_evidence(CURRENT))
+    assert any("1対1" in e for e in errs)
 
 
 @pytest.mark.parametrize(
-    "claim",
+    "text",
     [
-        "[F4] 47ブロックは47会話だったため、明日は減らす。",
-        "[F4] AI関連画面ブロックが多く、短い会話セッションが多発した。",
-        "[F5] AIとは10往復したので、明日は依頼をまとめる。",
-        "[F5] AI会話が細切れだったので、明日は依頼をまとめる。",
-        "[F7] エンタメ利用が39分発生したので、明日は減らす。",
+        "47ブロックは47会話だったため明日は減らす",
+        "AIとは10往復したので明日は依頼をまとめる",
+        "エンタメ利用が39分発生したので明日は減らす",
     ],
 )
-def test_contract_rejects_known_semantic_misreadings(claim):
-    invalid = VALID_ADVICE.replace(
-        "[F5] 会話の往復数は測定不能なので、品質の良否は断定しない。",
-        claim,
-    )
-    errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
-    assert any(
-        "ブロック数を会話数" in error
-        or "テレメトリがない" in error
-        or "娯楽・私用利用" in error
-        for error in errors
-    )
+def test_contract_rejects_observed_number_restatement(text):
+    """数字入りの再掲は観測数値ガードで落ちる（意味ガードより手前）。"""
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["ai_review"] = [{"fact_ids": ["F5"], "text": text}]
+    errs = validate_advice(data, build_advice_evidence(CURRENT))
+    assert any("観測数値を書かないでください" in e for e in errs)
 
 
-def test_contract_rejects_category_changes_as_notification_interruptions():
-    invalid = VALID_ADVICE.replace(
-        "[F3] 開始条件を固定して集中枠の再現性を試す。翌日は集中ブロック2回以上を目標にする。",
-        "[F1] 192回の通知割り込みで生産性が低下したため、明日は通知を切る。",
-    ).replace(
-        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: focus_blocks >= 2｜FAIL: 1回以下",
-        "[F1] 通知を切る｜PASS: context_switches <= 100｜FAIL: 101回以上",
-    )
-    errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
-    assert any("通知・割り込み" in error for error in errors)
+def test_contract_rejects_block_to_conversation_conversion():
+    """F4のみ根拠・数字なし文面でも、ブロック→会話変換ガードが発火する。"""
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["ai_review"] = [
+        {"fact_ids": ["F4"], "text": "AI関連画面ブロックが多く短い会話セッションが多発した"}
+    ]
+    errs = validate_advice(data, build_advice_evidence(CURRENT))
+    assert any("会話数・セッション数・往復数へ変換" in e for e in errs)
 
-    numberless = invalid.replace(
-        "192回の通知割り込みで生産性が低下した",
-        "頻繁なカテゴリ変更は通知割り込みを示し、生産性が低下した",
+
+def test_contract_rejects_fabricated_ai_quality_without_telemetry():
+    """数字なしでもAI会話の回数・品質断定はテレメトリ根拠ガードで落ちる。"""
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["ai_review"] = [
+        {"fact_ids": ["F5"], "text": "AI会話が細切れだったので明日は依頼をまとめる"}
+    ]
+    errs = validate_advice(data, build_advice_evidence(CURRENT))
+    assert any("テレメトリがない" in e for e in errs)
+
+
+def test_contract_rejects_category_switch_to_notification_conversion():
+    """カテゴリ変更(F1)根拠の通知・割り込み・生産性低下への変換はJSON層で契約違反。"""
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["proposals"][0]["fact_ids"] = ["F1"]
+    data["actions"][0]["fact_ids"] = ["F1"]
+    data["proposals"][0]["interpretation"] = (
+        "画面の切り替えが多発し、通知や割り込みで集中力が低下した"
     )
-    errors = advice_contract_errors(numberless, build_advice_evidence(CURRENT))
-    assert any("通知・割り込み" in error for error in errors)
+    errs = validate_advice(data, build_advice_evidence(CURRENT))
+    assert any("通知・割り込み・生産性低下へ変換" in e for e in errs)
+
+
+def test_contract_rejects_notification_in_action():
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["actions"][0]["action"] = "通知を切る"
+    errs = validate_advice(data, build_advice_evidence(CURRENT))
+    assert any("通知" in e for e in errs)
 
 
 def test_switch_guard_allows_independently_measured_f5_interruptions():
@@ -451,50 +449,69 @@ def test_switch_guard_allows_independently_measured_f5_interruptions():
         "tool_errors": 0,
         "interruptions": 192,
     }
-    advice = VALID_ADVICE.replace(
-        "[F3] 開始条件を固定して集中枠の再現性を試す。翌日は集中ブロック2回以上を目標にする。",
-        "[F5] Claude Codeで中断が記録されたため、明日は原因を記録する。",
-    ).replace(
-        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: focus_blocks >= 2｜FAIL: 1回以下",
-        "[F5] 中断理由を記録する｜PASS: ai_interruptions <= 100｜FAIL: 101回以上",
-    ).replace(
-        "[F5] 会話の往復数は測定不能なので、品質の良否は断定しない。",
-        "[F5] 中断回数は明示テレメトリで測定済み。",
-    )
-
-    assert advice_contract_errors(advice, build_advice_evidence(current)) == []
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["proposals"][0] = {
+        "fact_ids": ["F5"],
+        "interpretation": "中断が記録されたため原因を記録する",
+        "proposal": "中断理由を記録する",
+        "next_metric": "中断回数",
+    }
+    data["actions"][0] = {
+        "fact_ids": ["F5"],
+        "trigger": "中断の直後",
+        "action": "中断理由を記録する",
+        "pass": "ai_interruptions <= 100",
+        "fail": "101回以上",
+    }
+    data["ai_review"] = [
+        {"fact_ids": ["F5"], "text": "中断回数は明示テレメトリで測定済み"}
+    ]
+    assert validate_advice(data, build_advice_evidence(current)) == []
 
 
 def test_semantic_guard_allows_measurement_and_maintenance_actions():
     current = deepcopy(CURRENT)
     current["ai_activity_blocks"] = 1
-    advice = VALID_ADVICE.replace(
-        "[F3] 開始条件を固定して集中枠の再現性を試す。翌日は集中ブロック2回以上を目標にする。",
-        "[F4] セッション計測を設定し、明日から1往復ごとに記録する。",
-    ).replace(
-        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: focus_blocks >= 2｜FAIL: 1回以下",
-        "[F4] セッション計測を設定する｜PASS: ai_cc_sessions >= 1｜FAIL: 0回",
-    ).replace(
-        "[F5] 会話の往復数は測定不能なので、品質の良否は断定しない。",
-        "[F5] 明日から1往復ごとにログへ記録する。",
-    )
-    assert advice_contract_errors(advice, build_advice_evidence(current)) == []
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["proposals"][0] = {
+        "fact_ids": ["F4"],
+        "interpretation": "セッション計測を設定する",
+        "proposal": "明日から往復を記録する",
+        # next_metric 単独の「セッション」は計測語なしだと F4 変換ガードに掛かる
+        "next_metric": "セッション計測の有無",
+    }
+    data["actions"][0] = {
+        "fact_ids": ["F4"],
+        "trigger": "始業の直後",
+        "action": "セッション計測を設定する",
+        "pass": "ai_cc_sessions >= 1",
+        "fail": "0回",
+    }
+    data["ai_review"] = [
+        {"fact_ids": ["F5"], "text": "明日から往復ごとにログへ記録する"}
+    ]
+    assert validate_advice(data, build_advice_evidence(current)) == []
 
 
 def test_semantic_guard_allows_zero_entertainment_maintenance():
-    advice = VALID_ADVICE.replace(
-        "[F3] 開始条件を固定して集中枠の再現性を試す。翌日は集中ブロック2回以上を目標にする。",
-        "[F7] 娯楽利用の定量根拠がない状態を維持するため、分類精度を明日確認する。",
-    ).replace(
-        "[F3] 始業時に25分枠を予定へ1件入れる｜PASS: focus_blocks >= 2｜FAIL: 1回以下",
-        "[F7] 分類設定を確認する｜PASS: category_minutes:エンタメ <= 0｜FAIL: 1分以上",
-    )
-    assert advice_contract_errors(advice, build_advice_evidence(CURRENT)) == []
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["proposals"][0] = {
+        "fact_ids": ["F7"],
+        "interpretation": "娯楽利用の定量根拠がない状態を維持する",
+        "proposal": "分類精度を明日確認する",
+        "next_metric": "エンタメ分",
+    }
+    data["actions"][0] = {
+        "fact_ids": ["F7"],
+        "trigger": "始業の直後",
+        "action": "分類設定を確認する",
+        "pass": "category_minutes:エンタメ <= 0",
+        "fail": "1分以上",
+    }
+    assert validate_advice(data, build_advice_evidence(CURRENT)) == []
 
 
 def test_contract_rejects_observed_value_restatement_even_when_measured():
-    # 観測数値再掲は JSON 層（interpretation / ai_review.text）で禁止。Markdown 契約からは削除。
-    from kaizenlog.advice_format import validate_advice
     from tests.test_advice_format import _valid_data
 
     data = _valid_data()
@@ -504,7 +521,6 @@ def test_contract_rejects_observed_value_restatement_even_when_measured():
 
 
 def test_contract_rejects_fabricated_entertainment_value_when_observed():
-    from kaizenlog.advice_format import validate_advice
     from tests.test_advice_format import _valid_data
 
     data = _valid_data()
@@ -513,56 +529,23 @@ def test_contract_rejects_fabricated_entertainment_value_when_observed():
     assert any("観測数値" in error for error in errors)
 
 
-def test_contract_requires_typed_evidence_context():
-    evidence = build_advice_evidence(CURRENT)
-    with pytest.raises(TypeError, match="AdviceEvidence"):
-        advice_contract_errors(VALID_ADVICE, evidence.markdown)  # type: ignore[arg-type]
-
-
-def test_contract_rejects_code_fenced_daily_answer():
-    errors = advice_contract_errors(
-        f"```markdown\n{VALID_ADVICE}\n```", build_advice_evidence(CURRENT)
-    )
-    assert any("コードフェンス" in error for error in errors)
-
-
-def test_contract_rejects_subheading_inside_action_section():
-    invalid = VALID_ADVICE.replace(
-        "### 明日の最小アクション\n",
-        "### 明日の最小アクション\n#### 詳細\n",
-    )
-    errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
-    assert any("サブ見出し" in error for error in errors)
-
-
-def test_contract_rejects_unknown_heading_and_extra_checkbox():
-    invalid = VALID_ADVICE + "\n### 追加\n- [ ] [F1] 余分な行｜PASS: 1件｜FAIL: 0件\n"
-    errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
-    assert any("許可されていない見出し" in error for error in errors)
-    assert any("チェックボックス" in error for error in errors)
-
-
 def test_contract_rejects_subjective_pass_fail_conditions():
-    invalid = VALID_ADVICE.replace(
-        "PASS: focus_blocks >= 2｜FAIL: 1回以下",
-        "PASS: うまくできた｜FAIL: うまくできなかった",
-    )
-    errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
-    assert any("数値条件" in error or "機械構文" in error for error in errors)
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["actions"][0]["pass"] = "うまくできた"
+    data["actions"][0]["fail"] = "うまくできなかった"
+    errors = validate_advice(data, build_advice_evidence(CURRENT))
+    assert any("数値条件" in e or "機械構文" in e for e in errors)
 
 
 def test_contract_rejects_measurable_freeform_pass():
-    """数字を含む自由文 PASS も遮断（計測不能ガード迂回防止）。"""
-    invalid = VALID_ADVICE.replace(
-        "PASS: focus_blocks >= 2｜FAIL: 1回以下",
-        "PASS: ChatGPT履歴にタグ付きが2件以上｜FAIL: 0件",
-    )
-    errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
-    assert any("機械構文" in error for error in errors)
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["actions"][0]["pass"] = "ChatGPT履歴にタグ付きが2件以上"
+    data["actions"][0]["fail"] = "0件"
+    errors = validate_advice(data, build_advice_evidence(CURRENT))
+    assert any("機械構文" in e for e in errors)
 
 
 def test_contract_rejects_unknown_fact_in_ai_section():
-    from kaizenlog.advice_format import validate_advice
     from tests.test_advice_format import _valid_data
 
     data = _valid_data()
@@ -574,33 +557,19 @@ def test_contract_rejects_unknown_fact_in_ai_section():
 def test_missing_ai_mapping_still_blocks_fabricated_turn_count():
     current = deepcopy(CURRENT)
     current.pop("ai")
-    invalid = VALID_ADVICE.replace(
-        "[F5] 会話の往復数は測定不能なので、品質の良否は断定しない。",
-        "[F5] AIとは10往復したので依頼をまとめる。",
-    )
-    errors = advice_contract_errors(invalid, build_advice_evidence(current))
-    assert any("テレメトリがない" in error for error in errors)
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["ai_review"] = [
+        {"fact_ids": ["F5"], "text": "AI会話が細切れだったので依頼をまとめる"}
+    ]
+    errors = validate_advice(data, build_advice_evidence(current))
+    assert any("テレメトリがない" in e for e in errors)
 
 
-@pytest.mark.parametrize(
-    ("invalid", "expected"),
-    [
-        (
-            VALID_ADVICE.replace("- [ ] [F3]", "- [ ] KZN-20260721-999: [F3]", 1),
-            "モデル生成のKZN ID",
-        ),
-        (
-            VALID_ADVICE.replace(
-                "- [ ] [F9] 調査リンクを開く前に3件まとめる｜PASS: context_switches <= 40｜FAIL: 41回以上\n",
-                "",
-            ),
-            "件数を1対1",
-        ),
-    ],
-)
-def test_contract_rejects_independent_structural_violations(invalid, expected):
-    errors = advice_contract_errors(invalid, build_advice_evidence(CURRENT))
-    assert any(expected in error for error in errors)
+def test_contract_rejects_kzn_in_action():
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["actions"][0]["action"] = "KZN-20260721-999 を続ける"
+    errors = validate_advice(data, build_advice_evidence(CURRENT))
+    assert any("KZN" in e for e in errors)
 
 
 def test_generate_advice_repairs_contract_once(monkeypatch):
@@ -637,14 +606,17 @@ def test_contract_repair_masks_observed_numbers_and_kzn_ids():
 
 
 def test_contract_accepts_explicit_f4_non_session_statement():
-    evidence = build_advice_evidence(CURRENT)
-    advice = re.sub(
-        r"(?m)^- \[F5\].*$",
-        "- [F4] 画面ブロックは会話セッション数ではなく評価対象外。",
-        VALID_ADVICE,
-    )
+    from tests.test_advice_format import _valid_data
 
-    assert advice_contract_errors(advice, evidence) == []
+    evidence = build_advice_evidence(CURRENT)
+    data = _valid_data()
+    data["ai_review"] = [
+        {
+            "fact_ids": ["F4"],
+            "text": "画面ブロックは会話セッション数ではなく評価対象外",
+        }
+    ]
+    assert validate_advice(data, evidence) == []
 
 
 def test_contract_accepts_measurable_relative_fail_condition():
@@ -652,25 +624,17 @@ def test_contract_accepts_measurable_relative_fail_condition():
         CURRENT,
         [{"day": "2026-07-20", "total_minutes": 120.0, "context_switches": 20}],
     )
-    advice = re.sub(
-        r"FAIL: [^\n]+",
-        "FAIL: 前日と同数以上",
-        VALID_ADVICE,
-        count=1,
-    )
-
-    assert advice_contract_errors(advice, evidence) == []
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["actions"][0]["fail"] = "前日と同数以上"
+    assert validate_advice(data, evidence) == []
 
 
 def test_contract_does_not_treat_non_ai_fragmentation_as_ai_quality():
     evidence = build_advice_evidence(CURRENT)
-    advice = VALID_ADVICE.replace(
-        "1. [F3]",
-        "1. [F3] 細切れ区間をまとめる。",
-        1,
-    )
-
-    errors = advice_contract_errors(advice, evidence)
+    data = parse_advice_json(VALID_ADVICE_JSON)
+    data["proposals"][0]["interpretation"] = "細切れ区間をまとめる"
+    data["proposals"][0]["proposal"] = "開始条件を固定して集中枠の再現性を試す"
+    errors = validate_advice(data, evidence)
     assert not any("AI会話テレメトリ" in error for error in errors)
 
 

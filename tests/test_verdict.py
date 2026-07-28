@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from kaizenlog.advisor import advice_contract_errors
-from kaizenlog.advice_evidence import AdviceEvidence
+from kaizenlog.advice_evidence import AdviceEvidence, build_advice_evidence
+from kaizenlog.advice_format import validate_advice
 from kaizenlog.config import Config
 from kaizenlog.memory import (
     MemoryEntry,
@@ -229,35 +229,35 @@ def test_apply_verdicts_does_not_accumulate_blank_lines():
     assert blank_counts[0] == blank_counts[1] == blank_counts[2]
 
 
-# ---- advice_contract_errors ----
+# ---- machine PASS via JSON contract (旧 Markdown 契約から移行) ----
 
 def test_advice_contract_machine_pass_known_and_unknown():
-    base = """### 今日の改善提案
-1. [F1] 根拠→提案
+    from tests.test_advice_evidence import CURRENT, HISTORY
+    from tests.test_advice_format import _valid_data
 
-### 明日の最小アクション
-- [ ] [F1] 行動｜PASS: {pass_cond}｜FAIL: 0回
+    evidence = build_advice_evidence(CURRENT, HISTORY)
 
-### AI作業の改善
-- [F1] ok
-"""
     # freeform with number is no longer accepted (P1: machine syntax required)
-    free = base.format(pass_cond="集中ブロック2回以上")
-    assert any("機械構文" in e for e in advice_contract_errors(free))
+    free = _valid_data()
+    free["actions"][0]["pass"] = "集中ブロック2回以上"
+    assert any("機械構文" in e for e in validate_advice(free, evidence))
 
-    good = base.format(pass_cond="context_switches <= 40")
-    assert not any("機械構文" in e for e in advice_contract_errors(good))
-    assert not any("指標名" in e for e in advice_contract_errors(good))
+    good = _valid_data()
+    good["actions"][0]["pass"] = "context_switches <= 40"
+    errs_good = validate_advice(good, evidence)
+    assert not any("機械構文" in e for e in errs_good)
+    assert not any("指標名" in e for e in errs_good)
 
-    bad = base.format(pass_cond="pomodoro_count <= 4")
-    errs = advice_contract_errors(bad)
-    # unknown metric fails parse_pass_condition → machine-syntax error path
+    bad = _valid_data()
+    bad["actions"][0]["pass"] = "pomodoro_count <= 4"
+    errs = validate_advice(bad, evidence)
     assert any("機械構文" in e or "指標名" in e for e in errs)
 
-    numberless = base.format(pass_cond="うまくできた")
+    numberless = _valid_data()
+    numberless["actions"][0]["pass"] = "うまくできた"
     assert any(
         "数値条件" in e or "機械構文" in e
-        for e in advice_contract_errors(numberless)
+        for e in validate_advice(numberless, evidence)
     )
 
 

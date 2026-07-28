@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -13,7 +14,9 @@ from pathlib import Path
 import requests
 
 from .config import Config, default_config_path, existing_config_candidates, find_config_file
+from .memory import MEMORY_FILE
 from .runlog import consecutive_bad_advise_outcomes, load_runs
+from .setup_detect import query_task_registered
 
 
 class Check:
@@ -278,6 +281,131 @@ def _check_advise_health(c: Check, cfg: Config) -> None:
         c.ok("提案ヘルス: 縮退の連続なし")
 
 
+# タスクスケジューラ名（scripts/register-task.ps1 / setup と一致）
+TASK_NIGHTLY = "KaizenLog Daily"
+TASK_MORNING = "KaizenLog Morning"
+
+
+def _check_schedule(c: Check) -> None:
+    """夜間/朝タスクの登録。消失=データ欠測につながるため doctor で検出する。"""
+    nightly = query_task_registered(TASK_NIGHTLY)
+    morning = query_task_registered(TASK_MORNING)
+    if nightly is None and morning is None:
+        c.ok("スケジュールタスク: 検出をスキップ（非 Windows または schtasks 利用不可）")
+        return
+    if nightly is True:
+        c.ok(f"夜間タスク登録済み: {TASK_NIGHTLY}")
+    elif nightly is False:
+        c.error(
+            "夜間タスクが未登録です。毎晩の記録が自動で走りません: "
+            "`kaizenlog setup --register-task`"
+        )
+    else:
+        # ✅表示だと「登録済み」と誤読されるため warn で手動確認を促す
+        c.warn(f'夜間タスク: 検出できませんでした — 手動確認: schtasks /Query /TN "{TASK_NIGHTLY}"')
+
+    if morning is True:
+        c.ok(f"朝タスク登録済み: {TASK_MORNING}")
+    elif morning is False:
+        c.warn(
+            f"朝タスク（{TASK_MORNING}）が未登録です。"
+            "朝の追いつき・通知が自動で走りません: `kaizenlog setup --register-task`"
+        )
+    else:
+        c.warn(f'朝タスク: 検出できませんでした — 手動確認: schtasks /Query /TN "{TASK_MORNING}"')
+
+
+def _count_jsonl_entries(path: Path) -> tuple[int, int]:
+    """(valid_or_any lines with content, unparseable lines)."""
+    ok = 0
+    bad = 0
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0, 0
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            json.loads(s)
+            ok += 1
+        except json.JSONDecodeError:
+            bad += 1
+    return ok, bad
+
+
+def _check_artifacts(c: Check, cfg: Config) -> None:
+    """第10弾以降の成果物パスの存在・概況（無い=即異常ではない）。"""
+    # Memory
+    mem_file = cfg.memory_path / MEMORY_FILE
+    if mem_file.is_file():
+        n_ok, n_bad = _count_jsonl_entries(mem_file)
+        c.ok(f"Kaizen Memory: {mem_file}（{n_ok}行）")
+        if n_bad:
+            c.warn(f"Kaizen Memory にパース不能行が {n_bad} 件あります: {mem_file}")
+    elif cfg.memory_path.is_dir():
+        c.warn(
+            f"Kaizen Memory ディレクトリはあるが {MEMORY_FILE} がありません"
+            f"（初回 advise 後に作成）: {cfg.memory_path}"
+        )
+    else:
+        c.warn(
+            f"Kaizen Memory がまだありません（初回 advise で作成）: {cfg.memory_path}"
+        )
+
+    # Experiments
+    exp = cfg.experiments_path
+    if exp.is_dir():
+        try:
+            n_notes = sum(
+                1
+                for p in exp.rglob("*.md")
+                if p.is_file() and not p.name.startswith(".")
+            )
+        except OSError:
+            n_notes = 0
+        c.ok(f"実験ノート: {exp}（{n_notes}件）")
+    else:
+        c.warn(f"実験ディレクトリがありません（任意）: {exp}")
+
+    # Weekly Reviews（任意機能 → 無くても info 相当の warn ではなく軽い案内）
+    weekly = cfg.daily_notes_path / "Weekly Reviews"
+    if weekly.is_dir():
+        try:
+            notes = sorted(
+                (p for p in weekly.glob("*.md") if p.is_file()),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError:
+            notes = []
+        if notes:
+            c.ok(f"Weekly Reviews: 直近 {notes[0].name}（計{len(notes)}件）")
+        else:
+            c.ok(f"Weekly Reviews フォルダあり（ノートはまだ無し）: {weekly}")
+    else:
+        c.ok(f"Weekly Reviews: 未作成（任意機能）: {weekly}")
+
+    # browser_export_dir: 拡張未導入は正常 → error にしない
+    if cfg.aiwork.enabled:
+        raw = str(cfg.aiwork.browser_export_dir).strip()
+        # 既定値との比較で「明示設定なのに無い」だけを warn にする
+        # （既定のまま未導入のユーザーに恒常⚠️を出さない）
+        default_dir = type(cfg.aiwork)().browser_export_dir
+        if not raw:
+            # 空文字は Path("") == Path(".") に化けて偽✅になるため先に弾く
+            c.ok("ブラウザ AI エクスポート: 未設定（任意機能）")
+        else:
+            bdir = Path(raw).expanduser()
+            if bdir.is_dir():
+                c.ok(f"ブラウザ AI エクスポート: {bdir}")
+            elif raw == default_dir:
+                c.ok(f"ブラウザ AI エクスポート: 未導入（任意機能）: {bdir}")
+            else:
+                c.warn(f"browser_export_dir が明示設定されていますが存在しません: {bdir}")
+
+
 def run_doctor(
     cfg: Config,
     config_path: str | None = None,
@@ -302,15 +430,22 @@ def run_doctor(
 
     if config_absent or missing_config_message:
         # 設定なし: 書き込み可能ボールト判定はしない（CWD 誤認防止）
-        c.warn("ボールト / LLM / AIテレメトリ / 履歴 / 提案ヘルス: 設定作成後に確認")
+        c.warn(
+            "ボールト / LLM / AIテレメトリ / 履歴 / 提案ヘルス / 成果物: "
+            "設定作成後に確認"
+        )
         # 環境だけは既定 URL で確認（設定不要の意味ある診断）
         _check_activitywatch(c, cfg)
+        # タスク登録は設定に依存しない
+        _check_schedule(c)
     else:
         _check_vault(c, cfg)
         _check_activitywatch(c, cfg)
+        _check_schedule(c)
         _check_llm(c, cfg)
         _check_aiwork(c, cfg)
         _check_history(c, cfg)
         _check_advise_health(c, cfg)
+        _check_artifacts(c, cfg)
     verdict = "\n❌ 修正が必要な項目があります。" if c.has_error else "\n✅ すべて正常です。"
     return "\n".join(c.lines) + verdict, c.has_error

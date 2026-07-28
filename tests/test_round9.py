@@ -88,33 +88,14 @@ def test_non_daily_prompt_skips_reader_rewrite(tmp_path, monkeypatch):
 # ---- G2 ----
 
 def test_g2_notification_action_is_contract_error_not_renderer_bug():
-    """『通知』を含む action → AdviceContractError（修復対象）。モック無し。"""
+    """『通知』を含む action → AdviceContractError（修復対象）。JSON 契約層。"""
     data = _valid_data()
     data["actions"][0]["action"] = "通知を切って集中する"
-    # validate 段階で弾かれる
     errs = validate_advice(data, _evidence())
     assert any("通知" in e for e in errs)
-
-    # もし validate をすり抜けた場合でも render は renderer bug にしない
-    # （validate が先に落ちるのでここでは contract 経路を直接）
-    from kaizenlog.advisor import advice_contract_errors, collect_evidence_gated_errors
-
-    md = (
-        "### 今日の改善提案\n"
-        "1. 開始条件を固定する。始業時に枠を入れる。翌日見る指標: 集中\n"
-        "2. 往来をまとめる。リンクをまとめる。翌日見る指標: 遷移\n\n"
-        "### 明日の最小アクション\n"
-        "- [ ] 通知を切る｜PASS: focus_blocks >= 2｜FAIL: 1回以下\n"
-        "- [ ] 調査リンクを開く前に三件まとめる｜PASS: context_switches <= 40｜FAIL: 41回以上\n\n"
-        "### AI作業の改善\n"
-        "- 会話の往復数は測定不能なので品質の良否は断定しない\n"
-    )
-    ev = _evidence()
-    contract = advice_contract_errors(md, ev)
-    gated = collect_evidence_gated_errors(md, ev)
-    assert any("通知" in e for e in contract)
-    assert any("通知" in e for e in gated)
-    assert set(e for e in contract if "通知" in e) <= set(gated)
+    # 意味違反は render 前に落ち、renderer bug にしない
+    with pytest.raises(AdviceContractError):
+        render_advice_markdown(data, _evidence())
 
 
 def test_g2_pass_label_does_not_false_positive_ai_optimize():
@@ -122,32 +103,18 @@ def test_g2_pass_label_does_not_false_positive_ai_optimize():
     data = _valid_data()
     data["actions"][0]["pass"] = "ai_avg_turns <= 3"
     data["actions"][0]["fail"] = "4以上"
-    # ラベルに Claude / 往復 が含まれる指標
+    # ラベルに Claude / 往復 が含まれる指標 — 形状検査込みで render 成功
     md = render_advice_markdown(data, _evidence())
     assert "PASS: ai_avg_turns <= 3" in md
-    # 注記があっても契約エラーにならない
-    from kaizenlog.advisor import advice_contract_errors
-
-    assert advice_contract_errors(md, _evidence()) == []
 
 
-def test_g2_structural_break_still_renderer_bug(monkeypatch):
-    """構造破壊だけは AdvisorError(renderer bug)。モック無しの実 render 経路。"""
-    data = _valid_data()
-    # 検証は通す → レンダ後に見出しを壊すよう monkeypatch は使わず、
-    # 契約関数に構造破壊テキストを直接渡して分類ロジックを検証
-    from kaizenlog.advisor import (
-        advice_contract_errors,
-        collect_evidence_gated_errors,
-        _semantic_contract_errors,
-    )
+def test_g2_structural_break_still_renderer_bug():
+    """構造破壊は _assert_render_shape → AdvisorError(renderer bug)。"""
+    from kaizenlog.advice_format import _assert_render_shape
 
     broken = "これは見出しもチェックも無い壊れた出力"
-    contract = advice_contract_errors(broken, _evidence())
-    semantic = set(_semantic_contract_errors(broken, _evidence()))
-    semantic.update(collect_evidence_gated_errors(broken, _evidence()))
-    assert contract
-    assert not (set(contract) <= semantic)  # 構造系が残る → renderer bug 相当
+    with pytest.raises(AdvisorError, match="renderer bug"):
+        _assert_render_shape(broken, n_actions=1)
 
 
 # ---- G3 ----
