@@ -1,4 +1,4 @@
-# KaizenLog を Windows タスクスケジューラに登録するスクリプト
+﻿# KaizenLog を Windows タスクスケジューラに登録するスクリプト
 # 毎晩指定時刻に「ログ収集 → LLM改善提案」を自動実行します。
 # -Weekly を付けると、週次のClaude Codeエージェント深掘り分析
 # （claude -p "/weekly-kaizen"）も登録します。
