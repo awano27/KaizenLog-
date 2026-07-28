@@ -6,7 +6,8 @@
   kaizenlog experiment new/list            カイゼン実験の起票・一覧
   kaizenlog patterns [--days N]            繰り返しパターンの検出レポート（自動化候補）
   kaizenlog report [--date] [--no-llm] [--write]  提出用の日報ドラフトを生成
-  kaizenlog prompts [--days N]             Claude Codeへの繰り返し依頼を発掘（プロンプト資産化）
+  kaizenlog prompts [--days N] [--unhandled]  繰り返し依頼の発掘＋台帳 upsert
+  kaizenlog prompts mark <id> skilled|dismissed [--skill NAME]
   kaizenlog backfill [--days N]            欠損日の日誌・統計をまとめて補完する
   kaizenlog status                         実行履歴（最終成功・直近の失敗）を表示
   kaizenlog doctor                         セットアップと環境の健全性を診断
@@ -66,7 +67,17 @@ from .memory import (
 from .nippou import generate_nippou_deterministic, generate_nippou_llm
 from .notify import notify
 from .privacy import PrivacyError, make_redactor
-from .promptmine import render_prompt_report
+from .promptledger import (
+    append_prompt_ledger,
+    find_matching_entry,
+    format_ledger_line,
+    load_prompt_ledger,
+    mark_prompt_entry,
+    resolve_prm_id,
+    upsert_clusters,
+)
+# redact→normalize は upsert と同じキーで台帳照合するため再利用
+from .promptmine import cluster_prompts, render_prompt_report
 from .runlog import (
     advise_health_warning_line,
     load_runs,
@@ -234,6 +245,7 @@ def cmd_generate(
     )
 
     # 実験の実測追記: running 全件 + adopted（deadline から30日以内のみ）
+    from .promptledger import representative_for_cluster_id
     from .promptmine import count_cluster_matches
 
     experiments = load_experiments(cfg.experiments_path)
@@ -242,14 +254,24 @@ def cmd_generate(
             continue
         # prompt_cluster: compute_metric を汚さずループ側で件数算出
         if exp.metric.startswith("prompt_cluster:"):
-            if not exp.cluster_rep:
+            rep = None
+            if exp.cluster_id:
+                rep = representative_for_cluster_id(cfg.memory_path, exp.cluster_id)
+                if not rep:
+                    print(
+                        f"⚠️  実験「{exp.title}」の cluster_id={exp.cluster_id} が"
+                        "台帳に無いためスキップ"
+                    )
+                    continue
+            elif exp.cluster_rep:
+                rep = exp.cluster_rep
+            else:
                 print(
-                    f"⚠️  実験「{exp.title}」の prompt_cluster に cluster_rep が無いためスキップ"
+                    f"⚠️  実験「{exp.title}」の prompt_cluster に "
+                    "cluster_id / cluster_rep が無いためスキップ"
                 )
                 continue
-            value = float(
-                count_cluster_matches(day_prompts, exp.cluster_rep)
-            )
+            value = float(count_cluster_matches(day_prompts, rep))
         else:
             value = compute_metric(
                 exp.metric, summary, ai_sessions, input_stats,
@@ -1144,7 +1166,15 @@ def cmd_report(cfg: Config, day: date, use_llm: bool, write: bool) -> None:
         print(f"\n✅ 日報ドラフトをデイリーノートに書き込みました: {path}")
 
 
-def cmd_prompts(cfg: Config, days: int, end_day: date, min_count: int) -> None:
+def cmd_prompts(
+    cfg: Config,
+    days: int,
+    end_day: date,
+    min_count: int,
+    *,
+    unhandled_only: bool = False,
+) -> None:
+    """繰り返し依頼を発掘し、クラスタ台帳へ upsert して表示する。"""
     tz = ZoneInfo(cfg.timezone)
     end = datetime.combine(end_day, time.min, tzinfo=tz) + timedelta(days=1)
     start = end - timedelta(days=days)
@@ -1154,13 +1184,94 @@ def cmd_prompts(cfg: Config, days: int, end_day: date, min_count: int) -> None:
     for exp in load_experiments(cfg.experiments_path):
         if exp.status not in ("running", "adopted"):
             continue
-        if exp.metric.startswith("prompt_cluster:") and exp.cluster_rep:
-            tracking.append((exp.cluster_rep, exp.title))
+        if not exp.metric.startswith("prompt_cluster:"):
+            continue
+        rep = exp.cluster_rep
+        if exp.cluster_id:
+            from .promptledger import representative_for_cluster_id
+
+            rep = representative_for_cluster_id(cfg.memory_path, exp.cluster_id) or rep
+        if rep:
+            tracking.append((rep, exp.title))
+    redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
+    clusters = [c for c in cluster_prompts(prompts) if c.count >= min_count]
+    upsert_clusters(
+        cfg.memory_path,
+        clusters,
+        as_of=end_day,
+        redactor=redactor,
+    )
+    # 表示用: 正規化代表 → (PRM-ID, status)。台帳は redact 後キーなので両方試す
+    from .promptmine import normalize as _pm_normalize
+
+    ledger = load_prompt_ledger(cfg.memory_path)
+    ledger_by_rep: dict[str, tuple[str, str]] = {}
+    for c in clusters:
+        candidates = [c.representative]
+        if redactor is not None and c.example:
+            candidates.append(_pm_normalize(redactor(c.example)))
+        hit = None
+        for cand in candidates:
+            hit = find_matching_entry(ledger, cand)
+            if hit:
+                break
+        if hit:
+            ledger_by_rep[c.representative] = (hit.id, hit.status)
     print(
         render_prompt_report(
-            prompts, days=days, min_count=min_count, tracking=tracking
+            prompts,
+            days=days,
+            min_count=min_count,
+            tracking=tracking,
+            ledger_by_rep=ledger_by_rep,
+            unhandled_only=unhandled_only,
         )
     )
+
+
+def cmd_prompts_mark(
+    cfg: Config,
+    action_id: str,
+    status: str,
+    *,
+    skill_name: str | None = None,
+) -> int:
+    """台帳クラスタを skilled / dismissed に更新する。"""
+    status = (status or "").strip().lower()
+    if status not in ("skilled", "dismissed"):
+        print(
+            "❌ status は skilled または dismissed を指定してください",
+            file=sys.stderr,
+        )
+        return 1
+    if status == "skilled" and not (skill_name or "").strip():
+        print("❌ skilled には --skill NAME が必要です", file=sys.stderr)
+        return 1
+    entries = load_prompt_ledger(cfg.memory_path)
+    resolved = resolve_prm_id(action_id, entries)
+    if resolved is None:
+        print(f"❌ 該当するクラスタがありません: {action_id}", file=sys.stderr)
+        return 1
+    if isinstance(resolved, list):
+        print("❌ ID が曖昧です。候補:", file=sys.stderr)
+        for e in resolved:
+            print(f"  {format_ledger_line(e)}", file=sys.stderr)
+        return 1
+    entry = resolved
+    if entry.status == status and (
+        status != "skilled" or entry.skill_name == (skill_name or "").strip()
+    ):
+        print(f"ℹ️  既に {status} です: {entry.id}")
+        return 0
+    try:
+        marked = mark_prompt_entry(entry, status, skill_name=skill_name)
+    except ValueError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+    append_prompt_ledger(cfg.memory_path, [marked])
+    extra = f" skill={marked.skill_name}" if marked.skill_name else ""
+    print(f"✅ {marked.id} を {status} に更新しました{extra}")
+    return 0
 
 
 def _resolve_pre_start_baseline(cfg: Config, metric: str, today: date) -> float | None:
@@ -1488,10 +1599,29 @@ def main(argv: list[str] | None = None) -> int:
     rep.add_argument("--date", help="対象日 YYYY-MM-DD（省略時は今日）")
     rep.add_argument("--no-llm", action="store_true", help="LLMを使わず事実ベースの箇条書きで生成")
     rep.add_argument("--write", action="store_true", help="デイリーノートにも書き込む")
-    pr = sub.add_parser("prompts", help="Claude Codeへの繰り返し依頼の発掘")
+    pr = sub.add_parser("prompts", help="Claude Codeへの繰り返し依頼の発掘（台帳 upsert）")
+    pr_sub = pr.add_subparsers(dest="prompts_command")
     pr.add_argument("--days", type=int, default=14, help="遡る日数（デフォルト14）")
     pr.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
     pr.add_argument("--min-count", type=int, default=3, help="レポートする最低反復回数（デフォルト3）")
+    pr.add_argument(
+        "--unhandled",
+        action="store_true",
+        help="status=new のクラスタのみ表示（autopilot 向け）",
+    )
+    pr_mark = pr_sub.add_parser("mark", help="クラスタを skilled / dismissed に記録")
+    pr_mark.add_argument("id", help="PRM-ID（末尾部分一致可）")
+    pr_mark.add_argument(
+        "status",
+        choices=("skilled", "dismissed"),
+        help="skilled（スキル化済み）または dismissed（却下）",
+    )
+    pr_mark.add_argument(
+        "--skill",
+        dest="skill_name",
+        default=None,
+        help="skilled 時のスキル名（必須）",
+    )
     wc = sub.add_parser(
         "weekly-context",
         help="週次レビュー用の決定論コンテキストを出力（LLM不使用）",
@@ -1729,9 +1859,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "prompts":
+        if getattr(args, "prompts_command", None) == "mark":
+            return cmd_prompts_mark(
+                cfg,
+                args.id,
+                args.status,
+                skill_name=getattr(args, "skill_name", None),
+            )
         tz = ZoneInfo(cfg.timezone)
         end_day = _parse_date(args.date, tz)
-        cmd_prompts(cfg, args.days, end_day, args.min_count)
+        cmd_prompts(
+            cfg,
+            args.days,
+            end_day,
+            args.min_count,
+            unhandled_only=bool(getattr(args, "unhandled", False)),
+        )
         return 0
 
     if args.command == "weekly-context":

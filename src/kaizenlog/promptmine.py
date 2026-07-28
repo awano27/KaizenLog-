@@ -110,13 +110,17 @@ def render_prompt_report(
     min_count: int = DEFAULT_MIN_COUNT,
     max_clusters: int = 10,
     tracking: list[tuple[str, str]] | None = None,
+    ledger_by_rep: dict[str, tuple[str, str]] | None = None,
+    unhandled_only: bool = False,
 ) -> str:
     """prompts レポート。
 
     tracking: (cluster_rep 正規化文, 実験タイトル) のリスト。
     代表文が一致するクラスタに「📉 追跡中」を付記する。
+    ledger_by_rep: normalize 代表文 → (PRM-ID, status)。表示に ID と status を付与。
+    unhandled_only: status=new（または台帳未登録）のみ表示。
     """
-    header = f"# 💬 プロンプト資産化レポート（過去{days}日・依頼{len(prompts)}件）\n"
+    header = f"# プロンプト資産化レポート（過去{days}日・依頼{len(prompts)}件）\n"
     if not prompts:
         return header + (
             "\n構造化AIテレメトリの依頼が見つかりませんでした。"
@@ -132,13 +136,39 @@ def render_prompt_report(
         if rep:
             track_map[rep] = title
 
+    # 台帳照合（表示用）。upsert 後に渡す想定
+    ledger = ledger_by_rep or {}
+
+    def _ledger_meta(c: PromptCluster) -> tuple[str, str] | None:
+        hit = ledger.get(c.representative)
+        if hit:
+            return hit
+        # 類似度は呼び出し側で代表キーを揃えている前提。フォールバックなし
+        return None
+
+    if unhandled_only:
+        filtered: list[PromptCluster] = []
+        for c in clusters:
+            meta = _ledger_meta(c)
+            if meta is None or meta[1] == "new":
+                filtered.append(c)
+        clusters = filtered
+        if not clusters:
+            return header + "\n未処理（status=new）のクラスタはありません。\n"
+
     lines = [header]
     lines.append(f"{min_count}回以上繰り返された依頼: {len(clusters)}パターン\n")
     for i, c in enumerate(clusters[:max_clusters], 1):
         example = c.example.replace("\n", " ")
         if len(example) > 100:
             example = example[:97] + "..."
-        lines.append(f"## {i}. {c.count}回 / {len(c.days)}日 / {', '.join(sorted(c.projects))}")
+        meta = _ledger_meta(c)
+        if meta:
+            pid, st = meta
+            head = f"## {i}. {pid} [{st}] {c.count}回 / {len(c.days)}日 / {', '.join(sorted(c.projects))}"
+        else:
+            head = f"## {i}. {c.count}回 / {len(c.days)}日 / {', '.join(sorted(c.projects))}"
+        lines.append(head)
         lines.append("")
         lines.append(f"> {example}")
         lines.append("")

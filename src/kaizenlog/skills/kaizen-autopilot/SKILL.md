@@ -12,7 +12,8 @@ description: KaizenLogが検出した繰り返しパターンから自動化コ�
 
 1. **パターン検出**: 次の2つを実行し、レポートを読む。
    - `kaizenlog patterns --days 14`（行動の繰り返しパターン）
-   - `kaizenlog prompts --days 14`（Claude Codeへの繰り返し依頼＝プロンプト資産化の候補）
+   - `kaizenlog prompts --unhandled --days 14`（プロンプト資産化の**未処理**候補のみ。
+     status が skilled / dismissed のクラスタは台帳で除外済みなので**提案しない**）
    コマンドが使えない場合はボールトの `.kaizenlog/stats/*.json`（日次統計）を直接読んで
    同等の分析をする。データが3日分未満なら「データ不足」と報告して終了する。
 
@@ -30,12 +31,15 @@ description: KaizenLogが検出した繰り返しパターンから自動化コ�
        頻出依頼があれば `.claude/skills/` にスキルとして切り出す
    - **時間泥棒**（エンタメ等）
      → コードでは解決しない。カイゼン実験の起票だけにとどめる
-   - **繰り返しプロンプト**（`kaizenlog prompts` で検出された頻出依頼）
+   - **繰り返しプロンプト**（`kaizenlog prompts --unhandled` で検出された頻出依頼）
      → 対象プロジェクトの `.claude/skills/<内容のslug>/SKILL.md` としてスキル化する。
        依頼の共通部分（前提・制約・出力形式）をスキル本文に固定し、変動部分を引数にする。
        あわせてボールトの `04 Resources/Prompt Library.md` に「発掘したプロンプト→
        スキル/テンプレの対応表」を追記する（無ければ作成）。ノートには生のプロンプト
-       全文ではなく要約を書くこと（機密が含まれ得るため）
+       全文ではなく要約を書くこと（機密が含まれ得るため）。
+       **スキル化を実装したら** `kaizenlog prompts mark <PRM-ID> skilled --skill <名前>`
+       を実行して台帳へ記録する（翌週の再提案を防ぐ）。却下するなら
+       `kaizenlog prompts mark <PRM-ID> dismissed`。
 
 4. **実装と提出**:
    - 対象が**gitリポジトリ内**の場合:
@@ -56,11 +60,12 @@ description: KaizenLogが検出した繰り返しパターンから自動化コ�
    **繰り返しプロンプトをスキル化した場合（必須）**: 生依頼が減ったかを測るため、
    実験ノートに次を必ず入れる:
    - `metric: prompt_cluster:<slug>`（slug はスキル名など）
-   - `cluster_rep: <正規化代表文>` — `kaizenlog prompts` のクラスタ代表（正規化済み）から採る。
+   - `cluster_id: PRM-YYYYMMDD-NNN` — 台帳 ID を優先（手書き代表文のコピペミスを防ぐ）
+   - （後方互換）`cluster_rep: <正規化代表文>` — ID が無い旧ノート用。
      **機密を含む生の依頼全文をそのまま書かない**
    - `target: "<= 0"`（スキル化後は同型の生依頼が0件/日を目標）
    - `deadline` は14日後
-   毎晩の `generate` が `cluster_rep` 類似の依頼件数を自動計測する。
+   毎晩の `generate` が `cluster_id`（なければ `cluster_rep`）類似の依頼件数を自動計測する。
 
 6. **報告**: 最後に以下を簡潔にまとめる:
    - 実装した自動化（ブランチ/PR/提案ノートへのリンク）

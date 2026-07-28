@@ -13,6 +13,7 @@ from .experiments import (
     target_met,
 )
 from .memory import load_entries
+from .promptledger import format_ledger_line, ledger_status_counts, load_prompt_ledger
 from .stats import load_stats
 from .vault import WEEKLY_CONTEXT_MARKER, atomic_write_text, upsert_section
 
@@ -285,6 +286,20 @@ def render_weekly_context(
     )
     lines.append(
         "- 採否推奨は表示のみ（frontmatter の status は自動変更しない）。"
+    )
+
+    # プロンプト資産台帳: new のみ列挙 + スキル化/却下サマリ
+    ledger = load_prompt_ledger(memory_dir)
+    counts = ledger_status_counts(ledger)
+    new_ents = [e for e in ledger if e.status == "new"]
+    lines.extend(["", "## プロンプト資産（未処理クラスタ）", ""])
+    if new_ents:
+        for e in sorted(new_ents, key=lambda x: (-x.count_total, x.id)):
+            lines.append(f"- {format_ledger_line(e)}")
+    else:
+        lines.append("- （new なし）")
+    lines.append(
+        f"（スキル化済み {counts['skilled']}件 / 却下 {counts['dismissed']}件）"
     )
     lines.append("")
     return "\n".join(lines)

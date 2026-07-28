@@ -324,8 +324,13 @@ kaizenlog patterns --days 14
 「毎日9時台にchromeで25分の定型作業」のような繰り返しが検出されます。Claude Codeを使っているなら、繰り返している依頼も発掘できます：
 
 ```powershell
-kaizenlog prompts --days 14   # 「5回/5日: ニュースを要約して… → スキル化を強く推奨」
+kaizenlog prompts --days 14   # PRM-ID 付きで台帳 upsert。「5回/5日: … → スキル化を強く推奨」
+kaizenlog prompts --unhandled # status=new のみ（autopilot 入力）
+kaizenlog prompts mark PRM-20260729-001 skilled --skill ai-news-summary
+kaizenlog prompts mark 001 dismissed
 ```
+
+台帳は `<vault>/Kaizen/Memory/prompt_clusters.jsonl`（追記型後勝ち）。代表文は `[privacy] redact_patterns` 適用後に保存します。
 
 自動化まで任せるなら `claude -p "/kaizen-autopilot"` — 定型作業のスクリプト化や頻出依頼のスキル化が、PRまたは`00 Inbox/`の提案ノートとして提出され、**あなたが承認するまで何も有効化されません**。
 
@@ -347,7 +352,8 @@ kaizenlog prompts --days 14   # 「5回/5日: ニュースを要約して… →
 | `kaizenlog eval run [--cases DIR] [--repeat N] [--min-pass-rate X]` | 契約合格率の集計（開発者向け） |
 | `kaizenlog patterns [--days N]` | 繰り返しパターン検出レポート |
 | `kaizenlog report [--no-llm] [--write]` | 提出用の日報ドラフト生成 |
-| `kaizenlog prompts [--days N] [--min-count N]` | Claude Codeへの繰り返し依頼の発掘 |
+| `kaizenlog prompts [--days N] [--min-count N] [--unhandled]` | 繰り返し依頼の発掘＋台帳 upsert |
+| `kaizenlog prompts mark <id> skilled\|dismissed [--skill NAME]` | クラスタをスキル化済み/却下に記録 |
 | `kaizenlog skill install [--vault PATH] [--force]` | Claude Codeスキル3種をボールトに配置（既存は上書きせずdiff案内） |
 | `kaizenlog skill show` / `skill doctor` | 同梱スキルの一覧／インストール状態の確認 |
 | `kaizenlog setup` | 対話式セットアップウィザード（導入の正規経路） |
@@ -410,6 +416,7 @@ browser_export_dir = "~/Downloads/kaizenlog-browser-ai"
 - 活動データ・統計はすべてPC内（ボールト内）に保存。外部送信はLLM呼び出し時のプロンプトのみ
 - **レダクション**: `config.toml` の `[privacy] redact_patterns` に正規表現を書くと、LLM送信前に該当箇所が `[REDACTED]` にマスクされます（日誌本体は原文のまま）。`kaizenlog advise --dry-run` でマスク後の送信内容を確認できます。さらに送信を絞るなら `[llm] system_prompt = "privacy_safe"` を併用してください
 - セッション「内容」列の依頼抜粋も同じ redact を通します（ブラウザ JSONL に本文がある場合）
+- **プロンプト代表文は redact 適用後に** `prompt_clusters.jsonl` 台帳へ保存します（ボールト同期での逐語漏れ防止。日誌原文主義の意図的例外）
 - 完全オフラインにしたい場合はOllamaバックエンドを選択
 - ウィンドウタイトルには機密が含まれ得ます。ボールトをGitHub同期している場合はプライベートリポジトリにしてください
 - 特定アプリを記録から外したい場合はActivityWatch側の設定でも、`min_block_minutes` を上げてタイムラインへの表示を減らすことでも調整できます

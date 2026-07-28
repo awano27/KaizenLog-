@@ -45,8 +45,9 @@ METRIC_DESCRIPTIONS = {
     "focus_minutes": "集中ブロックの合計時間（分）",
     "input_keypresses": "1日のキー入力数",
     "prompt_cluster:<slug>": (
-        "指定クラスタに類似する生依頼の件数/日（要 frontmatter cluster_rep。"
-        "スキル化後の効果測定用）"
+        "指定クラスタに類似する生依頼の件数/日"
+        "（frontmatter の cluster_id: PRM-... を優先。"
+        "無ければ cluster_rep。スキル化後の効果測定用）"
     ),
 }
 
@@ -83,6 +84,8 @@ class Experiment:
     measurements: dict[date, float] = field(default_factory=dict)
     # prompt_cluster 計測用: 正規化済み代表文（機密を含む生文を書かないこと）
     cluster_rep: str | None = None
+    # 台帳 ID（PRM-...）。あれば cluster_rep より優先
+    cluster_id: str | None = None
     # frontmatter `date`（実験開始日）。不正・欠落は None
     start: date | None = None
 
@@ -490,6 +493,9 @@ def load_experiments(experiments_dir: Path) -> list[Experiment]:
         cluster_rep = fields.get("cluster_rep") or None
         if cluster_rep is not None:
             cluster_rep = cluster_rep.strip() or None
+        cluster_id = fields.get("cluster_id") or None
+        if cluster_id is not None:
+            cluster_id = cluster_id.strip() or None
         experiments.append(
             Experiment(
                 path=path,
@@ -502,6 +508,7 @@ def load_experiments(experiments_dir: Path) -> list[Experiment]:
                 deadline=deadline,
                 measurements=_parse_measurements(content),
                 cluster_rep=cluster_rep,
+                cluster_id=cluster_id,
                 start=start,
             )
         )
