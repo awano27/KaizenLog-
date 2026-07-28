@@ -506,6 +506,17 @@ def build_advice_evidence(
 
     lines.append(_transition_fact(blocks, timezone))
 
+    # 計測可否（F10 と入口ガードで同じ判定源を使う）
+    # F10 が履歴から帯だけ出し、当日 watcher 停止時も focus_*/ai_* を推奨すると
+    # モデルが PASS 条件に書いて入口ガード(advice_format)が契約エラー→L2縮退する。
+    # 入口ガードと同じフラグで帯を抑止し対称にする。
+    input_metrics_available = _valid_count_fields(
+        stats.get("input"), ("focus_blocks", "focus_minutes", "active_input_minutes")
+    )
+    structured_ai_metrics_available = ai_stats_valid
+    by_site_val_early = stats.get("by_site")
+    site_metrics_available = _valid_number_mapping(by_site_val_early)
+
     # F10: 推奨PASS帯（過去14日中央値×0.85〜0.95）。ガイドであり外れてよい
     band_parts: list[str] = []
     history_list = list(history or [])
@@ -547,22 +558,26 @@ def build_advice_evidence(
             band_parts.append(
                 f"category_minutes:{cat} {m * 0.85:.0f}〜{m * 0.95:.0f}分"
             )
-    focus_vals = _hist_values(
-        lambda h: (h.get("input") or {}).get("focus_blocks")
-        if isinstance(h.get("input"), dict)
-        else None
-    )
-    if len(focus_vals) >= 3:
-        m = float(median(focus_vals))
-        band_parts.append(f"focus_blocks {m * 0.85:.1f}〜{m * 0.95:.1f}")
-    ai_sess_vals = _hist_values(
-        lambda h: (h.get("ai") or {}).get("sessions")
-        if isinstance(h.get("ai"), dict)
-        else None
-    )
-    if len(ai_sess_vals) >= 3:
-        m = float(median(ai_sess_vals))
-        band_parts.append(f"ai_cc_sessions {m * 0.85:.1f}〜{m * 0.95:.1f}")
+    # focus_*/ai_* 帯は当日計測可能時のみ（入口ガードと対称）
+    if input_metrics_available:
+        focus_vals = _hist_values(
+            lambda h: (h.get("input") or {}).get("focus_blocks")
+            if isinstance(h.get("input"), dict)
+            else None
+        )
+        if len(focus_vals) >= 3:
+            m = float(median(focus_vals))
+            band_parts.append(f"focus_blocks {m * 0.85:.1f}〜{m * 0.95:.1f}")
+    if structured_ai_metrics_available:
+        ai_sess_vals = _hist_values(
+            lambda h: (h.get("ai") or {}).get("sessions")
+            if isinstance(h.get("ai"), dict)
+            else None
+        )
+        if len(ai_sess_vals) >= 3:
+            m = float(median(ai_sess_vals))
+            band_parts.append(f"ai_cc_sessions {m * 0.85:.1f}〜{m * 0.95:.1f}")
+    # site 帯を将来足す場合も site_metrics_available を掛けること（現状は未使用）
     if band_parts:
         lines.append(
             "- [F10] 推奨PASS帯（過去14日中央値×0.85〜0.95）: "
@@ -651,19 +666,14 @@ def build_advice_evidence(
             "（離席時間を含む）。"
         )
 
-    by_site_val = stats.get("by_site")
-    site_metrics_available = _valid_number_mapping(by_site_val)
+    by_site_val = by_site_val_early
     observed_sites = (
         frozenset(str(k).lower() for k in by_site_val)
         if isinstance(by_site_val, Mapping)
         else frozenset()
     )
-    # 入力 / 構造化AI: PASS 入口で計測不能指標を弾くため
-    input_metrics_available = _valid_count_fields(
-        stats.get("input"), ("focus_blocks", "focus_minutes", "active_input_minutes")
-    )
-    # セッション0でも「計測経路はある」→ 0 は正当。欄自体が無いときだけ不可
-    structured_ai_metrics_available = ai_stats_valid
+    # input_metrics_available / structured_ai_metrics_available / site_metrics_available
+    # は F10 直前で計算済み（入口ガードと同じ判定源）
 
     return _evidence(
         lines,

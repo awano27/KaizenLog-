@@ -302,12 +302,33 @@ class ActionStats:
         return self.done_passed / self.done_judged
 
 
+def _execution_aligned_verdict(entry: MemoryEntry) -> bool:
+    """判定が「実行後」に帰属するか（実行済みPASS率の層別用）。
+
+    verdict は status=proposed の夜間判定で付き、後日チェックを付けても保持する
+    （判定を失わない設計）。ただし verdict_date < done_date のエントリは
+    「本人が動く前の測定で PASS した後に実行された」ケースで、done_passed に
+    入れると pass_rate / 較正指示が過大になる。
+
+    再判定トリガ化は意味論が複雑になるため見送り、ここでは層別のみ行う:
+    - verdict_date >= done_date（または日付欠落のレガシー行）→ 実行済み側
+    - verdict_date < done_date → 未実行での達成側
+    """
+    if entry.status != "done":
+        return False
+    if not entry.verdict_date or not entry.done_date:
+        # 旧 JSONL や done_date 未記録は従来どおり実行済み側
+        return True
+    return entry.verdict_date >= entry.done_date
+
+
 def compute_action_stats(
     entries: list[MemoryEntry], today: date, window_days: int = _STATS_WINDOW_DAYS
 ) -> ActionStats:
     """提案日が today-window 〜 today-1 のエントリを集計する。
 
     当日提案は実行機会がないため除外。skipped は分母から除外。
+    done かつ判定済みでも verdict_date < done_date なら undone_* 側に層別する。
     """
     start = (today - timedelta(days=window_days)).isoformat()
     end = (today - timedelta(days=1)).isoformat()
@@ -332,7 +353,8 @@ def compute_action_stats(
             judged += 1
             if e.verdict == "pass":
                 passed += 1
-            if e.status == "done":
+            # 実行後に帰属する判定のみ done_*（それ以外は未実行達成側）
+            if e.status == "done" and _execution_aligned_verdict(e):
                 done_judged += 1
                 if e.verdict == "pass":
                     done_passed += 1
@@ -388,10 +410,15 @@ class Streaks:
 
 def compute_streaks(entries: list[MemoryEntry], today: date) -> Streaks:
     """消化ストリーク（current / best）を計算する。"""
+    today_iso = today.isoformat()
     # 提案日ごとの status 集合
     by_day: dict[str, set[str]] = {}
     for e in entries:
         if not e.date or not _is_iso_date(e.date):
+            continue
+        # 破損 JSONL の遠未来 date（例 9999-01-01）を除外。
+        # 旧実装は end=max(days_sorted[-1], today) の全日走査のため 1 行で数秒化していた。
+        if e.date > today_iso:
             continue
         if e.status == "superseded":
             continue
@@ -425,25 +452,20 @@ def compute_streaks(entries: list[MemoryEntry], today: date) -> Streaks:
             continue
         break
 
-    # best: 対象日を古い順に走査
+    # best: 提案があった日付のみ走査（空カレンダー日は outcome=None と同義で連続を切らない）
     if by_day:
         days_sorted = sorted(date.fromisoformat(s) for s in by_day)
         best = 0
         run = 0
-        # 全日カレンダーではなく、提案があった日々の間の None 日はスキップ
-        cursor = days_sorted[0]
-        end = max(days_sorted[-1], today)
-        while cursor <= end:
-            outcome = day_outcome(cursor)
+        for day in days_sorted:
+            outcome = day_outcome(day)
             if outcome is None:
-                cursor += timedelta(days=1)
                 continue
             if outcome == "done":
                 run += 1
                 best = max(best, run)
             else:
                 run = 0
-            cursor += timedelta(days=1)
     else:
         best = 0
     best = max(best, current)
@@ -463,6 +485,7 @@ def metric_pass_rates(
     """指標別の実行済みPASS/判定数（直近 window_days・判定 min_judged 以上）。
 
     戻り値: (metric, done_passed, done_judged) を判定数降順。
+    verdict_date < done_date の事前オートPASSは compute_action_stats と同じく除外。
     """
     # 遅延 import（verdict との循環回避）
     from .verdict import parse_pass_condition
@@ -475,6 +498,9 @@ def metric_pass_rates(
         if e.status != "done":
             continue
         if e.verdict not in ("pass", "fail"):
+            continue
+        # 実行前判定は実行済みPASS率に混ぜない（§L1 と同層別）
+        if not _execution_aligned_verdict(e):
             continue
         if not e.date or not (start <= e.date <= end):
             continue
@@ -495,21 +521,34 @@ def metric_pass_rates(
     return rows
 
 
+# 2連続FAIL較正の判定窓（verdict_date 基準）
+_CONSECUTIVE_FAIL_WINDOW_DAYS = 30
+
+
 def _consecutive_metric_fails(
     entries: list[MemoryEntry], today: date, *, n: int = 2
 ) -> list[str]:
-    """同一指標で直近 n 連続の実行済みFAILがあればその指標名を返す。"""
+    """同一指標で直近 n 連続の実行済みFAILがあればその指標名を返す。
+
+    判定日（verdict_date 優先）が today から _CONSECUTIVE_FAIL_WINDOW_DAYS 日以内
+    のものだけを対象にする。窓外の古い連続FAILを永久に較正指示へ出さないため。
+    """
     from .verdict import parse_pass_condition
 
-    # 新しい判定から（verdict_date 優先、なければ date）
-    judged = [
-        e
-        for e in entries
-        if e.status == "done" and e.verdict in ("pass", "fail")
-    ]
+    window_start = (today - timedelta(days=_CONSECUTIVE_FAIL_WINDOW_DAYS)).isoformat()
+    today_iso = today.isoformat()
 
     def sort_key(e: MemoryEntry) -> str:
         return e.verdict_date or e.date or ""
+
+    # 新しい判定から（verdict_date 優先、なければ date）。窓内のみ。
+    judged = [
+        e
+        for e in entries
+        if e.status == "done"
+        and e.verdict in ("pass", "fail")
+        and window_start <= sort_key(e) <= today_iso
+    ]
 
     judged.sort(key=sort_key, reverse=True)
     by_metric: dict[str, list[str]] = {}
