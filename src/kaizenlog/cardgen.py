@@ -81,3 +81,61 @@ def write_abtest_card(path: Path, data: AbtestCardData) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, render_abtest_svg(data))
     return path
+
+
+@dataclass
+class ExcavateCardData:
+    period_label: str
+    loop_cost_usd: float | None
+    loop_cost_jpy: int | None
+    episode_count: int
+    worst_day: str | None
+    session_count: int = 0
+
+
+def render_excavate_svg(data: ExcavateCardData) -> str:
+    """発掘監査 SVG（stdlib のみ）。"""
+    title = "excavation audit"
+    period = escape(data.period_label)
+    if data.session_count == 0 and data.episode_count == 0:
+        body = (
+            '<text x="40" y="110" font-size="18" fill="#a00">計測なし</text>'
+            '<text x="40" y="140" font-size="13" fill="#666">'
+            "セッション0件（テレメトリなし）</text>"
+        )
+    else:
+        if data.loop_cost_usd is None:
+            cost_s = "不明"
+        else:
+            cost_s = f"${data.loop_cost_usd:.2f}"
+            if data.loop_cost_jpy is not None:
+                cost_s += f" / ¥{data.loop_cost_jpy}"
+        worst = escape(data.worst_day or "—")
+        # バー: エピソード数を 200px に正規化（上限 20 ep）
+        ep_w = int(min(200, data.episode_count * 10))
+        body = (
+            f'<text x="40" y="100" font-size="14" fill="#222">空転税</text>'
+            f'<text x="140" y="100" font-size="16" fill="#111">{escape(cost_s)}</text>'
+            + _bar(40, 140, ep_w, 200, "EP", str(data.episode_count), "#EA4335")
+            + f'<text x="40" y="190" font-size="13" fill="#555">最悪日: {worst}</text>'
+            + f'<text x="40" y="215" font-size="12" fill="#666">'
+            f"sessions {data.session_count}</text>"
+        )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="260" '
+        'viewBox="0 0 480 260">\n'
+        '<rect width="480" height="260" fill="#fafafa"/>\n'
+        f'<text x="40" y="36" font-size="18" font-weight="bold" fill="#111">'
+        f"{escape(title)}</text>\n"
+        f'<text x="40" y="60" font-size="13" fill="#555">{period}</text>\n'
+        f"{body}\n"
+        "</svg>\n"
+    )
+
+
+def write_excavate_card(path: Path, data: ExcavateCardData) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, render_excavate_svg(data))
+    return path

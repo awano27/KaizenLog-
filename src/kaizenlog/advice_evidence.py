@@ -417,6 +417,7 @@ def build_advice_evidence(
     source_status: str = "unverified",
     known_categories: Sequence[str] | frozenset[str] | None = None,
     action_stats: Any | None = None,
+    decay_events: Sequence[Any] | None = None,
 ) -> AdviceEvidence:
     """LLMがログの意味を取り違えないための根拠コンテキストを作る。
 
@@ -479,6 +480,10 @@ def build_advice_evidence(
             "- [F4] AI関連画面アクティビティの機械可読統計なし。時間・ブロック数は測定不能。",
             "- [F5] 構造化AIテレメトリの機械可読統計なし。発話数・往復数・品質は測定不能。",
         ])
+        for de in (decay_events or []):
+            detail = getattr(de, "detail", None) or ""
+            if detail:
+                lines.append(f"- [F17] 風化: {detail}")
         return _evidence(lines, known_categories=cats)
 
     blocks_value = stats.get("blocks")
@@ -919,6 +924,12 @@ def build_advice_evidence(
     # input_metrics_available / structured_ai_metrics_available / site_metrics_available
     # は F10 直前で計算済み（入口ガードと同じ判定源）
     metric_baselines = _metric_baselines_from_stats(stats)
+
+    # F17: 風化した改善（直近7日イベント。達成断定・自動再オープンはしない）
+    for de in (decay_events or []):
+        detail = getattr(de, "detail", None) or ""
+        if detail:
+            lines.append(f"- [F17] 風化: {detail}")
 
     return _evidence(
         lines,

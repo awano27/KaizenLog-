@@ -364,6 +364,19 @@ def render_weekly_context(
             lines.append(f"- 抜粋: {excerpt}")
     # 新形式が無い、または全日 episode 0 → 小節省略
 
+    # 風化した改善（直近7日）
+    try:
+        from .decay import format_decay_weekly_section, load_decay_events
+
+        decay_ev = load_decay_events(
+            memory_dir, window_days=7, as_of=days[-1]
+        )
+        decay_sec = format_decay_weekly_section(decay_ev)
+        if decay_sec:
+            lines.extend(["", decay_sec, ""])
+    except OSError:
+        pass
+
     # 目標トレース（観察のみ・達成判定なし）
     lines.extend(["", "## 目標", ""])
     goal_days = 0

@@ -366,6 +366,19 @@ kaizenlog prompts mark 001 dismissed
 | `kaizenlog --config PATH <cmd>` | 明示設定パス（サブコマンドより前） |
 
 
+### 発掘監査と風化センチネル（第29弾）
+
+| コマンド | 説明 |
+| --- | --- |
+| `kaizenlog excavate [--days 90] [--write] [--card]` | 過去ログを読み取り専用で走査し、空転税・最悪ループ日を即時表示。stats/日誌は書かない。`--write` で `memory/excavate/` へ冪等レポート、`--card` で SVG |
+
+**風化センチネル**（夜間 `run`/`generate` に自動配線）:
+
+- skilled 済み PRM の再発、採用実験の退行、KZN PASS 後の再悪化を検知
+- `kaizenlog status` に「⚠️ 風化した改善: N件（直近7日）」（0件なら非表示）
+- 週次コンテキストに「⚠️ 風化した改善」小節（イベント0なら省略）
+- advise の確定事実に `[F17]` として列挙（自動再オープンはしない）
+
 ### 計測から調教へ（第27弾）
 
 | コマンド | 説明 |

@@ -11,6 +11,7 @@
   kaizenlog handoff [--target PATH ...] [--dry-run]  実測教訓を CLAUDE.md 等へ注入
   kaizenlog coach [--dry-run] [--apply FILE]  コパイロット調教パック（承認制）
   kaizenlog abtest new|finish|status       パーソナル METR 実験
+  kaizenlog excavate [--days N] [--write] [--card]  過去ログ発掘監査
   kaizenlog backfill [--days N]            欠損日の日誌・統計をまとめて補完する
   kaizenlog status                         実行履歴（最終成功・直近の失敗）を表示
   kaizenlog doctor                         セットアップと環境の健全性を診断
@@ -238,14 +239,15 @@ def cmd_generate(
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
-        # ループ税閾値通知（閾値超過のみ。同額は発火しない）
+        # ループ税閾値通知（閾値超過のみ。同額は発火しない）— _notify 経由で runlog に残す
         alert = getattr(cfg.aiwork, "loop_tax_alert_usd", None)
         if (
             alert is not None
             and loop_tax.est_cost_usd is not None
             and loop_tax.est_cost_usd > float(alert)
         ):
-            notify(
+            _notify(
+                cfg,
                 "KaizenLog ループ税",
                 format_loop_tax_line(
                     loop_tax, usd_jpy=getattr(cfg.aiwork, "usd_jpy", None)
@@ -356,6 +358,28 @@ def cmd_generate(
             f"⚠️  退行検知: 「{exp.title}」が採用後に目標未達"
             f"（直近7日で{misses}/{len(recent)}日未達）。再実験を検討してください"
         )
+
+    # 改善風化センチネル（stats 書き込み後・夜間 run に乗る）
+    try:
+        from .decay import run_decay_detection
+
+        decay_fresh = run_decay_detection(
+            cfg,
+            as_of=day,
+            prompts=day_prompts if cfg.aiwork.enabled else [],
+            redactor=title_redactor,
+        )
+        for ev in decay_fresh:
+            print(f"⚠️  風化: [{ev.kind}] {ev.ref_id} — {ev.detail}")
+        if decay_fresh:
+            _notify(
+                cfg,
+                "KaizenLog 風化",
+                f"風化した改善: {len(decay_fresh)}件",
+                icon="Warning",
+            )
+    except Exception as e:
+        print(f"⚠️  風化検知をスキップ: {e}", file=sys.stderr)
 
     # A1: 前日提案の PASS 機械判定 → Memory と前日ノートへ書き戻し
     memory_entries = load_entries(cfg.memory_path)
@@ -838,6 +862,14 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
                 source_status = "mismatch"
         else:
             source_status = "unverified"
+    try:
+        from .decay import load_decay_events
+
+        decay_for_f17 = load_decay_events(
+            cfg.memory_path, window_days=7, as_of=day
+        )
+    except Exception:
+        decay_for_f17 = []
     evidence_ctx = build_advice_evidence(
         current_stats,
         prior_stats,
@@ -845,6 +877,7 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         source_status=source_status,
         known_categories=known_category_names(cfg.rules),
         action_stats=action_stats,
+        decay_events=decay_for_f17,
     )
 
     redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
@@ -1339,6 +1372,61 @@ def cmd_prompts(
             unhandled_only=unhandled_only,
         )
     )
+
+
+def cmd_excavate(
+    cfg: Config,
+    *,
+    days: int = 90,
+    write: bool = False,
+    card: bool = False,
+    as_of: date | None = None,
+) -> int:
+    """過去ログ発掘監査（読み取り専用）。"""
+    from .cardgen import ExcavateCardData, write_excavate_card
+    from .excavate import (
+        format_excavate_report,
+        run_excavate,
+        write_excavate_report,
+    )
+
+    as_of = as_of or datetime.now(ZoneInfo(cfg.timezone)).date()
+    redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
+    try:
+        report = run_excavate(cfg, days=days, as_of=as_of, redactor=redactor)
+    except FileNotFoundError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+    body = format_excavate_report(report)
+    print(body)
+    if write:
+        path = cfg.memory_path / "excavate" / f"{as_of.isoformat()}.md"
+        write_excavate_report(path, body)
+        print(f"✅ レポートを書き込みました: {path}")
+    if card:
+        jpy = None
+        if report.loop_cost_usd is not None and report.usd_jpy:
+            jpy = int(round(report.loop_cost_usd * report.usd_jpy))
+        worst = (
+            report.worst_days[0].day.isoformat() if report.worst_days else None
+        )
+        cpath = cfg.memory_path / "cards" / f"excavate-{as_of.isoformat()}.svg"
+        write_excavate_card(
+            cpath,
+            ExcavateCardData(
+                period_label=report.period_label,
+                loop_cost_usd=report.loop_cost_usd,
+                loop_cost_jpy=jpy,
+                episode_count=report.loop_episodes,
+                worst_day=worst,
+                session_count=report.session_count,
+            ),
+        )
+        print(f"✅ カードを書き込みました: {cpath}")
+    return 0
 
 
 def cmd_handoff(
@@ -2109,6 +2197,28 @@ def main(argv: list[str] | None = None) -> int:
     ab_fin.add_argument("--id", default=None, help="abtest ID（省略時は最新の running）")
     ab_sub.add_parser("status", help="実験一覧")
 
+    exca = sub.add_parser(
+        "excavate",
+        help="過去ログ発掘監査（読み取り専用・stats/日誌は書かない）",
+    )
+    exca.add_argument(
+        "--days",
+        type=int,
+        default=90,
+        help="遡る日数（既定90）",
+    )
+    exca.add_argument(
+        "--write",
+        action="store_true",
+        help="レポートを memory/excavate/YYYY-MM-DD.md へ冪等書き込み",
+    )
+    exca.add_argument(
+        "--card",
+        action="store_true",
+        help="SVGカードを memory/cards/excavate-YYYY-MM-DD.svg へ出力",
+    )
+    exca.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
+
     args = parser.parse_args(argv)
 
     # 古いWindowsコンソール（cp932）での絵文字・日本語の文字化けを防ぐ
@@ -2262,8 +2372,28 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
         except Exception:
+            print("（ループ税: 取得失敗）")
+        # 風化 1行（0件なら非表示）
+        try:
+            from .decay import format_decay_status_line, load_decay_events
+
+            today = datetime.now(ZoneInfo(cfg.timezone)).date()
+            ev = load_decay_events(cfg.memory_path, window_days=7, as_of=today)
+            line = format_decay_status_line(ev)
+            if line:
+                print(line)
+        except Exception:
             pass
         return 0
+
+    if args.command == "excavate":
+        return cmd_excavate(
+            cfg,
+            days=int(getattr(args, "days", 90) or 90),
+            write=bool(getattr(args, "write", False)),
+            card=bool(getattr(args, "card", False)),
+            as_of=_parse_date(getattr(args, "date", None), ZoneInfo(cfg.timezone)),
+        )
 
     if args.command == "handoff":
         tz = ZoneInfo(cfg.timezone)

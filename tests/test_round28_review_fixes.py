@@ -502,6 +502,8 @@ def test_r6_generate_notify_threshold(tmp_path: Path):
         patch("kaizenlog.cli.notify") as n,
         patch("kaizenlog.cli.ActivityWatchClient"),
         patch("kaizenlog.cli.Classifier") as Cls,
+        patch("kaizenlog.cli.run_decay_detection", create=True),
+        patch("kaizenlog.decay.run_decay_detection", return_value=[]),
     ):
         Cls.return_value.classify_all.return_value = []
         cmd_generate(cfg, day)
@@ -522,6 +524,7 @@ def test_r6_generate_notify_threshold(tmp_path: Path):
         patch("kaizenlog.cli.notify") as n2,
         patch("kaizenlog.cli.ActivityWatchClient"),
         patch("kaizenlog.cli.Classifier") as Cls2,
+        patch("kaizenlog.decay.run_decay_detection", return_value=[]),
     ):
         Cls2.return_value.classify_all.return_value = []
         cmd_generate(cfg, day)
