@@ -252,6 +252,7 @@ def test_b4_notify_once_and_redact(tmp_path: Path):
         patch("kaizenlog.cli.ActivityWatchClient"),
         patch("kaizenlog.cli.Classifier") as Cls,
         patch("kaizenlog.decay.run_decay_detection", return_value=fresh),
+        patch("kaizenlog.coachledger.judge_coach_entries", return_value=[]),
         patch("kaizenlog.cli.notify") as n,
         patch("kaizenlog.cli.load_experiments", return_value=[]),
         patch("kaizenlog.cli.detect_regressions", return_value=[]),
@@ -259,14 +260,9 @@ def test_b4_notify_once_and_redact(tmp_path: Path):
         patch("kaizenlog.cli.load_entries", return_value=[]),
     ):
         Cls.return_value.classify_all.return_value = []
-        # run_decay is imported inside cmd_generate from .decay
-        with patch("kaizenlog.cli.run_decay_detection", create=True):
-            pass
-        # The import is `from .decay import run_decay_detection` inside function
-        with patch("kaizenlog.decay.run_decay_detection", return_value=fresh):
-            cmd_generate(cfg, day)
-        # decay notify + maybe loop tax none
-        assert n.call_count >= 1
+        # aiwork disabled path: no sessions → no loop tax notify; decay only
+        cmd_generate(cfg, day)
+        assert n.call_count == 1
         titles = [c.args[0] for c in n.call_args_list]
         assert any("風化" in t for t in titles)
 

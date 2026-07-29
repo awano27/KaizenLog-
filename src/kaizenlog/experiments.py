@@ -37,6 +37,7 @@ METRIC_DESCRIPTIONS = {
     "ai_fragmented_sessions": "2往復以下の細切れAI CLIセッション数",
     "ai_retry_chains": "リトライ連鎖数（30分以内のほぼ同文の再依頼）",
     "ai_tool_errors": "AI CLI合算のツールエラー回数",
+    "loop_tax_episodes": "ループ税エピソード数・ai.loop_tax.episode_count",
     "ai_interruptions": "AI CLI合算のユーザー中断・拒否回数",
     "ai_avg_turns": "AI CLIセッションの平均往復数",
     "ai_output_tokens": "AI CLI合算の応答トークン量",
@@ -234,6 +235,13 @@ def metric_from_stats(
         return float(v) if isinstance(v, (int, float)) else None
     if metric == "ai_tool_errors":
         v = ai.get("tool_errors")
+        return float(v) if isinstance(v, (int, float)) else None
+    if metric == "loop_tax_episodes":
+        # loop_tax 欠落日は測定不能（None）。episode_count=0 は計測済み
+        lt = ai.get("loop_tax")
+        if not isinstance(lt, dict):
+            return None
+        v = lt.get("episode_count")
         return float(v) if isinstance(v, (int, float)) else None
     if metric == "ai_interruptions":
         v = ai.get("interruptions")

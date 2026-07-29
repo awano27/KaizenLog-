@@ -381,6 +381,42 @@ def cmd_generate(
     except Exception as e:
         print(f"⚠️  風化検知をスキップ: {e}", file=sys.stderr)
 
+    # コーチ効果検証台帳の夜間判定
+    try:
+        from .coachledger import (
+            generate_rollback_proposal,
+            judge_coach_entries,
+        )
+
+        coach_results = judge_coach_entries(
+            cfg.memory_path,
+            cfg.stats_path,
+            as_of=day,
+            redactor=title_redactor,
+        )
+        fail_notified = False
+        for ce in coach_results:
+            print(
+                f"🎓 コーチ判定: {ce.id} → {ce.status}"
+                f"（{ce.verdict_detail or ''}）"
+            )
+            if ce.status == "fail":
+                rb = generate_rollback_proposal(
+                    cfg.memory_path, ce, as_of=day
+                )
+                if rb is not None:
+                    print(f"   ロールバック提案: {rb}")
+                if not fail_notified:
+                    _notify(
+                        cfg,
+                        "KaizenLog コーチFAIL",
+                        f"{ce.id}: {ce.verdict_detail or 'FAIL'}",
+                        icon="Warning",
+                    )
+                    fail_notified = True
+    except Exception as e:
+        print(f"⚠️  コーチ判定をスキップ: {e}", file=sys.stderr)
+
     # A1: 前日提案の PASS 機械判定 → Memory と前日ノートへ書き戻し
     memory_entries = load_entries(cfg.memory_path)
     proposal_day = day - timedelta(days=1)
@@ -870,6 +906,12 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         )
     except Exception:
         decay_for_f17 = []
+    try:
+        from .coachledger import load_coach_ledger
+
+        coach_for_f18 = load_coach_ledger(cfg.memory_path)
+    except Exception:
+        coach_for_f18 = []
     evidence_ctx = build_advice_evidence(
         current_stats,
         prior_stats,
@@ -878,6 +920,7 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         known_categories=known_category_names(cfg.rules),
         action_stats=action_stats,
         decay_events=decay_for_f17,
+        coach_entries=coach_for_f18,
     )
 
     redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
@@ -1493,13 +1536,56 @@ def cmd_coach(
                 file=sys.stderr,
             )
             return 1
+        prop_path = Path(apply_file).expanduser()
         try:
-            written = apply_proposal(Path(apply_file).expanduser(), targets)
+            # 適用前に kind / append を読む（成功後 applied=true になる）
+            from .coach import _parse_proposal_text, _parse_rollback_remove_md
+            from .vault import read_text_preserve_newlines
+
+            pre_text = read_text_preserve_newlines(prop_path)
+            pre_fields, pre_append = _parse_proposal_text(pre_text)
+            is_rollback = pre_fields.get("kind", "").strip().lower() == "rollback"
+            if is_rollback:
+                pre_append = _parse_rollback_remove_md(pre_text)
+            written = apply_proposal(prop_path, targets)
         except AdvisorError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            return 1
+        except OSError as e:
             print(f"❌ {e}", file=sys.stderr)
             return 1
         for p in written:
             print(f"✅ coach を適用しました: {p}")
+        # 台帳記録
+        try:
+            from .coachledger import mark_rolled_back, record_coach_application
+            import json as _json
+
+            if is_rollback:
+                lid = pre_fields.get("ledger_id", "").strip()
+                if lid:
+                    mark_rolled_back(cfg.memory_path, lid, as_of=as_of)
+                    print(f"📒 台帳を rolled_back に更新: {lid}")
+            else:
+                # evidence は frontmatter の JSON 文字列
+                ev_raw = pre_fields.get("evidence", "[]")
+                try:
+                    evidence = _json.loads(ev_raw)
+                except _json.JSONDecodeError:
+                    evidence = []
+                if not isinstance(evidence, list):
+                    evidence = []
+                entry = record_coach_application(
+                    cfg.memory_path,
+                    as_of=as_of,
+                    proposal_path=prop_path,
+                    targets=written,
+                    evidence=evidence,
+                    append_md=pre_append,
+                )
+                print(f"📒 コーチ台帳に記録: {entry.id} (watching)")
+        except Exception as e:
+            print(f"⚠️  コーチ台帳の記録に失敗: {e}", file=sys.stderr)
         return 0
 
     redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
@@ -2382,6 +2468,15 @@ def main(argv: list[str] | None = None) -> int:
             line = format_decay_status_line(ev)
             if line:
                 print(line)
+        except Exception:
+            pass
+        # コーチ台帳 1行（空なら非表示）
+        try:
+            from .coachledger import format_coach_status_line, load_coach_ledger
+
+            cline = format_coach_status_line(load_coach_ledger(cfg.memory_path))
+            if cline:
+                print(cline)
         except Exception:
             pass
         return 0

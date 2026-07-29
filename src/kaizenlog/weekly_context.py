@@ -377,6 +377,16 @@ def render_weekly_context(
     except OSError:
         pass
 
+    # コーチ勝率
+    try:
+        from .coachledger import format_coach_weekly_section, load_coach_ledger
+
+        coach_sec = format_coach_weekly_section(load_coach_ledger(memory_dir))
+        if coach_sec:
+            lines.extend(["", coach_sec, ""])
+    except OSError:
+        pass
+
     # 目標トレース（観察のみ・達成判定なし）
     lines.extend(["", "## 目標", ""])
     goal_days = 0

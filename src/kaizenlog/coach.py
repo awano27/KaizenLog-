@@ -374,14 +374,28 @@ def proposal_diff_text(append_md: str) -> str:
     return "\n".join(lines)
 
 
+def _parse_rollback_remove_md(text: str) -> str:
+    """ロールバック提案本文から除去対象 Markdown を取り出す。"""
+    m = re.search(r"##\s*除去対象\s*\n+([\s\S]*?)(?=\n##\s|\Z)", text)
+    if m:
+        return m.group(1).strip()
+    # フォールバック: 通常提案パーサ
+    _, body = _parse_proposal_text(text)
+    return body.strip()
+
+
 def _validate_proposal_for_apply(
     proposal_path: Path,
     targets: list[Path],
-) -> tuple[bytes, str, str, list[tuple[Path, bytes, str]]]:
-    """事前検証。成功時は (prop_bytes, prop_text, append_md, [(path, orig_bytes, new_content)...])。
+) -> tuple[bytes, str, str, list[tuple[Path, bytes, str]], dict[str, str]]:
+    """事前検証。
 
+    成功時: (prop_bytes, prop_text, append_md, prepared, fields)
+    prepared は (path, orig_bytes, new_content)。
     失敗時は AdvisorError（副作用なし）。
     """
+    from .vault import extract_section
+
     proposal_path = Path(proposal_path)
     if not proposal_path.exists():
         raise AdvisorError(f"提案ファイルが存在しません: {proposal_path}")
@@ -405,15 +419,23 @@ def _validate_proposal_for_apply(
         raise AdvisorError(f"既に適用済みです: {proposal_path}")
     if applied_raw not in ("false", "no", "0"):
         raise AdvisorError(f"applied は false である必要があります: {applied_raw!r}")
-    if not append_md.strip():
-        raise AdvisorError("提案本文が空です")
-    non_empty = [ln for ln in append_md.splitlines() if ln.strip()]
-    if not (3 <= len(non_empty) <= 7):
-        raise AdvisorError(
-            f"追記本文は3-7非空行である必要があります（実際 {len(non_empty)} 行）"
-        )
     if not targets:
         raise AdvisorError("targets が空です")
+
+    is_rollback = fields.get("kind", "").strip().lower() == "rollback"
+    if is_rollback:
+        remove_md = _parse_rollback_remove_md(prop_text)
+        if not remove_md.strip():
+            raise AdvisorError("ロールバック提案の除去対象が空です")
+        append_md = remove_md
+    else:
+        if not append_md.strip():
+            raise AdvisorError("提案本文が空です")
+        non_empty = [ln for ln in append_md.splitlines() if ln.strip()]
+        if not (3 <= len(non_empty) <= 7):
+            raise AdvisorError(
+                f"追記本文は3-7非空行である必要があります（実際 {len(non_empty)} 行）"
+            )
 
     prepared: list[tuple[Path, bytes, str]] = []
     for t in targets:
@@ -429,9 +451,23 @@ def _validate_proposal_for_apply(
             raise AdvisorError(f"target が UTF-8 ではありません: {t}") from e
         except OSError as e:
             raise AdvisorError(f"target を読めません: {t}: {e}") from e
-        updated = upsert_section(content, COACH_MARKER, append_md, position="bottom")
+        if is_rollback:
+            current = extract_section(content, COACH_MARKER)
+            # 行単位で空白正規化して比較（改行コード差を吸収）
+            def _norm(s: str) -> str:
+                return "\n".join(
+                    ln.rstrip() for ln in s.replace("\r\n", "\n").split("\n")
+                ).strip()
+
+            if _norm(current or "") != _norm(append_md):
+                raise AdvisorError("対象区間は別の提案で上書き済みです")
+            updated = upsert_section(content, COACH_MARKER, "", position="bottom")
+        else:
+            updated = upsert_section(
+                content, COACH_MARKER, append_md, position="bottom"
+            )
         prepared.append((t, orig, updated))
-    return prop_bytes, prop_text, append_md, prepared
+    return prop_bytes, prop_text, append_md, prepared, fields
 
 
 def apply_proposal(
@@ -440,9 +476,10 @@ def apply_proposal(
 ) -> list[Path]:
     """提案を targets の coach マーカー区間へ書き込む。
 
+    kind=rollback の場合は除去モード（一致時のみ空区間へ）。
     事前検証失敗時は1バイトも書かない。書き込み途中失敗は rollback。
     """
-    prop_bytes, prop_text, _append, prepared = _validate_proposal_for_apply(
+    prop_bytes, prop_text, _append, prepared, _fields = _validate_proposal_for_apply(
         proposal_path, targets
     )
     # applied: true に更新した proposal content

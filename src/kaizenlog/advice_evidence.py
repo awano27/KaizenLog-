@@ -418,6 +418,7 @@ def build_advice_evidence(
     known_categories: Sequence[str] | frozenset[str] | None = None,
     action_stats: Any | None = None,
     decay_events: Sequence[Any] | None = None,
+    coach_entries: Sequence[Any] | None = None,
 ) -> AdviceEvidence:
     """LLMがログの意味を取り違えないための根拠コンテキストを作る。
 
@@ -484,6 +485,12 @@ def build_advice_evidence(
             detail = getattr(de, "detail", None) or ""
             if detail:
                 lines.append(f"- [F17] 風化: {detail}")
+        try:
+            from .coachledger import format_f18_lines
+
+            lines.extend(format_f18_lines(list(coach_entries or [])))
+        except Exception:
+            pass
         return _evidence(lines, known_categories=cats)
 
     blocks_value = stats.get("blocks")
@@ -930,6 +937,14 @@ def build_advice_evidence(
         detail = getattr(de, "detail", None) or ""
         if detail:
             lines.append(f"- [F17] 風化: {detail}")
+
+    # F18: コーチ効果判定
+    try:
+        from .coachledger import format_f18_lines
+
+        lines.extend(format_f18_lines(list(coach_entries or [])))
+    except Exception:
+        pass
 
     return _evidence(
         lines,

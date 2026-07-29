@@ -385,7 +385,7 @@ kaizenlog prompts mark 001 dismissed
 | --- | --- |
 | `kaizenlog handoff [--target PATH ...] [--dry-run]` | 実測教訓（リトライ傾向・ツールエラー・連続FAIL・skilled待ちPRM）を CLAUDE.md / AGENTS.md の `kaizenlog:agent-context` 区間へ冪等注入。`--target` 未指定時は config `[handoff] targets` |
 | `kaizenlog prompts --roi` | プロンプト資産ROIランキング（再発30日・推定tokens・skilled削減は後30日完了後のみ確定） |
-| `kaizenlog coach [--dry-run] [--apply FILE]` | 30日実測から CLAUDE.md 追記案を diff 提案（自動適用しない）。`--dry-run` はコンテキストのみ。`--apply` で承認適用（`kaizenlog:coach` 区間） |
+| `kaizenlog coach [--dry-run] [--apply FILE]` | 30日実測から CLAUDE.md 追記案を diff 提案（自動適用しない）。`--dry-run` はコンテキストのみ。`--apply` で承認適用（`kaizenlog:coach` 区間）。適用後は `coach_ledger.jsonl` で7日後に機械判定し、FAIL ならロールバック提案を生成（再適用も承認ゲート）。勝率は weekly/status/F18 に表示 |
 | `kaizenlog abtest new --predict +30 [--days 28]` | パーソナルMETR実験の開始（予測%） |
 | `kaizenlog abtest finish --felt +20` | 体感入力・実測効果量・SVGカード生成・終了日ADVICE区間へ1行。baseline不足時は不成立 |
 | `kaizenlog abtest status` | 実験一覧 |
