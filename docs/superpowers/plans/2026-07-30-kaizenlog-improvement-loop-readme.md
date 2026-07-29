@@ -174,7 +174,7 @@ Use three equal cards connected by arrows. Use `#75CFA3` for Measure and arrows,
 
 - [ ] **Step 2: Rebuild `section-loop.svg` as the detailed loop**
 
-Use `viewBox="0 0 1200 260"` and these exact labels:
+Use `viewBox="0 0 1200 760"` with three vertically stacked, full-width stage cards so the required labels remain readable at a 360px GitHub render. Use these exact labels:
 
 ```text
 MEASURE / ムダを測る
