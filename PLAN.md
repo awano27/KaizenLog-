@@ -328,3 +328,35 @@
 - 同一バケットの非対象イベント数と非対象イベントIDが保持される。
 - 再生成した日誌と統計JSONに対象タイトル・対象イベントが残らない。
 - 全pytestまたは対象回帰テスト、`git diff --check`が成功する。
+
+# GitHub README 再設計（2026-07-29）
+
+## Goal breakdown
+
+- `oil-oil/beautify-github-readme` を Codex スキルとして導入し、手順と制約を確認する。
+- 現行コード、CLI、設定、パッケージ情報、既存画像資産を根拠に、KaizenLog の価値が初見で伝わる README 設計を作る。
+- ユーザー承認済みの設計に基づいて `README.md` を再作成し、機能・導入手順・安全境界を現行実装と一致させる。
+- README のローカルリンク、記載コマンド、Markdown構造、差分を検証し、アプリ実装や公開状態を変更しない。
+
+## Dependencies and parallelizable work
+
+- 実リポジトリ、dirty tree、既存 README/PLAN、直近コミットを先に確認する。
+- 上流スキルの調査・導入と、KaizenLog のREADME根拠収集は独立して進められる。
+- READMEの構成案、見せ方、情報密度は、現状調査後に2〜3案を比較し、ユーザー承認を得て確定する。
+- 編集後のリンク検査、CLIヘルプ照合、Markdown静的検査は並行可能だが、最終レビューで統合する。
+
+## Risks and mitigations
+
+- READMEが実装より先走る: CLIヘルプ、`pyproject.toml`、設定例、現行ソースを一次根拠にし、未公開・未実装の機能を事実として書かない。
+- 既存のユーザー作業を壊す: 未追跡 `docs/HANDOFF.md` を変更、stage、commitせず、今回の対象を `README.md`、承認済み設計書、必要なPLAN追記に限定する。
+- 装飾過多で可読性を落とす: 外部バッジや画像は情報価値、保守性、アクセシビリティを基準に絞り、長い機能列挙を避ける。
+- 導入済みスキルや外部リンクが不正確になる: インストール先、上流README、ライセンス、リンク到達性を確認する。
+- ドキュメント作業が公開・実行副作用へ広がる: push、release、PyPI公開、実データ処理、ActivityWatch/LLM/Obsidian実行は行わない。
+
+## Acceptance criteria and tests
+
+- `beautify-github-readme` がローカルのCodexスキルディレクトリへ導入され、`SKILL.md` を読み取れる。
+- READMEの設計について、目的、対象読者、構成、ビジュアル方針、非目標がユーザー承認済みである。
+- `README.md` が、30秒で価値を理解できる冒頭、最短導入、主要ワークフロー、出力例、安全・プライバシー、開発導線を持つ。
+- README内の相対リンクと画像参照がすべてリポジトリ内で解決し、記載CLIが現行 `--help` と矛盾しない。
+- `git diff --check` とREADME静的検査が成功し、最終 `git status --short` に対象外ファイルの変更が増えていない。
