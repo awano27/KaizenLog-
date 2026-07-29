@@ -2185,14 +2185,14 @@ def main(argv: list[str] | None = None) -> int:
     ab_new.add_argument(
         "--predict",
         required=True,
-        help="予測効果 +N または +N%（例: +30）",
+        help="予測効果 +N または +N%%（例: +30）",
     )
     ab_new.add_argument("--days", type=int, default=28, help="期間日数（既定28）")
     ab_fin = ab_sub.add_parser("finish", help="体感入力と実測確定")
     ab_fin.add_argument(
         "--felt",
         required=True,
-        help="体感効果 +N または +N%",
+        help="体感効果 +N または +N%%",
     )
     ab_fin.add_argument("--id", default=None, help="abtest ID（省略時は最新の running）")
     ab_sub.add_parser("status", help="実験一覧")

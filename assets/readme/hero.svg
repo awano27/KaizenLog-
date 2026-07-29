@@ -1,104 +1,41 @@
-<svg xmlns="http://www.w3.org/2000/svg"
-     width="1200" height="520" viewBox="0 0 1200 520"
-     role="img" aria-labelledby="title desc">
-  <title id="title">KaizenLog — 一日のPC作業を、明日の改善1つに変える</title>
-  <desc id="desc">ActivityWatchの一日分の作業記録が、Obsidianの日誌と明日の具体的な改善1件に変わる様子。6時間42分と提案内容は表示例。</desc>
-
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">KaizenLog — AIとの仕事を、実測で調教する</title>
+  <desc id="desc">AIとのやり直しを測り、実測した教訓を次のAIへ渡し、変更前後の効果を確かめる閉ループ。</desc>
   <defs>
-    <pattern id="ledger-grid" width="32" height="32" patternUnits="userSpaceOnUse">
-      <path d="M32 0H0V32" fill="none" stroke="#75CFA3" stroke-opacity=".055" stroke-width="1"/>
-    </pattern>
-    <marker id="arrow-head" viewBox="0 0 10 10" refX="8" refY="5"
-            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0L10 5L0 10Z" fill="#75CFA3"/>
-    </marker>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#75CFA3" stroke-opacity=".055"/></pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#75CFA3"/></marker>
   </defs>
-
-  <rect width="1200" height="520" rx="30" fill="#0B1211"/>
-  <rect width="1200" height="520" rx="30" fill="url(#ledger-grid)"/>
-  <path d="M56 54H656" stroke="#2D493D" stroke-width="2"/>
-  <circle cx="56" cy="54" r="5" fill="#75CFA3"/>
-
-  <g id="title-block" transform="translate(56 42)"
-     font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Yu Gothic UI', sans-serif">
-    <text x="18" y="18" fill="#75CFA3" font-size="20" font-weight="700" letter-spacing="3">
-      KAIZENLOG · WINDOWS CLI
-    </text>
-
-    <text x="0" y="105" fill="#F4F0E8" font-size="64" font-weight="760" letter-spacing="-2">
-      今日のPC作業を、
-    </text>
-    <text x="0" y="176" fill="#F4F0E8" font-size="64" font-weight="760" letter-spacing="-2">
-      明日の改善1つへ。
-    </text>
-
-    <text x="2" y="232" fill="#B7C6BE" font-size="24" font-weight="500">
-      記録を集めるだけで終わらせない。
-    </text>
-    <text x="2" y="268" fill="#B7C6BE" font-size="24" font-weight="500">
-      ActivityWatch → Obsidian → 次に試すこと。
-    </text>
-
-    <g transform="translate(0 326)"
-       font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-       font-size="20" font-weight="700">
-      <rect width="172" height="48" rx="24" fill="#111D1A" stroke="#2D493D" stroke-width="2"/>
-      <text x="86" y="31" text-anchor="middle" fill="#D7E2DC">ACTIVITYWATCH</text>
-
-      <rect x="188" width="132" height="48" rx="24" fill="#111D1A" stroke="#2D493D" stroke-width="2"/>
-      <text x="254" y="31" text-anchor="middle" fill="#D7E2DC">OBSIDIAN</text>
-
-      <rect x="336" width="166" height="48" rx="24" fill="#111D1A" stroke="#2D493D" stroke-width="2"/>
-      <text x="419" y="31" text-anchor="middle" fill="#D7E2DC">OPTIONAL LLM</text>
+  <rect width="1200" height="620" rx="30" fill="#0B1211"/>
+  <rect width="1200" height="620" rx="30" fill="url(#grid)"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Yu Gothic UI', sans-serif">
+    <text x="60" y="68" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="20" font-weight="800" letter-spacing="3">KAIZENLOG / AI WORK LEDGER</text>
+    <text x="60" y="145" fill="#F4F0E8" font-size="54" font-weight="800">AIとの仕事を、実測で調教する。</text>
+    <text x="62" y="198" fill="#B7C6BE" font-size="30" font-weight="600">リトライのムダを測り、教訓を戻し、本当に効いたか確かめる。</text>
+    <path d="M60 234H1140" stroke="#315244" stroke-width="2"/>
+    <path d="M390 413H426" fill="none" stroke="#75CFA3" stroke-width="5" marker-end="url(#arrow)"/>
+    <path d="M774 413H810" fill="none" stroke="#75CFA3" stroke-width="5" marker-end="url(#arrow)"/>
+    <g transform="translate(60 286)">
+      <rect width="330" height="218" rx="20" fill="#111D1A" stroke="#75CFA3" stroke-width="3"/>
+      <text x="28" y="45" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800">01 MEASURE</text>
+      <text x="28" y="96" fill="#F4F0E8" font-size="35" font-weight="800">Loop Tax</text>
+      <text x="28" y="132" fill="#D7E2DC" font-size="25" font-weight="700">Prompt ROI</text>
+      <text x="28" y="180" fill="#81958C" font-size="20" font-weight="600">やり直しのコストを記録</text>
     </g>
-  </g>
-
-  <g id="project-proof" transform="translate(700 44)"
-     font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Yu Gothic UI', sans-serif">
-    <rect width="444" height="432" rx="24" fill="#101B18" stroke="#315244" stroke-width="2"/>
-    <path d="M0 66H444" stroke="#315244" stroke-width="2"/>
-
-    <rect x="24" y="20" width="92" height="30" rx="15" fill="#183127"/>
-    <text x="70" y="41" text-anchor="middle" fill="#75CFA3" font-size="18" font-weight="750">表示例</text>
-    <text x="420" y="40" text-anchor="end" fill="#81958C"
-          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-          font-size="18" font-weight="700">DAILY LEDGER</text>
-
-    <text x="28" y="103" fill="#81958C"
-          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-          font-size="18" font-weight="700" letter-spacing="2">TODAY'S PC ACTIVITY</text>
-    <text x="28" y="178" fill="#F4F0E8"
-          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-          font-size="70" font-weight="800" letter-spacing="-3">6h42m</text>
-
-    <path d="M250 148H304" fill="none" stroke="#75CFA3" stroke-width="5"
-          stroke-linecap="round" marker-end="url(#arrow-head)"/>
-
-    <text x="326" y="128" fill="#81958C"
-          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-          font-size="18" font-weight="700">NEXT</text>
-    <text x="326" y="170" fill="#F0B667"
-          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-          font-size="34" font-weight="800">1 ACTION</text>
-
-    <rect x="24" y="214" width="396" height="114" rx="16" fill="#0B1211" stroke="#2D493D" stroke-width="2"/>
-    <rect x="48" y="242" width="28" height="28" rx="5" fill="none" stroke="#F0B667" stroke-width="3"/>
-    <text x="94" y="259" fill="#F0B667" font-size="22" font-weight="750">9:00に25分の集中枠を入れる</text>
-    <text x="48" y="300" fill="#81958C"
-          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-          font-size="18" font-weight="700">KZN-20260729-001</text>
-
-    <g transform="translate(24 354)"
-       font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-       font-size="18" font-weight="700">
-      <circle cx="7" cy="7" r="7" fill="#75CFA3"/>
-      <text x="26" y="14" fill="#D7E2DC">MEASURE</text>
-      <path d="M124 7H166" stroke="#315244" stroke-width="2"/>
-      <circle cx="180" cy="7" r="7" fill="#75CFA3"/>
-      <text x="199" y="14" fill="#D7E2DC">REFLECT</text>
-      <path d="M297 7H339" stroke="#315244" stroke-width="2"/>
-      <circle cx="353" cy="7" r="7" fill="#F0B667"/>
-      <text x="372" y="14" fill="#F0B667">ACT</text>
+    <g transform="translate(444 286)">
+      <rect width="330" height="218" rx="20" fill="#17150F" stroke="#F0B667" stroke-width="3"/>
+      <text x="28" y="45" fill="#F0B667" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800">02 TEACH</text>
+      <text x="28" y="96" fill="#F4F0E8" font-size="35" font-weight="800">handoff</text>
+      <text x="28" y="132" fill="#F0B667" font-size="25" font-weight="700">coach</text>
+      <text x="28" y="180" fill="#B7A782" font-size="20" font-weight="600">次のAIへ教訓を渡す</text>
     </g>
+    <g transform="translate(828 286)">
+      <rect width="312" height="218" rx="20" fill="#111D1A" stroke="#D7E2DC" stroke-width="3"/>
+      <text x="28" y="45" fill="#F4F0E8" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800">03 VERIFY</text>
+      <text x="28" y="96" fill="#75CFA3" font-size="30" font-weight="800">predict</text>
+      <text x="28" y="132" fill="#F0B667" font-size="25" font-weight="700">felt / measured</text>
+      <text x="28" y="171" fill="#B7C6BE" font-size="18" font-weight="600">効果を予測・体感・</text>
+      <text x="28" y="197" fill="#B7C6BE" font-size="18" font-weight="600">実測で確認</text>
+    </g>
+    <text x="60" y="567" fill="#B7C6BE" font-family="ui-monospace, Consolas, monospace" font-size="20" font-weight="700">Windows · ActivityWatch · Obsidian · AI work</text>
   </g>
 </svg>

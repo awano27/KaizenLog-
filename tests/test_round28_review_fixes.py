@@ -976,3 +976,22 @@ def test_r11_cli_no_duplicate_line_on_refinish(tmp_path: Path):
     day = date(2026, 7, 10)
     adv = extract_section(DailyNoteStore(cfg.daily_notes_path).read(day) or "", ADVICE_MARKER) or ""
     assert adv.count("abtest完了") == 1
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["abtest", "new", "--help"], "予測効果 +N または +N%"),
+        (["abtest", "finish", "--help"], "体感効果 +N または +N%"),
+    ],
+)
+def test_r13_abtest_nested_help_renders_literal_percent(
+    argv: list[str], expected: str, capsys: pytest.CaptureFixture[str]
+):
+    from kaizenlog import cli as cli_mod
+
+    with pytest.raises(SystemExit) as exc:
+        cli_mod.main(argv)
+
+    assert exc.value.code == 0
+    assert expected in capsys.readouterr().out

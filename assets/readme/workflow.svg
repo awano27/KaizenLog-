@@ -1,71 +1,22 @@
-<svg xmlns="http://www.w3.org/2000/svg"
-     width="1200" height="300" viewBox="0 0 1200 300"
-     role="img" aria-labelledby="title desc">
-  <title id="title">ActivityWatchからObsidianまでのデータフロー</title>
-  <desc id="desc">ActivityWatchの記録をKaizenLogが分類・集計し、Obsidianの管理マーカー区間へ保存する。LLMは任意で、送信前に設定済みのマスキングを適用する。</desc>
-
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">KaizenLogの計測・記録・引き継ぎフロー</title>
+  <desc id="desc">ActivityWatchとAI作業ログをKaizenLogが決定的に集計し、Obsidianへ保存する。任意のLLM提案を検証し、承認された教訓だけをエージェント向け文書へ反映する。</desc>
   <defs>
-    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
-      <path d="M32 0H0V32" fill="none" stroke="#75CFA3" stroke-opacity=".05" stroke-width="1"/>
-    </pattern>
-    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5"
-            markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0 0L10 5L0 10Z" fill="#75CFA3"/>
-    </marker>
-    <marker id="arrow-muted" viewBox="0 0 10 10" refX="8" refY="5"
-            markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0 0L10 5L0 10Z" fill="#81958C"/>
-    </marker>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#75CFA3" stroke-opacity=".055"/></pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#75CFA3"/></marker>
+    <marker id="muted-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#81958C"/></marker>
   </defs>
-
-  <rect width="1200" height="300" rx="24" fill="#0B1211"/>
-  <rect width="1200" height="300" rx="24" fill="url(#grid)"/>
-
-  <text x="48" y="46" fill="#75CFA3"
-        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-        font-size="20" font-weight="700" letter-spacing="3">LOCAL JOURNAL PATH · OPTIONAL INTERPRETATION</text>
-
-  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Yu Gothic UI', sans-serif">
-    <g transform="translate(48 102)">
-      <rect width="286" height="128" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/>
-      <circle cx="36" cy="38" r="10" fill="#75CFA3"/>
-      <text x="58" y="47" fill="#F4F0E8"
-            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-            font-size="27" font-weight="800">ACTIVITYWATCH</text>
-      <text x="24" y="91" fill="#B7C6BE" font-size="21">前景アプリの記録</text>
-    </g>
-
-    <path d="M354 166H430" stroke="#75CFA3" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
-
-    <g transform="translate(454 102)">
-      <rect width="292" height="128" rx="18" fill="#17231F" stroke="#75CFA3" stroke-width="3"/>
-      <text x="24" y="48" fill="#75CFA3"
-            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-            font-size="30" font-weight="800">KAIZENLOG</text>
-      <text x="24" y="91" fill="#F4F0E8" font-size="21">分類・集計・書き込み</text>
-    </g>
-
-    <path d="M766 166H842" stroke="#75CFA3" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
-
-    <g transform="translate(866 102)">
-      <rect width="286" height="128" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/>
-      <text x="24" y="48" fill="#F4F0E8"
-            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-            font-size="30" font-weight="800">OBSIDIAN</text>
-      <text x="24" y="91" fill="#B7C6BE" font-size="21">管理マーカー内の日誌</text>
-    </g>
-
-    <path d="M600 102V45H702" fill="none" stroke="#81958C" stroke-width="3"
-          stroke-dasharray="7 6" marker-end="url(#arrow-muted)"/>
-
-    <g transform="translate(716 12)">
-      <rect width="436" height="66" rx="16" fill="#101B18" stroke="#81958C" stroke-width="2" stroke-dasharray="8 7"/>
-      <text x="22" y="29" fill="#F0B667"
-            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-            font-size="22" font-weight="800">OPTIONAL LLM</text>
-      <text x="22" y="53" fill="#B7C6BE"
-            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-            font-size="18" font-weight="700">LLM-BOUND PROMPT REDACTION</text>
-    </g>
+  <rect width="1200" height="720" rx="24" fill="#0B1211"/><rect width="1200" height="720" rx="24" fill="url(#grid)"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Yu Gothic UI', sans-serif">
+    <text x="60" y="46" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800" letter-spacing="3">MEASURED DATA / EXPLICIT OWNERSHIP</text>
+    <g transform="translate(60 110)"><rect width="510" height="240" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/><text x="30" y="50" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="38" font-weight="800">EVIDENCE</text><path d="M30 72H480" stroke="#315244" stroke-width="2"/><text x="30" y="126" fill="#F4F0E8" font-size="38" font-weight="700">ActivityWatch</text><text x="30" y="172" fill="#D7E2DC" font-size="34">AI session logs</text><text x="30" y="216" fill="#D7E2DC" font-size="34">Browser AI JSONL</text></g>
+    <g transform="translate(630 110)"><rect width="510" height="240" rx="18" fill="#111D1A" stroke="#75CFA3" stroke-width="3"/><text x="30" y="50" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="38" font-weight="800">KAIZENLOG</text><path d="M30 72H480" stroke="#315244" stroke-width="2"/><text x="30" y="126" fill="#F4F0E8" font-size="34" font-weight="700">deterministic metrics</text><text x="30" y="182" fill="#F0B667" font-size="34" font-weight="800">validated proposals</text><circle cx="430" cy="172" r="8" fill="#F0B667"/></g>
+    <g transform="translate(60 440)"><rect width="510" height="220" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/><text x="30" y="50" fill="#F4F0E8" font-family="ui-monospace, Consolas, monospace" font-size="38" font-weight="800">DAILY RECORD</text><path d="M30 72H480" stroke="#315244" stroke-width="2"/><text x="30" y="132" fill="#F4F0E8" font-size="38" font-weight="700">Obsidian Markdown</text><text x="30" y="184" fill="#D7E2DC" font-size="34">stats JSON</text></g>
+    <g transform="translate(630 440)"><rect width="510" height="220" rx="18" fill="#111D1A" stroke="#F0B667" stroke-width="3"/><text x="30" y="50" fill="#F0B667" font-family="ui-monospace, Consolas, monospace" font-size="36" font-weight="800">AGENT CONTEXT</text><path d="M30 72H480" stroke="#315244" stroke-width="2"/><text x="30" y="132" fill="#F4F0E8" font-size="34" font-weight="700">handoff: marker update</text><text x="30" y="184" fill="#D7E2DC" font-size="34" font-weight="700">coach: approval required</text></g>
+    <g transform="translate(850 58)"><rect width="250" height="40" rx="13" fill="#101B18" stroke="#81958C" stroke-width="2" stroke-dasharray="7 6"/><text x="125" y="27" text-anchor="middle" fill="#F0B667" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800">LLM / optional</text></g>
+    <path d="M580 230H612" fill="none" stroke="#75CFA3" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
+    <path d="M885 362V390H315V418" fill="none" stroke="#75CFA3" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
+    <path d="M580 550H612" fill="none" stroke="#75CFA3" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
+    <path d="M975 98H1060V270" fill="none" stroke="#81958C" stroke-width="4" stroke-dasharray="8 7" marker-end="url(#muted-arrow)"/>
   </g>
 </svg>
