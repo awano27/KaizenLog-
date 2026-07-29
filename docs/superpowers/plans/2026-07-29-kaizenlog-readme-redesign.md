@@ -351,10 +351,10 @@ Expected: `Local README targets passed`、終了コード0。
 Run:
 
 ```powershell
-python -m kaizenlog --help
-python -m kaizenlog setup --help
-python -m kaizenlog doctor --help
-python -m kaizenlog generate --help
+.\.venv\Scripts\kaizenlog.exe --help
+.\.venv\Scripts\kaizenlog.exe setup --help
+.\.venv\Scripts\kaizenlog.exe doctor --help
+.\.venv\Scripts\kaizenlog.exe generate --help
 ```
 
 Expected: READMEの`setup`、`doctor`、`generate`、`--register-task`がヘルプに存在し、記載と矛盾しない。
