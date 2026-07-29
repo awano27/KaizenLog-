@@ -135,6 +135,7 @@ def test_readme_presents_an_ai_optional_daily_journal_and_reflection_loop():
     for required in (
         "AIを使わない日でも",
         "架空の日誌例",
+        "実在する利用者のデータや改善効果ではありません。",
         "**合計アクティブ時間**: 6h42m",
         "コンテキストスイッチ: 18回",
         "**集中ブロック**: 3回",
@@ -151,6 +152,8 @@ def test_readme_presents_an_ai_optional_daily_journal_and_reflection_loop():
         "その外側の手書き本文を置換しません",
         "`generate --date YYYY-MM-DD`だけならLLMは不要です。",
         "設定済みのLLMバックエンド",
+        "集中ブロックは、入力watcherから統計を取得できる場合だけ表示されます。",
+        "Activity Logは観測できたPC作業の記録であり、勤務時間、目標達成、集中力、生産性を自動判定するものではありません。",
         "生産性を自動判定するものではありません",
     ):
         assert required in section
