@@ -196,7 +196,7 @@ Connect Verify back to Measure with a visible return arrow labeled `NEXT RUN`. I
 
 - [ ] **Step 3: Rebuild `workflow.svg` with accurate boundaries**
 
-Use four horizontally arranged areas:
+Use four areas in a two-column, two-row grid so their required labels remain readable at a 360px GitHub render:
 
 ```text
 EVIDENCE
