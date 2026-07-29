@@ -1,16 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="280" viewBox="0 0 1200 280" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="660" viewBox="0 0 1200 660" role="img" aria-labelledby="title desc">
   <title id="title">KaizenLogの副作用を抑えた初回導線</title>
   <desc id="desc">setupで接続先を選び、doctorで診断し、明示した日付のgenerateで最初の日誌を作る。</desc>
   <defs>
     <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#75CFA3" stroke-opacity=".055"/></pattern>
-    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#75CFA3"/></marker>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#75CFA3"/></marker>
   </defs>
-  <rect width="1200" height="280" rx="24" fill="#0B1211"/><rect width="1200" height="280" rx="24" fill="url(#grid)"/>
+  <rect width="1200" height="660" rx="24" fill="#0B1211"/><rect width="1200" height="660" rx="24" fill="url(#grid)"/>
   <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Yu Gothic UI', sans-serif">
-    <text x="60" y="48" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="19" font-weight="800" letter-spacing="2">FIRST PROOF / EXPLICIT DATE</text>
-    <path d="M386 161H438M760 161H812" stroke="#75CFA3" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
-    <g transform="translate(60 82)"><rect width="326" height="148" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/><text x="24" y="38" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="21" font-weight="800">01 SETUP</text><text x="24" y="78" fill="#F4F0E8" font-size="26" font-weight="700">接続先を選ぶ</text><text x="24" y="119" fill="#D7E2DC" font-family="ui-monospace, Consolas, monospace" font-size="20" font-weight="700">kaizenlog setup</text></g>
-    <g transform="translate(434 82)"><rect width="326" height="148" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/><text x="24" y="38" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="21" font-weight="800">02 DOCTOR</text><text x="24" y="78" fill="#F4F0E8" font-size="26" font-weight="700">設定を診断する</text><text x="24" y="119" fill="#D7E2DC" font-family="ui-monospace, Consolas, monospace" font-size="20" font-weight="700">kaizenlog doctor</text></g>
-    <g transform="translate(808 82)"><rect width="332" height="148" rx="18" fill="#17150F" stroke="#F0B667" stroke-width="3"/><text x="24" y="38" fill="#F0B667" font-family="ui-monospace, Consolas, monospace" font-size="21" font-weight="800">03 FIRST PROOF</text><text x="24" y="78" fill="#F4F0E8" font-size="26" font-weight="700">指定日の日誌を作る</text><text x="24" y="119" fill="#F0B667" font-family="ui-monospace, Consolas, monospace" font-size="13" font-weight="700">kaizenlog generate --date YYYY-MM-DD</text></g>
+    <text x="60" y="46" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800" letter-spacing="3">FIRST PROOF / EXPLICIT DATE</text>
+    <g transform="translate(60 70)"><rect width="1080" height="145" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/><text x="34" y="44" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="30" font-weight="800">01 SETUP</text><text x="34" y="91" fill="#F4F0E8" font-size="40" font-weight="700">接続先を選ぶ</text><text x="34" y="128" fill="#D7E2DC" font-family="ui-monospace, Consolas, monospace" font-size="34" font-weight="700">kaizenlog setup</text></g>
+    <g transform="translate(60 260)"><rect width="1080" height="145" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/><text x="34" y="44" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="30" font-weight="800">02 DOCTOR</text><text x="34" y="91" fill="#F4F0E8" font-size="40" font-weight="700">設定を診断する</text><text x="34" y="128" fill="#D7E2DC" font-family="ui-monospace, Consolas, monospace" font-size="34" font-weight="700">kaizenlog doctor</text></g>
+    <g transform="translate(60 450)"><rect width="1080" height="145" rx="18" fill="#17150F" stroke="#F0B667" stroke-width="3"/><text x="34" y="44" fill="#F0B667" font-family="ui-monospace, Consolas, monospace" font-size="30" font-weight="800">03 FIRST PROOF</text><text x="34" y="91" fill="#F4F0E8" font-size="40" font-weight="700">指定日の日誌を作る</text><text x="34" y="128" fill="#F0B667" font-family="ui-monospace, Consolas, monospace" font-size="38" font-weight="700">kaizenlog generate --date YYYY-MM-DD</text></g>
+    <path d="M600 226V242M600 416V432" fill="none" stroke="#75CFA3" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
   </g>
 </svg>
