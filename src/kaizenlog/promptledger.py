@@ -35,6 +35,8 @@ class PromptLedgerEntry:
     last_seen: str  # YYYY-MM-DD
     status: str = "new"  # new | skilled | dismissed
     skill_name: str | None = None
+    # skilled/dismissed にした日（旧 JSONL は欠落 → None）
+    marked_on: str | None = None
 
 
 def _ledger_path(memory_dir: Path) -> Path:
@@ -67,6 +69,9 @@ def load_prompt_ledger(memory_dir: Path) -> list[PromptLedgerEntry]:
         skill = d.get("skill_name")
         if skill is not None:
             skill = str(skill).strip() or None
+        marked_on = d.get("marked_on")
+        if marked_on is not None:
+            marked_on = str(marked_on).strip() or None
         try:
             count_total = int(d.get("count_total") or 0)
         except (TypeError, ValueError):
@@ -84,6 +89,7 @@ def load_prompt_ledger(memory_dir: Path) -> list[PromptLedgerEntry]:
             last_seen=str(d.get("last_seen") or ""),
             status=status,
             skill_name=skill,
+            marked_on=marked_on,
         )
     return sorted(by_id.values(), key=lambda e: e.id)
 
@@ -204,6 +210,7 @@ def upsert_clusters(
                 last_seen=last,
                 status="new",
                 skill_name=None,
+                marked_on=None,
             )
             by_id[entry.id] = entry
             minted.append(entry)
@@ -241,6 +248,7 @@ def upsert_clusters(
             last_seen=new_last,
             status=match.status,
             skill_name=match.skill_name,
+            marked_on=match.marked_on,
         )
         by_id[updated.id] = updated
         to_append.append(updated)
@@ -282,6 +290,7 @@ def mark_prompt_entry(
     status: str,
     *,
     skill_name: str | None = None,
+    marked_on: str | date | None = None,
 ) -> PromptLedgerEntry:
     if status not in STATUSES:
         raise ValueError(f"invalid status: {status}")
@@ -290,6 +299,12 @@ def mark_prompt_entry(
         skill = (skill_name or "").strip() or None
         if not skill:
             raise ValueError("skilled には skill_name が必要です")
+    if marked_on is None:
+        marked_s = date.today().isoformat()
+    elif isinstance(marked_on, date):
+        marked_s = marked_on.isoformat()
+    else:
+        marked_s = str(marked_on).strip() or date.today().isoformat()
     return PromptLedgerEntry(
         id=entry.id,
         representative=entry.representative,
@@ -299,6 +314,7 @@ def mark_prompt_entry(
         last_seen=entry.last_seen,
         status=status,
         skill_name=skill if status == "skilled" else None,
+        marked_on=marked_s if status in ("skilled", "dismissed") else None,
     )
 
 

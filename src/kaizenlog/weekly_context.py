@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Sequence
 
 from .aiwork import top_friction_sessions
 from .experiments import (
@@ -14,6 +15,7 @@ from .experiments import (
 )
 from .memory import load_entries
 from .promptledger import format_ledger_line, ledger_status_counts, load_prompt_ledger
+from .promptroi import PromptROIRow, format_weekly_roi_section
 from .stats import load_stats
 from .vault import WEEKLY_CONTEXT_MARKER, atomic_write_text, upsert_section
 
@@ -105,8 +107,13 @@ def render_weekly_context(
     memory_dir: Path,
     experiments_dir: Path,
     week_start: date,
+    *,
+    roi_rows: Sequence[PromptROIRow] | None = None,
 ) -> str:
-    """対象週（月曜始まり7日）の集約 Markdown。LLM 不使用。"""
+    """対象週（月曜始まり7日）の集約 Markdown。LLM 不使用。
+
+    roi_rows: CLI 側で計算した ROI（レンダラはセッションを暗黙走査しない）。
+    """
     days = [week_start + timedelta(days=i) for i in range(7)]
     week_label = iso_week_label(week_start)
     lines: list[str] = [
@@ -311,6 +318,51 @@ def render_weekly_context(
     lines.append(
         f"（スキル化済み {counts['skilled']}件 / 却下 {counts['dismissed']}件）"
     )
+
+    # プロンプト資産ROI（上位3 + skilled削減。データ無し/未注入なら省略）
+    if roi_rows:
+        roi_sec = format_weekly_roi_section(list(roi_rows), top_n=3)
+        if roi_sec:
+            lines.extend(["", roi_sec, ""])
+
+    # 今週最大のループ: stats ai.loop_tax.max_episode から選ぶ（概算しない）
+    candidates: list[tuple[str, dict]] = []
+    has_new_format = False
+    for s in week_stats:
+        ai = s.get("ai") if isinstance(s.get("ai"), dict) else {}
+        lt = ai.get("loop_tax")
+        if not isinstance(lt, dict):
+            continue
+        has_new_format = True
+        me = lt.get("max_episode")
+        if isinstance(me, dict) and me.get("length"):
+            candidates.append((str(s.get("day") or "?"), me))
+    if has_new_format and candidates:
+        def _rank(item: tuple[str, dict]):
+            me = item[1]
+            length = int(me.get("length") or 0)
+            wt = me.get("wasted_tokens")
+            wt_k = int(wt) if isinstance(wt, (int, float)) else -1
+            return (length, wt_k)
+
+        day_s, me = max(candidates, key=_rank)
+        length = int(me.get("length") or 0)
+        wt = me.get("wasted_tokens")
+        tok_s = "不明" if wt is None else str(int(wt))
+        err_s = "あり" if me.get("has_tool_error") else "なし"
+        excerpt = (me.get("excerpt") or "").strip()
+        lines.extend(
+            [
+                "",
+                "## 今週最大のループ",
+                "",
+                f"- 日付: {day_s} / 往復数: {length}"
+                f" / 浪費tokens: {tok_s} / tool_error: {err_s}",
+            ]
+        )
+        if excerpt:
+            lines.append(f"- 抜粋: {excerpt}")
+    # 新形式が無い、または全日 episode 0 → 小節省略
 
     # 目標トレース（観察のみ・達成判定なし）
     lines.extend(["", "## 目標", ""])

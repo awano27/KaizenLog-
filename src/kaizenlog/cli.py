@@ -6,8 +6,11 @@
   kaizenlog experiment new/list            カイゼン実験の起票・一覧
   kaizenlog patterns [--days N]            繰り返しパターンの検出レポート（自動化候補）
   kaizenlog report [--date] [--no-llm] [--write]  提出用の日報ドラフトを生成
-  kaizenlog prompts [--days N] [--unhandled]  繰り返し依頼の発掘＋台帳 upsert
+  kaizenlog prompts [--days N] [--unhandled] [--roi]  繰り返し依頼の発掘＋ROI
   kaizenlog prompts mark <id> skilled|dismissed [--skill NAME]
+  kaizenlog handoff [--target PATH ...] [--dry-run]  実測教訓を CLAUDE.md 等へ注入
+  kaizenlog coach [--dry-run] [--apply FILE]  コパイロット調教パック（承認制）
+  kaizenlog abtest new|finish|status       パーソナル METR 実験
   kaizenlog backfill [--days N]            欠損日の日誌・統計をまとめて補完する
   kaizenlog status                         実行履歴（最終成功・直近の失敗）を表示
   kaizenlog doctor                         セットアップと環境の健全性を診断
@@ -44,7 +47,9 @@ from .advice_evidence import build_advice_evidence
 from .aiwork import (
     available_adapters,
     collect_ai_telemetry,
+    compute_loop_tax,
     detect_retry_chains,
+    format_loop_tax_line,
     render_aiwork_markdown,
 )
 from .doctor import run_doctor
@@ -216,6 +221,9 @@ def cmd_generate(
         )
         day_retry_chains = detect_retry_chains(day_prompts)
         retry_chain_count = len(day_retry_chains)
+        loop_tax = compute_loop_tax(
+            day_retry_chains, ai_sessions, pricing=pricing
+        )
         aiwork_md = render_aiwork_markdown(
             ai_sessions,
             tz,
@@ -225,9 +233,27 @@ def cmd_generate(
             redactor=title_redactor,
             retry_chains=day_retry_chains,
             internal_ai_sessions=internal_ai_n,
+            usd_jpy=getattr(cfg.aiwork, "usd_jpy", None),
+            loop_tax_summary=loop_tax,
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
+        # ループ税閾値通知（閾値超過のみ。同額は発火しない）
+        alert = getattr(cfg.aiwork, "loop_tax_alert_usd", None)
+        if (
+            alert is not None
+            and loop_tax.est_cost_usd is not None
+            and loop_tax.est_cost_usd > float(alert)
+        ):
+            notify(
+                "KaizenLog ループ税",
+                format_loop_tax_line(
+                    loop_tax, usd_jpy=getattr(cfg.aiwork, "usd_jpy", None)
+                ),
+                icon="Warning",
+            )
+    else:
+        loop_tax = None
 
     store = DailyNoteStore(cfg.daily_notes_path)
     path = store.write_section(day, ACTIVITY_MARKER, section)
@@ -258,6 +284,7 @@ def cmd_generate(
         goal_text=goal_text_stat,
         goal_category=goal_cat_stat,
         internal_ai_sessions=internal_ai_n,
+        loop_tax_summary=loop_tax,
     )
 
     # 実験の実測追記: running 全件 + adopted（deadline から30日以内のみ）
@@ -1234,13 +1261,14 @@ def cmd_prompts(
     min_count: int,
     *,
     unhandled_only: bool = False,
+    roi: bool = False,
 ) -> None:
     """繰り返し依頼を発掘し、クラスタ台帳へ upsert して表示する。"""
     tz = ZoneInfo(cfg.timezone)
     end = datetime.combine(end_day, time.min, tzinfo=tz) + timedelta(days=1)
     start = end - timedelta(days=days)
     adapters = available_adapters(cfg) if cfg.aiwork.enabled else []
-    _, prompts, _ = collect_ai_telemetry(adapters, start, end)
+    sessions, prompts, _ = collect_ai_telemetry(adapters, start, end)
     tracking: list[tuple[str, str]] = []
     for exp in load_experiments(cfg.experiments_path):
         if exp.status not in ("running", "adopted"):
@@ -1278,6 +1306,29 @@ def cmd_prompts(
                 break
         if hit:
             ledger_by_rep[c.representative] = (hit.id, hit.status)
+    if roi:
+        from .promptroi import (
+            format_roi_table,
+            load_roi_for_paths,
+            prompt_roi_scan_start,
+        )
+        from .promptledger import load_prompt_ledger as _load_pl
+
+        ledger_ents = _load_pl(cfg.memory_path)
+        scan_day = prompt_roi_scan_start(ledger_ents, end_day, window_days=30)
+        roi_start = datetime.combine(scan_day, time.min, tzinfo=tz)
+        if cfg.aiwork.enabled:
+            roi_sessions, roi_prompts, _ = collect_ai_telemetry(
+                adapters, roi_start, end
+            )
+        else:
+            roi_sessions, roi_prompts = [], []
+        rows = load_roi_for_paths(
+            cfg.memory_path, roi_prompts, roi_sessions, as_of=end_day
+        )
+        print(format_roi_table(rows))
+        return
+
     print(
         render_prompt_report(
             prompts,
@@ -1288,6 +1339,243 @@ def cmd_prompts(
             unhandled_only=unhandled_only,
         )
     )
+
+
+def cmd_handoff(
+    cfg: Config,
+    *,
+    targets: list[str] | None = None,
+    dry_run: bool = False,
+    as_of: date | None = None,
+) -> int:
+    """実測教訓を CLAUDE.md / AGENTS.md の agent-context 区間へ注入。"""
+    from .handoff import apply_handoff, build_agent_context_section
+
+    paths = list(targets or [])
+    if not paths:
+        paths = list(cfg.handoff.targets or [])
+    if not paths:
+        print(
+            "❌ targets が未設定です。"
+            " --target を指定するか config [handoff] targets を設定してください。",
+            file=sys.stderr,
+        )
+        return 1
+    as_of = as_of or datetime.now(ZoneInfo(cfg.timezone)).date()
+    redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
+    section = build_agent_context_section(
+        stats_dir=cfg.stats_path,
+        memory_dir=cfg.memory_path,
+        as_of=as_of,
+        redactor=redactor,
+    )
+    if dry_run:
+        print(section)
+        return 0
+    for t in paths:
+        p = Path(t).expanduser()
+        apply_handoff(p, section, dry_run=False)
+        print(f"✅ handoff を書き込みました: {p}")
+    return 0
+
+
+def cmd_coach(
+    cfg: Config,
+    *,
+    dry_run: bool = False,
+    apply_file: str | None = None,
+    as_of: date | None = None,
+) -> int:
+    """コパイロット調教パック（提案 or 承認適用）。"""
+    from .advisor import AdvisorError
+    from .coach import (
+        apply_proposal,
+        build_coach_context,
+        proposal_diff_text,
+        run_coach_llm,
+        save_proposal,
+    )
+
+    as_of = as_of or datetime.now(ZoneInfo(cfg.timezone)).date()
+    if apply_file:
+        targets = [Path(t).expanduser() for t in (cfg.handoff.targets or [])]
+        if not targets:
+            print(
+                "❌ [handoff] targets が未設定です（--apply の書き込み先）。",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            written = apply_proposal(Path(apply_file).expanduser(), targets)
+        except AdvisorError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            return 1
+        for p in written:
+            print(f"✅ coach を適用しました: {p}")
+        return 0
+
+    redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
+    context = build_coach_context(cfg, as_of=as_of, redactor=redactor)
+    if dry_run:
+        print(context)
+        return 0
+    try:
+        data = run_coach_llm(cfg, context)
+    except AdvisorError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+    path = save_proposal(
+        cfg.memory_path,
+        as_of=as_of,
+        append_md=data["claude_md_append"],
+        evidence=data["evidence"],
+    )
+    print(proposal_diff_text(data["claude_md_append"]))
+    print(f"\n提案を保存しました: {path}")
+    print("適用: kaizenlog coach --apply <proposal-file>")
+    return 0
+
+
+def cmd_abtest(cfg: Config, args: argparse.Namespace) -> int:
+    """パーソナル METR 実験 CLI。"""
+    from .cardgen import AbtestCardData, write_abtest_card
+    from .experiments import (
+        ExperimentError,
+        compute_abtest_effect,
+        create_abtest,
+        finish_abtest,
+        format_abtest_journal_line,
+        load_abtests,
+        parse_predict_pct,
+    )
+    from .vault import ACTIVITY_MARKER, DailyNoteStore, extract_section, upsert_section
+
+    tz = ZoneInfo(cfg.timezone)
+    today = datetime.now(tz).date()
+    sub = args.abtest_command
+
+    if sub == "new":
+        try:
+            predict = parse_predict_pct(str(args.predict))
+        except ExperimentError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            return 1
+        path = create_abtest(
+            cfg.experiments_path,
+            today=today,
+            predict_pct=predict,
+            days=int(args.days or 28),
+        )
+        print(f"📊 abtest を開始しました: {path}")
+        return 0
+
+    if sub == "status":
+        items = load_abtests(cfg.experiments_path)
+        if not items:
+            print("abtest はまだありません。")
+            return 0
+        for e in items:
+            if e.invalid_reason:
+                meas = e.invalid_reason
+            elif e.measured_pct is not None:
+                meas = f"{e.measured_pct:+g}%"
+            else:
+                meas = "（未確定）"
+            felt = f"{e.felt_pct:+g}%" if e.felt_pct is not None else "—"
+            print(
+                f"[{e.status}] {e.id}: 予測{e.predict_pct:+g}% / 体感{felt}"
+                f" / 実測{meas} / {e.start}〜{e.deadline}"
+            )
+        return 0
+
+    if sub == "finish":
+        try:
+            felt = parse_predict_pct(str(args.felt))
+        except ExperimentError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            return 1
+        items = [e for e in load_abtests(cfg.experiments_path) if e.status == "running"]
+        if not items:
+            print("❌ 実行中の abtest がありません", file=sys.stderr)
+            return 1
+        exp = items[-1]
+        if getattr(args, "id", None):
+            matched = [e for e in items if e.id == args.id or e.id.endswith(args.id)]
+            if not matched:
+                print(f"❌ abtest が見つかりません: {args.id}", file=sys.stderr)
+                return 1
+            exp = matched[-1]
+        # 期間内 stats
+        days = (exp.deadline - exp.start).days + 1
+        stats_list = load_stats(cfg.stats_path, days=days, end_day=exp.deadline)
+        pre_stats = load_stats(
+            cfg.stats_path, days=28, end_day=exp.start - timedelta(days=1)
+        )
+        measured, ai_n, non_n, invalid = compute_abtest_effect(
+            stats_list,
+            start=exp.start,
+            end=min(today, exp.deadline),
+            pre_stats=pre_stats,
+        )
+        # SVG カード
+        cards_dir = cfg.memory_path / "cards"
+        card_name = f"abtest-{exp.id}.svg"
+        card_abs = cards_dir / card_name
+        period = f"{exp.start.isoformat()} 〜 {min(today, exp.deadline).isoformat()}"
+        write_abtest_card(
+            card_abs,
+            AbtestCardData(
+                experiment_id=exp.id,
+                period_label=period,
+                sample_ai_days=ai_n,
+                sample_non_ai_days=non_n,
+                predict_pct=exp.predict_pct,
+                felt_pct=felt,
+                measured_pct=measured,
+                invalid_reason=invalid,
+            ),
+        )
+        # 相対パス（memory_dir 基準）
+        try:
+            card_rel = str(card_abs.relative_to(cfg.vault_dir)).replace("\\", "/")
+        except ValueError:
+            card_rel = str(card_abs)
+        finish_abtest(
+            exp,
+            felt_pct=felt,
+            card_rel_path=card_rel,
+            measured_pct=measured,
+            invalid_reason=invalid,
+            sample_ai=ai_n,
+            sample_non=non_n,
+            as_of=today,
+        )
+        line = format_abtest_journal_line(exp)
+        print(line)
+        print(f"カード: {card_abs}")
+        # 終了日の ADVICE/Kaizen 区間へ必ず1行（note 無しでも作成。Activity へは書かない）
+        from .vault import ADVICE_MARKER
+
+        store = DailyNoteStore(cfg.daily_notes_path)
+        note = store.read(today)
+        if note is None:
+            store.write_section(today, ADVICE_MARKER, line + "\n")
+        else:
+            sec = extract_section(note, ADVICE_MARKER)
+            if sec is not None:
+                # 同一 abtest ID の完了行が既にあれば重複追加しない
+                if exp.id in sec and "abtest完了" in sec:
+                    pass
+                else:
+                    new_sec = sec.rstrip() + "\n\n" + line + "\n"
+                    store.write_section(today, ADVICE_MARKER, new_sec)
+            else:
+                store.write_section(today, ADVICE_MARKER, line + "\n")
+        print(f"✅ 日誌に追記しました（{today.isoformat()}）")
+        return 0
+
+    print(f"❌ 未知の abtest サブコマンド: {sub}", file=sys.stderr)
+    return 1
 
 
 def cmd_prompts_mark(
@@ -1670,6 +1958,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="status=new のクラスタのみ表示（autopilot 向け）",
     )
+    pr.add_argument(
+        "--roi",
+        action="store_true",
+        help="プロンプト資産ROIランキングを表示",
+    )
     pr_mark = pr_sub.add_parser("mark", help="クラスタを skilled / dismissed に記録")
     pr_mark.add_argument("id", help="PRM-ID（末尾部分一致可）")
     pr_mark.add_argument(
@@ -1765,6 +2058,56 @@ def main(argv: list[str] | None = None) -> int:
         help='目標文（例: "リリースノート下書き @執筆・ノート"）。省略時は表示のみ',
     )
     gl.add_argument("--date", help="対象日 YYYY-MM-DD（省略時は今日）")
+
+    ho = sub.add_parser(
+        "handoff",
+        help="実測教訓を CLAUDE.md / AGENTS.md の agent-context 区間へ注入",
+    )
+    ho.add_argument(
+        "--target",
+        action="append",
+        dest="targets",
+        default=None,
+        help="書き込み先パス（複数可）。未指定時は config [handoff] targets",
+    )
+    ho.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="生成セクションを表示するだけでファイルへ書かない",
+    )
+    ho.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
+
+    ch = sub.add_parser("coach", help="コパイロット調教パック（承認制 diff 提案）")
+    ch.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="コンテキストパックのみ表示（LLM 不使用）",
+    )
+    ch.add_argument(
+        "--apply",
+        dest="apply_file",
+        default=None,
+        help="提案ファイルを [handoff] targets の coach 区間へ適用",
+    )
+    ch.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
+
+    ab = sub.add_parser("abtest", help="パーソナル METR 実験（予測/体感/実測）")
+    ab_sub = ab.add_subparsers(dest="abtest_command", required=True)
+    ab_new = ab_sub.add_parser("new", help="実験開始")
+    ab_new.add_argument(
+        "--predict",
+        required=True,
+        help="予測効果 +N または +N%（例: +30）",
+    )
+    ab_new.add_argument("--days", type=int, default=28, help="期間日数（既定28）")
+    ab_fin = ab_sub.add_parser("finish", help="体感入力と実測確定")
+    ab_fin.add_argument(
+        "--felt",
+        required=True,
+        help="体感効果 +N または +N%",
+    )
+    ab_fin.add_argument("--id", default=None, help="abtest ID（省略時は最新の running）")
+    ab_sub.add_parser("status", help="実験一覧")
 
     args = parser.parse_args(argv)
 
@@ -1900,7 +2243,50 @@ def main(argv: list[str] | None = None) -> int:
             print(render_action_stats_line(stats, streaks=compute_streaks(mem, today)))
         except Exception:
             pass
+        # 当日ループ税1行
+        try:
+            tz = ZoneInfo(cfg.timezone)
+            today = datetime.now(tz).date()
+            day_start = datetime.combine(today, time.min, tzinfo=tz)
+            day_end = day_start + timedelta(days=1)
+            if cfg.aiwork.enabled:
+                adapters = available_adapters(cfg)
+                sess, prompts, _ = collect_ai_telemetry(adapters, day_start, day_end)
+                chains = detect_retry_chains(prompts)
+                tax = compute_loop_tax(
+                    chains, sess, pricing=cfg.aiwork.pricing or None
+                )
+                print(
+                    format_loop_tax_line(
+                        tax, usd_jpy=getattr(cfg.aiwork, "usd_jpy", None)
+                    )
+                )
+        except Exception:
+            pass
         return 0
+
+    if args.command == "handoff":
+        tz = ZoneInfo(cfg.timezone)
+        day = _parse_date(getattr(args, "date", None), tz)
+        return cmd_handoff(
+            cfg,
+            targets=getattr(args, "targets", None),
+            dry_run=bool(getattr(args, "dry_run", False)),
+            as_of=day,
+        )
+
+    if args.command == "coach":
+        tz = ZoneInfo(cfg.timezone)
+        day = _parse_date(getattr(args, "date", None), tz)
+        return cmd_coach(
+            cfg,
+            dry_run=bool(getattr(args, "dry_run", False)),
+            apply_file=getattr(args, "apply_file", None),
+            as_of=day,
+        )
+
+    if args.command == "abtest":
+        return cmd_abtest(cfg, args)
 
     if args.command == "skill":
         return cmd_skill(cfg, args)
@@ -1951,6 +2337,7 @@ def main(argv: list[str] | None = None) -> int:
             end_day,
             args.min_count,
             unhandled_only=bool(getattr(args, "unhandled", False)),
+            roi=bool(getattr(args, "roi", False)),
         )
         return 0
 
@@ -1973,11 +2360,35 @@ def main(argv: list[str] | None = None) -> int:
             ref = _parse_date(args.date, tz)
             week_start = monday_of(ref)
         t0 = monotonic()
+        # ROI は CLI 側でテレメトリ収集して渡す（レンダラは暗黙走査しない）
+        roi_rows = None
+        try:
+            from .promptroi import load_roi_for_paths, prompt_roi_scan_start
+            from .promptledger import load_prompt_ledger as _lpl
+
+            week_end = week_start + timedelta(days=6)
+            ents = _lpl(cfg.memory_path)
+            scan_day = prompt_roi_scan_start(ents, week_end, window_days=30)
+            if cfg.aiwork.enabled:
+                adapters = available_adapters(cfg)
+                r_start = datetime.combine(scan_day, time.min, tzinfo=tz)
+                r_end = datetime.combine(week_end, time.min, tzinfo=tz) + timedelta(
+                    days=1
+                )
+                r_sess, r_prompts, _ = collect_ai_telemetry(adapters, r_start, r_end)
+            else:
+                r_sess, r_prompts = [], []
+            roi_rows = load_roi_for_paths(
+                cfg.memory_path, r_prompts, r_sess, as_of=week_end
+            )
+        except Exception:
+            roi_rows = None
         body = render_weekly_context(
             cfg.stats_path,
             cfg.memory_path,
             cfg.experiments_path,
             week_start,
+            roi_rows=roi_rows,
         )
         print(body)
         if getattr(args, "write", False):

@@ -68,11 +68,12 @@ DEFAULT_OUTPUT_USD_PER_MTOK: list[tuple[str, float]] = [
     ("claude-sonnet-4", 3.0),
     ("claude-sonnet", 3.0),
     ("claude-haiku", 1.25),
+    # より具体的なパターンを先に（gpt-4o が gpt-4o-mini に部分一致しないよう）
+    ("gpt-4o-mini", 0.6),
     ("gpt-4o", 10.0),
     ("gpt-4.1", 10.0),
     ("o3", 40.0),
     ("o4-mini", 4.4),
-    ("gpt-4o-mini", 0.6),
 ]
 
 
@@ -758,6 +759,249 @@ def retry_chain_excerpts(
     return out
 
 
+@dataclass
+class LoopTaxEpisode:
+    """リトライ連鎖1本を会計単位（エピソード）とみなす。"""
+
+    chain: RetryChain
+    wasted_tokens: int | None  # 最終試行を除くセッション output tokens 合算。不明は None
+    has_tool_error: bool = False
+    model: str | None = None
+
+
+@dataclass
+class LoopTaxSummary:
+    episodes: list[LoopTaxEpisode]
+    total_wasted_tokens: int | None  # 全て不明なら None
+    est_cost_usd: float | None  # トークン不明 or 単価不明なら None
+    tokens_known: bool
+
+    @property
+    def episode_count(self) -> int:
+        return len(self.episodes)
+
+
+def _session_for_prompt(
+    prompt: UserPrompt, sessions: Sequence[AISession]
+) -> AISession | None:
+    hits = [
+        s
+        for s in sessions
+        if s.project == prompt.project and s.start <= prompt.timestamp <= s.end
+    ]
+    if not hits:
+        day = prompt.timestamp.date()
+        hits = [
+            s
+            for s in sessions
+            if s.project == prompt.project and s.start.date() == day
+        ]
+    if not hits:
+        return None
+    hits.sort(key=lambda s: abs((s.start - prompt.timestamp).total_seconds()))
+    return hits[0]
+
+
+def _resolve_session_price(
+    models: set[str] | None,
+    pricing: dict[str, float] | None,
+) -> tuple[float | None, str | None]:
+    """セッションのモデル群から単価を決定論的に解決する。
+
+    戻り値: (price | None, representative_model | None)
+    - モデル無し → (None, None)
+    - 複数モデルで解決単価が異なる/一部未登録 → (None, sorted first model)
+    - 全モデルが同一既知単価 → (price, sorted first model)
+    """
+    if not models:
+        return None, None
+    ordered = sorted(str(m) for m in models if m)
+    if not ordered:
+        return None, None
+    prices: list[float] = []
+    for m in ordered:
+        p = resolve_output_price(m, pricing)
+        if p is None:
+            return None, ordered[0]
+        prices.append(float(p))
+    if len(set(prices)) != 1:
+        return None, ordered[0]
+    return prices[0], ordered[0]
+
+
+def compute_loop_tax(
+    chains: Sequence[RetryChain],
+    sessions: Sequence[AISession],
+    *,
+    pricing: dict[str, float] | None = None,
+) -> LoopTaxSummary:
+    """リトライ連鎖の浪費トークン・金額をエピソード単位で集計する。
+
+    浪費トークン: チェーンの最終試行を除く試行が属するセッションの
+    output tokens をセッション単位で合算（按分なし）。
+    1件でも不明があれば総量・総額を既知部分だけで断定しない。
+    """
+    episodes: list[LoopTaxEpisode] = []
+    total_tokens = 0
+    any_unknown_tokens = False
+    total_cost = 0.0
+    any_unknown_cost = False
+    any_cost = False
+
+    for chain in chains:
+        if len(chain.prompts) < 2:
+            continue
+        waste_prompts = chain.prompts[:-1]
+        sess_ids: set[str] = set()
+        wasted: int | None = 0
+        known = True
+        model: str | None = None
+        has_err = False
+        ep_cost = 0.0
+        ep_cost_ok = True
+        matched_any = False
+        for p in waste_prompts:
+            s = _session_for_prompt(p, sessions)
+            if s is None:
+                known = False
+                continue
+            matched_any = True
+            if s.tool_errors:
+                has_err = True
+            if s.session_id in sess_ids:
+                continue
+            sess_ids.add(s.session_id)
+            price, rep_model = _resolve_session_price(
+                s.models if s.models else None, pricing
+            )
+            if rep_model and model is None:
+                model = rep_model
+            if not s.output_tokens:
+                known = False
+                ep_cost_ok = False
+                continue
+            wasted = int(wasted or 0) + int(s.output_tokens)
+            if price is None:
+                ep_cost_ok = False
+            else:
+                ep_cost += (int(s.output_tokens) / 1_000_000.0) * price
+        # waste prompt に対応セッションが1件も無い → tokens不明
+        if not matched_any:
+            wasted = None
+            known = False
+            ep_cost_ok = False
+        elif not known:
+            wasted = None
+            ep_cost_ok = False
+
+        if wasted is None:
+            any_unknown_tokens = True
+        else:
+            total_tokens += int(wasted)
+        if not ep_cost_ok:
+            any_unknown_cost = True
+        else:
+            total_cost += ep_cost
+            any_cost = True
+
+        episodes.append(
+            LoopTaxEpisode(
+                chain=chain,
+                wasted_tokens=wasted,
+                has_tool_error=has_err,
+                model=model,
+            )
+        )
+
+    if not episodes:
+        return LoopTaxSummary(
+            episodes=[],
+            total_wasted_tokens=0,
+            est_cost_usd=0.0,
+            tokens_known=True,
+        )
+    # 1件でも不明 → 総量・総額を既知部分だけで断定しない
+    total_wasted: int | None = None if any_unknown_tokens else total_tokens
+    if any_unknown_tokens or any_unknown_cost:
+        est: float | None = None
+    elif any_cost:
+        est = round(total_cost, 4)
+    else:
+        # tokens 既知だが単価経路を通らなかった（output_tokens=0 等）
+        est = 0.0 if total_wasted == 0 else None
+
+    return LoopTaxSummary(
+        episodes=episodes,
+        total_wasted_tokens=total_wasted,
+        est_cost_usd=est,
+        tokens_known=not any_unknown_tokens,
+    )
+
+
+def format_loop_tax_line(
+    summary: LoopTaxSummary,
+    *,
+    usd_jpy: float | None = None,
+) -> str:
+    """日誌・status 用1行。不明は 0 にしない。"""
+    n = summary.episode_count
+    if n == 0:
+        return "💸 ループ税: $0.00（0エピソード / 0 tokens）"
+    if summary.total_wasted_tokens is None:
+        tok_s = "tokens不明"
+    else:
+        tok_s = f"{summary.total_wasted_tokens} tokens"
+    if summary.est_cost_usd is None:
+        money = "$-.--"
+    else:
+        money = f"${summary.est_cost_usd:.2f}"
+        if usd_jpy is not None and usd_jpy > 0:
+            jpy = int(round(summary.est_cost_usd * usd_jpy))
+            money = f"{money}（¥{jpy}）"
+    return f"💸 ループ税: {money}（{n}エピソード / {tok_s}）"
+
+
+def max_loop_episode(summary: LoopTaxSummary) -> LoopTaxEpisode | None:
+    """往復数最大のエピソード。同点は既知浪費tokens多い方。"""
+    if not summary.episodes:
+        return None
+
+    def key(ep: LoopTaxEpisode):
+        # None tokens は -1 扱いで既知を優先
+        tw = ep.wasted_tokens if ep.wasted_tokens is not None else -1
+        return (ep.chain.length, tw)
+
+    return max(summary.episodes, key=key)
+
+
+def loop_tax_to_stats_dict(
+    summary: LoopTaxSummary,
+    *,
+    redactor=None,
+) -> dict:
+    """stats[\"ai\"][\"loop_tax\"] 用の JSON 互換 dict。不明は null。"""
+    max_ep = max_loop_episode(summary)
+    max_d: dict | None = None
+    if max_ep is not None:
+        excerpts = retry_chain_excerpts(
+            [max_ep.chain], redactor=redactor, max_chains=1
+        )
+        excerpt = excerpts[0] if excerpts else ""
+        # "連鎖起点（proj）: text" 形式から本文だけにしてもよいが、そのまま保存
+        max_d = {
+            "length": max_ep.chain.length,
+            "wasted_tokens": max_ep.wasted_tokens,
+            "has_tool_error": bool(max_ep.has_tool_error),
+            "excerpt": excerpt,
+        }
+    return {
+        "episode_count": summary.episode_count,
+        "total_wasted_tokens": summary.total_wasted_tokens,
+        "est_cost_usd": summary.est_cost_usd,
+        "max_episode": max_d,
+    }
+
+
 def _retry_touch_for_session(
     session: AISession, chains: Sequence[RetryChain]
 ) -> int:
@@ -850,6 +1094,8 @@ def render_aiwork_markdown(
     redactor: Callable[[str], str] | None = None,
     retry_chains: Sequence[RetryChain] | None = None,
     internal_ai_sessions: int = 0,
+    usd_jpy: float | None = None,
+    loop_tax_summary: LoopTaxSummary | None = None,
 ) -> str:
     """「AI作業の質」セクションのMarkdownを生成する。セッションが無ければ空文字。
 
@@ -928,6 +1174,12 @@ def render_aiwork_markdown(
     if retry_chains:
         for excerpt in retry_chain_excerpts(retry_chains, redactor=redactor):
             lines.append(f"リトライ{excerpt}")
+    # ループ税（エピソード会計）
+    tax = loop_tax_summary
+    if tax is None and retry_chains:
+        tax = compute_loop_tax(retry_chains, sessions, pricing=pricing)
+    if tax is not None and tax.episode_count > 0:
+        lines.append(format_loop_tax_line(tax, usd_jpy=usd_jpy))
     lines.append("")
 
     rows = sessions[:max_rows]

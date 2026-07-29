@@ -134,12 +134,23 @@ class AIWorkConfig:
     pricing: dict[str, float] = field(default_factory=dict)
     # セッション表の「内容」列（初回依頼抜粋）。日誌への依頼逐語は redact 対象。
     session_titles: bool = True
+    # ループ税の円換算レート（未設定なら USD のみ表示）
+    usd_jpy: float | None = None
+    # 当日ループ税がこの USD を超えたら notify（未設定なら無効）
+    loop_tax_alert_usd: float | None = None
 
 
 @dataclass
 class PrivacyConfig:
     redact_patterns: list[str] = field(default_factory=list)
     replacement: str = "[REDACTED]"
+
+
+@dataclass
+class HandoffConfig:
+    """kaizenlog handoff の注入先（CLAUDE.md / AGENTS.md 等）。"""
+
+    targets: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -157,6 +168,7 @@ class Config:
     aw_base_url: str = "http://localhost:5600"
     aiwork: AIWorkConfig = field(default_factory=AIWorkConfig)
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
+    handoff: HandoffConfig = field(default_factory=HandoffConfig)
     min_block_minutes: float = 3.0  # タイムラインに載せる最小ブロック長
     session_gap_minutes: float = 5.0  # この間隔以上空いたら別画面ブロック扱い
     # 「📌 今日のアクション」の初回挿入位置（既存区間は移動しない）
@@ -308,6 +320,13 @@ browser_export_dir = "~/Downloads/kaizenlog-browser-ai"
 session_titles = true
 # 推定コスト用単価（USD / 100万 output tokens）。既定表は目安で変動する。
 # 例: [aiwork.pricing] "claude-sonnet" = 3.0
+# ループ税の円換算（未設定なら USD のみ）
+# usd_jpy = 150.0
+# 当日ループ税がこの USD を超えたら通知（未設定なら無効）
+# loop_tax_alert_usd = 1.0
+
+# [handoff]
+# targets = ["C:/develop/myrepo/CLAUDE.md"]
 
 [llm]
 # "claude-code-cli"   : Claude Code CLI（要: https://claude.com/claude-code & ログイン済み）
@@ -445,6 +464,12 @@ def load_config(path: str | None = None) -> Config:
     )
     if "session_titles" in aiwork:
         cfg.aiwork.session_titles = bool(aiwork.get("session_titles"))
+    if "usd_jpy" in aiwork and aiwork.get("usd_jpy") is not None:
+        cfg.aiwork.usd_jpy = _coerce(float, aiwork.get("usd_jpy"), "aiwork.usd_jpy")
+    if "loop_tax_alert_usd" in aiwork and aiwork.get("loop_tax_alert_usd") is not None:
+        cfg.aiwork.loop_tax_alert_usd = _coerce(
+            float, aiwork.get("loop_tax_alert_usd"), "aiwork.loop_tax_alert_usd"
+        )
     pricing = aiwork.get("pricing")
     if isinstance(pricing, dict):
         parsed: dict[str, float] = {}
@@ -454,6 +479,10 @@ def load_config(path: str | None = None) -> Config:
             except (TypeError, ValueError):
                 continue
         cfg.aiwork.pricing = parsed
+
+    handoff = data.get("handoff", {})
+    if isinstance(handoff, dict) and "targets" in handoff:
+        cfg.handoff.targets = _as_str_list(handoff.get("targets"), "handoff.targets")
 
     cats = data.get("categories", {})
     user_rules = cats.get("rules", [])

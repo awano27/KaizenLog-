@@ -16,8 +16,10 @@ from pathlib import Path
 
 from .aiwork import (
     AISession,
+    LoopTaxSummary,
     RetryChain,
     estimate_sessions_cost,
+    loop_tax_to_stats_dict,
     prompt_length_observation,
     session_digests_for_stats,
 )
@@ -48,6 +50,7 @@ def build_stats(
     goal_text: str | None = None,
     goal_category: str | None = None,
     internal_ai_sessions: int = 0,
+    loop_tax_summary: LoopTaxSummary | None = None,
 ) -> dict:
     projects: dict[str, dict] = {}
     for s in cc_sessions:
@@ -202,6 +205,10 @@ def build_stats(
             ),
         },
     }
+    if loop_tax_summary is not None:
+        stats["ai"]["loop_tax"] = loop_tax_to_stats_dict(
+            loop_tax_summary, redactor=title_redactor
+        )
     # ブラウザ AI: source 接尾辞 `-web` で判定（tools_measurable 非依存）。
     # 命名規約: chatgpt-web / claude-web / gemini-web 等。トークン系キーとは分離。
     web_sessions = [
@@ -254,6 +261,7 @@ def write_stats(
     goal_text: str | None = None,
     goal_category: str | None = None,
     internal_ai_sessions: int = 0,
+    loop_tax_summary: LoopTaxSummary | None = None,
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
@@ -273,6 +281,7 @@ def write_stats(
                 goal_text=goal_text,
                 goal_category=goal_category,
                 internal_ai_sessions=internal_ai_sessions,
+                loop_tax_summary=loop_tax_summary,
             ),
             ensure_ascii=False,
             indent=1,

@@ -1,6 +1,7 @@
 """Obsidianボールトのデイリーノートへの書き込み。
 
 既存ノートを壊さないよう、マーカーで囲んだ区間だけを更新（upsert）する。
+マーカー外の既存bytes（末尾空白・改行コード含む）は変更しない。
 """
 
 from __future__ import annotations
@@ -10,23 +11,66 @@ from datetime import date
 from pathlib import Path
 
 
-def atomic_write_text(path: Path, content: str) -> None:
+def atomic_write_bytes(path: Path, content: bytes) -> None:
+    """一時ファイルへbytesを書いて os.replace で置き換える。"""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "wb") as f:
+        f.write(content)
+    os.replace(tmp, path)
+
+
+def atomic_write_text(path: Path, content: str, *, newline: str | None = None) -> None:
     """一時ファイルに書いてから os.replace で置き換えるアトミック書き込み。
 
-    夜間実行中のクラッシュ・電源断で半分だけ書けたファイル（不正なUTF-8・
-    壊れたJSON・欠けたノート）が残ると、以後の実行が読み込みで連鎖的に
-    失敗する。os.replace は同一ボリューム内でアトミックに完了する。
+    newline=None の既定は newline=\"\"（変換なし）。明示指定時はその newline で書く。
+    既存呼び出しの既定動作は「渡した content をそのまま書く」。
     """
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
+    # newline=\"\" は改行変換なし。None も変換なし（content 内の改行をそのまま）。
+    nl = "" if newline is None else newline
+    with open(tmp, "w", encoding="utf-8", newline=nl) as f:
+        f.write(content)
     os.replace(tmp, path)
+
+
+def read_text_preserve_newlines(path: Path) -> str:
+    """改行変換なしで UTF-8 テキストを読む。"""
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        return f.read()
+
+
+def detect_newline(content: str) -> str:
+    """主要改行コード。CRLF が（CR無し）LF 以上なら CRLF、それ以外は LF。
+
+    既存改行が0件なら LF。
+    """
+    if not content:
+        return "\n"
+    crlf = content.count("\r\n")
+    lf_only = content.count("\n") - crlf
+    if crlf > 0 and crlf >= lf_only:
+        return "\r\n"
+    return "\n"
+
+
+def _normalize_section_newlines(section_md: str, nl: str) -> str:
+    """セクション本文の改行を対象ファイルの主要改行へ揃える。末尾改行は除去。"""
+    body = section_md.replace("\r\n", "\n").replace("\r", "\n")
+    body = body.rstrip("\n")
+    if nl == "\r\n":
+        body = body.replace("\n", "\r\n")
+    return body
+
 
 ACTIVITY_MARKER = "kaizenlog:activity"
 ADVICE_MARKER = "kaizenlog:advice"
 ACTIONS_MARKER = "kaizenlog:actions"  # 朝の引き継ぎ（未完了アクション転記）
 GOAL_MARKER = "kaizenlog:goal"  # 今日の作業目標（所有: goal コマンドのみ。generate/advise は読取）
 WEEKLY_CONTEXT_MARKER = "kaizenlog:weekly-context"  # 週次スコアカード（決定論）
+AGENT_CONTEXT_MARKER = "kaizenlog:agent-context"  # handoff が CLAUDE.md/AGENTS.md へ注入
+COACH_MARKER = "kaizenlog:coach"  # coach --apply が追記する調教区間
 
 
 def _start_tag(marker: str) -> str:
@@ -69,40 +113,66 @@ def upsert_section(
 ) -> str:
     """マーカー区間があれば置換、なければ追加する。
 
+    既存 content には rstrip/lstrip/全体置換をしない。
+    生成する管理区間だけを主要改行コードへ揃える。
+
     position:
-      - \"bottom\": 末尾に追加（従来）
+      - \"bottom\": 末尾に追加（元bytesを完全prefixとして残す）
       - \"top\": 区間が**未存在のときだけ** frontmatter 直後（無ければ先頭）に挿入。
-        既存区間がある場合は現在位置で置換する（区間外テキストとの相対位置を
-        ユーザーが前提にしている可能性があるため、移動しない）。
+        既存区間がある場合は現在位置で置換する。
     """
+    nl = detect_newline(content)
     start_tag, end_tag = _start_tag(marker), _end_tag(marker)
     # 中身に同じマーカーが紛れ込むと（LLMがマーカーを復唱した場合など）、
     # 次回のupsertが偽の終了タグで区間を誤認しノートを壊す。事前に除去する。
     section_md = section_md.replace(start_tag, "").replace(end_tag, "")
-    wrapped = f"{start_tag}\n{section_md.rstrip()}\n{end_tag}"
+    body = _normalize_section_newlines(section_md, nl)
+    wrapped = f"{start_tag}{nl}{body}{nl}{end_tag}"
 
     start_idx = content.find(start_tag)
     end_idx = content.find(end_tag)
     if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
-        # 既存区間は位置を動かさず中身だけ置換
+        # 既存区間は位置を動かさず中身だけ置換（prefix/suffix bytes 不変）
         return content[:start_idx] + wrapped + content[end_idx + len(end_tag):]
 
     if position == "top":
         insert_at = _frontmatter_end(content)
-        before = content[:insert_at].rstrip("\n")
-        after = content[insert_at:].lstrip("\n")
-        parts: list[str] = []
+        before = content[:insert_at]
+        after = content[insert_at:]
+        # before/after を strip しない。区切り改行は追加のみ。
+        pieces: list[str] = []
         if before:
-            parts.append(before)
-        parts.append(wrapped)
+            pieces.append(before)
+            if not before.endswith("\n") and not before.endswith("\r"):
+                pieces.append(nl)
+            # blank line separator if not already blank-ended
+            if not (before.endswith(nl + nl) or before.endswith("\n\n")):
+                if before.endswith(nl) or before.endswith("\n"):
+                    pieces.append(nl)
+                else:
+                    pieces.append(nl)
+        pieces.append(wrapped)
         if after:
-            parts.append(after)
-        return "\n\n".join(parts) + ("\n" if not after.endswith("\n") else "")
+            # ensure separation before after
+            mid = "".join(pieces)
+            if not mid.endswith(nl) and not mid.endswith("\n"):
+                pieces.append(nl)
+            if not after.startswith("\n") and not after.startswith("\r"):
+                pieces.append(nl)
+            pieces.append(after)
+            return "".join(pieces)
+        return "".join(pieces) + nl
 
-    body = content.rstrip()
-    if body:
-        return f"{body}\n\n{wrapped}\n"
-    return f"{wrapped}\n"
+    # bottom: 元 content を1バイトも変えず、後ろへ区切り＋区間を追加
+    if not content:
+        return wrapped + nl
+    if content.endswith(nl) or content.endswith("\n") or content.endswith("\r"):
+        # 既に改行で終わる → 空行セパレータ1つ + wrapped + 終端改行
+        if content.endswith(nl + nl) or content.endswith("\n\n"):
+            return content + wrapped + nl
+        return content + nl + wrapped + nl
+    # 末尾改行なし → 区切り改行を後ろへ追加するだけ（元末尾を削除しない）
+    return content + nl + nl + wrapped + nl
 
 
 def extract_heading_section(content: str, heading: str) -> str | None:
@@ -164,7 +234,9 @@ class DailyNoteStore:
 
     def read(self, day: date) -> str | None:
         p = self.path_for(day)
-        return p.read_text(encoding="utf-8") if p.is_file() else None
+        if not p.is_file():
+            return None
+        return read_text_preserve_newlines(p)
 
     def write_section(
         self,

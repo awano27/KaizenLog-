@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -346,14 +347,21 @@ def weekday_baseline(
     return float(median(values))
 
 
+def _effect_size_from_values(
+    baseline: float | None, measurements: Sequence[float]
+) -> float | None:
+    """baseline と実測群から変化率(%)。baseline が None/0 または空なら None。"""
+    if baseline is None or baseline == 0:
+        return None
+    if not measurements:
+        return None
+    med = float(median(list(measurements)))
+    return round((med - float(baseline)) / float(baseline) * 100.0, 1)
+
+
 def effect_size(exp: Experiment) -> float | None:
     """実測中央値 vs baseline の変化率（%）。baseline が None/0 または実測なしは None。"""
-    if exp.baseline is None or exp.baseline == 0:
-        return None
-    if not exp.measurements:
-        return None
-    med = float(median(exp.measurements.values()))
-    return round((med - float(exp.baseline)) / float(exp.baseline) * 100.0, 1)
+    return _effect_size_from_values(exp.baseline, list(exp.measurements.values()))
 
 
 def format_effect_size(exp: Experiment) -> str | None:
@@ -611,7 +619,8 @@ def create_experiment(
         raise ExperimentError(f"同名の実験が既に存在します: {path}")
     # 開始前 baseline を渡されたときだけ数値を書く（空欄は従来どおり後で埋める）
     baseline_field = f"{baseline:g}" if baseline is not None else ""
-    path.write_text(
+    atomic_write_text(
+        path,
         EXPERIMENT_TEMPLATE.format(
             title=title,
             today=today.isoformat(),
@@ -621,7 +630,6 @@ def create_experiment(
             deadline=deadline.isoformat(),
             hypothesis=hypothesis or "（なぜこの変更が効くと考えるか）",
         ),
-        encoding="utf-8",
     )
     return path
 
@@ -649,3 +657,278 @@ def render_experiments_context(experiments: list[Experiment], max_points: int = 
         "※ PC前景のみ計測。カテゴリ時間の減少はスマホ等への移行（風船効果）の可能性を排除できない。"
     )
     return "\n".join(lines)
+
+
+# ---- abtest（パーソナル METR） ----
+
+ABTEST_TYPE = "abtest"
+ABTEST_METRIC = "category_minutes:開発"
+_MIN_NON_AI_DAYS = 3
+_PREDICT_RE = re.compile(r"^[+]?\s*(-?\d+(?:\.\d+)?)\s*%?$")
+
+
+@dataclass
+class AbtestExperiment:
+    path: Path
+    id: str
+    status: str  # running | finished | invalid
+    start: date
+    deadline: date
+    predict_pct: float
+    felt_pct: float | None = None
+    measured_pct: float | None = None
+    invalid_reason: str | None = None
+    sample_ai_days: int = 0
+    sample_non_ai_days: int = 0
+    card_path: str | None = None
+
+
+def parse_predict_pct(raw: str) -> float:
+    m = _PREDICT_RE.match((raw or "").strip())
+    if not m:
+        raise ExperimentError(f"予測値は +N または +N% 形式です: {raw!r}")
+    return float(m.group(1))
+
+
+def is_ai_day(stats: dict) -> bool:
+    """stats v2 の api_calls > 0（internal 除外後の集計済み値）。"""
+    ai = stats.get("ai") if isinstance(stats.get("ai"), dict) else {}
+    try:
+        return int(ai.get("api_calls") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def create_abtest(
+    experiments_dir: Path,
+    *,
+    today: date,
+    predict_pct: float,
+    days: int = 28,
+) -> Path:
+    experiments_dir = Path(experiments_dir)
+    experiments_dir.mkdir(parents=True, exist_ok=True)
+    abtest_id = f"ABT-{today.strftime('%Y%m%d')}"
+    # 同日複数: 連番
+    n = 1
+    while (experiments_dir / f"ABTEST {abtest_id}-{n:02d}.md").exists():
+        n += 1
+    abtest_id = f"{abtest_id}-{n:02d}"
+    deadline = today + timedelta(days=max(1, int(days)) - 1)
+    path = experiments_dir / f"ABTEST {abtest_id}.md"
+    content = (
+        "---\n"
+        f'title: "abtest {abtest_id}"\n'
+        f"date: {today.isoformat()}\n"
+        f"type: {ABTEST_TYPE}\n"
+        "status: running\n"
+        f"abtest_id: {abtest_id}\n"
+        f"predict_pct: {predict_pct:g}\n"
+        f"deadline: {deadline.isoformat()}\n"
+        f"metric: {ABTEST_METRIC}\n"
+        'target: ">= 0"\n'
+        "---\n\n"
+        f"# 📊 abtest {abtest_id}\n\n"
+        f"予測: {predict_pct:+g}%（開発カテゴリ・AI利用日 vs 非利用日）\n"
+        f"期間: {today.isoformat()} 〜 {deadline.isoformat()}\n\n"
+        "<!-- kaizenlog:measurements:start -->\n"
+        "## Measurements\n\n"
+        "`kaizenlog abtest finish` で確定します。\n"
+        "<!-- kaizenlog:measurements:end -->\n"
+    )
+    atomic_write_text(path, content)
+    return path
+
+
+def load_abtests(experiments_dir: Path) -> list[AbtestExperiment]:
+    if not experiments_dir.is_dir():
+        return []
+    out: list[AbtestExperiment] = []
+    for path in sorted(Path(experiments_dir).glob("ABTEST *.md")):
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        fields, ok = _parse_frontmatter(content)
+        if not ok or fields.get("type") != ABTEST_TYPE:
+            continue
+        try:
+            start = date.fromisoformat(fields.get("date", "")[:10])
+        except ValueError:
+            continue
+        try:
+            deadline = date.fromisoformat(fields.get("deadline", "")[:10])
+        except ValueError:
+            deadline = start + timedelta(days=27)
+        try:
+            predict = float(fields.get("predict_pct", "0"))
+        except ValueError:
+            predict = 0.0
+        felt = None
+        if fields.get("felt_pct"):
+            try:
+                felt = float(fields["felt_pct"])
+            except ValueError:
+                felt = None
+        measured = None
+        if fields.get("measured_pct"):
+            try:
+                measured = float(fields["measured_pct"])
+            except ValueError:
+                measured = None
+        try:
+            ai_n = int(fields.get("sample_ai_days") or 0)
+        except ValueError:
+            ai_n = 0
+        try:
+            non_n = int(fields.get("sample_non_ai_days") or 0)
+        except ValueError:
+            non_n = 0
+        out.append(
+            AbtestExperiment(
+                path=path,
+                id=fields.get("abtest_id") or path.stem,
+                status=fields.get("status", "running"),
+                start=start,
+                deadline=deadline,
+                predict_pct=predict,
+                felt_pct=felt,
+                measured_pct=measured,
+                invalid_reason=fields.get("invalid_reason") or None,
+                sample_ai_days=ai_n,
+                sample_non_ai_days=non_n,
+                card_path=fields.get("card_path") or None,
+            )
+        )
+    return out
+
+
+def compute_abtest_effect(
+    stats_list: list[dict],
+    *,
+    start: date,
+    end: date,
+    metric: str = ABTEST_METRIC,
+    pre_stats: list[dict] | None = None,
+) -> tuple[float | None, int, int, str | None]:
+    """AI日/非AI日を分割し同曜日正規化の効果量(%)を返す。
+
+    戻り値: (measured_pct | None, ai_days, non_ai_days, invalid_reason | None)
+
+    正規化: value / weekday_baseline * 100 の無次元 index。
+    baseline が None/0 の日が1日でもあれば混在を避けて不成立。
+    """
+    pre = list(pre_stats or [])
+    ai_vals: list[float] = []
+    non_vals: list[float] = []
+    missing_baseline = 0
+    for s in stats_list:
+        raw = s.get("day")
+        if not raw:
+            continue
+        try:
+            d = date.fromisoformat(str(raw)[:10])
+        except ValueError:
+            continue
+        if not (start <= d <= end):
+            continue
+        v = metric_from_stats(metric, s)
+        if v is None:
+            continue
+        wb = weekday_baseline(metric, d, pre) if pre else None
+        if wb is None or wb == 0:
+            missing_baseline += 1
+            continue
+        # 無次元 index: value / baseline * 100
+        adj = float(v) / float(wb) * 100.0
+        if is_ai_day(s):
+            ai_vals.append(adj)
+        else:
+            non_vals.append(adj)
+    if missing_baseline > 0:
+        return (
+            None,
+            len(ai_vals),
+            len(non_vals),
+            f"実測不成立(同曜日baseline不足: {missing_baseline}日)",
+        )
+    ai_n, non_n = len(ai_vals), len(non_vals)
+    if non_n < _MIN_NON_AI_DAYS:
+        return None, ai_n, non_n, f"実測不成立(サンプル不足: {non_n}日)"
+    if ai_n < 1:
+        return None, ai_n, non_n, "実測不成立(サンプル不足: AI日0日)"
+    # 非AI群中央値を baseline、AI群を measurements として effect_size 式を再利用
+    non_med = float(median(non_vals))
+    if non_med == 0:
+        return None, ai_n, non_n, "実測不成立(非AI基準が0)"
+    effect = _effect_size_from_values(non_med, ai_vals)
+    return effect, ai_n, non_n, None
+
+
+def _upsert_fm(content: str, key: str, value: str) -> str:
+    if re.search(rf"(?m)^{re.escape(key)}\s*:", content):
+        return _set_frontmatter_field(content, key, value)
+    return _insert_frontmatter_field(content, key, value)
+
+
+def finish_abtest(
+    exp: AbtestExperiment,
+    *,
+    felt_pct: float,
+    card_rel_path: str | None,
+    measured_pct: float | None,
+    invalid_reason: str | None,
+    sample_ai: int,
+    sample_non: int,
+    as_of: date,
+) -> AbtestExperiment:
+    """frontmatter を更新して finished/invalid にする。"""
+    content = exp.path.read_text(encoding="utf-8")
+    status = "invalid" if invalid_reason else "finished"
+    content = _upsert_fm(content, "status", status)
+    content = _upsert_fm(content, "felt_pct", f"{felt_pct:g}")
+    if measured_pct is not None:
+        content = _upsert_fm(content, "measured_pct", f"{measured_pct:g}")
+    if invalid_reason:
+        content = _upsert_fm(content, "invalid_reason", invalid_reason)
+    content = _upsert_fm(content, "sample_ai_days", str(sample_ai))
+    content = _upsert_fm(content, "sample_non_ai_days", str(sample_non))
+    content = _upsert_fm(content, "finished_on", as_of.isoformat())
+    if card_rel_path:
+        content = _upsert_fm(content, "card_path", card_rel_path)
+    atomic_write_text(exp.path, content)
+    exp.status = status
+    exp.felt_pct = felt_pct
+    exp.measured_pct = measured_pct
+    exp.invalid_reason = invalid_reason
+    exp.sample_ai_days = sample_ai
+    exp.sample_non_ai_days = sample_non
+    exp.card_path = card_rel_path
+    return exp
+
+
+def _insert_frontmatter_field(content: str, key: str, value: str) -> str:
+    """frontmatter 終了直前にフィールドを挿入。"""
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return content
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            lines.insert(i, f"{key}: {value}\n")
+            return "".join(lines)
+    return content
+
+
+def format_abtest_journal_line(exp: AbtestExperiment) -> str:
+    """日誌 Kaizen セクション用1行。"""
+    pred = f"{exp.predict_pct:+g}%"
+    felt = f"{exp.felt_pct:+g}%" if exp.felt_pct is not None else "—"
+    if exp.invalid_reason:
+        # invalid_reason は「実測不成立(...)」形式なので接頭辞の重複を避ける
+        meas = exp.invalid_reason.removeprefix("実測")
+    elif exp.measured_pct is not None:
+        meas = f"{exp.measured_pct:+g}%"
+    else:
+        meas = "—"
+    card = f"（カード: {exp.card_path}）" if exp.card_path else ""
+    return f"📊 abtest完了: 予測{pred} / 体感{felt} / 実測{meas}{card}"

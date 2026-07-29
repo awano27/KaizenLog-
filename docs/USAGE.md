@@ -365,6 +365,31 @@ kaizenlog prompts mark 001 dismissed
 | `kaizenlog init-config [--output PATH]` | 設定ファイルの雛形生成（既定: AppData/XDG） |
 | `kaizenlog --config PATH <cmd>` | 明示設定パス（サブコマンドより前） |
 
+
+### 計測から調教へ（第27弾）
+
+| コマンド | 説明 |
+| --- | --- |
+| `kaizenlog handoff [--target PATH ...] [--dry-run]` | 実測教訓（リトライ傾向・ツールエラー・連続FAIL・skilled待ちPRM）を CLAUDE.md / AGENTS.md の `kaizenlog:agent-context` 区間へ冪等注入。`--target` 未指定時は config `[handoff] targets` |
+| `kaizenlog prompts --roi` | プロンプト資産ROIランキング（再発30日・推定tokens・skilled削減は後30日完了後のみ確定） |
+| `kaizenlog coach [--dry-run] [--apply FILE]` | 30日実測から CLAUDE.md 追記案を diff 提案（自動適用しない）。`--dry-run` はコンテキストのみ。`--apply` で承認適用（`kaizenlog:coach` 区間） |
+| `kaizenlog abtest new --predict +30 [--days 28]` | パーソナルMETR実験の開始（予測%） |
+| `kaizenlog abtest finish --felt +20` | 体感入力・実測効果量・SVGカード生成・終了日ADVICE区間へ1行。baseline不足時は不成立 |
+| `kaizenlog abtest status` | 実験一覧 |
+
+設定例:
+
+```toml
+# [handoff]
+# targets = ["C:/develop/myrepo/CLAUDE.md"]
+
+# [aiwork]
+# usd_jpy = 150.0
+# loop_tax_alert_usd = 1.0
+```
+
+ループ税は `generate` / `status` に1行表示されます（最終試行を除くリトライ連鎖の浪費。部分不明時は tokens不明/金額不明とし部分合計しない）。
+
 ## 開発者向け: プロンプト変更後の評価
 
 プロンプト（`prompts/*.md`）や契約検証を変えたら、前後比較のために:

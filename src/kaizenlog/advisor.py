@@ -27,7 +27,13 @@ import requests
 from .advice_evidence import AdviceEvidence, build_advice_evidence
 from .config import LLMConfig
 
-BUNDLED_PROMPTS = ("daily_advisor", "weekly_review", "ai_work_deep_review", "privacy_safe")
+BUNDLED_PROMPTS = (
+    "daily_advisor",
+    "weekly_review",
+    "ai_work_deep_review",
+    "privacy_safe",
+    "coach",
+)
 
 # Claude Code / Copilot CLI はセッション JSONL にプロンプトが残るため、
 # KaizenLog 自身の呼び出しを計測から除外するためのセンチネル。

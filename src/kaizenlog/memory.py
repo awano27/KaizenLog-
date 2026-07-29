@@ -565,6 +565,46 @@ def _consecutive_metric_fails(
     return out
 
 
+def consecutive_fail_actions(
+    entries: list[MemoryEntry], today: date, *, n: int = 2
+) -> list[str]:
+    """同一指標で直近 n 連続FAILの表示行を返す（公開ラッパー）。
+
+    形式: \"N日連続FAIL: KZN-... (metric 条件)\"
+    無い場合は空リスト。
+    """
+    from .verdict import parse_pass_condition
+
+    window_start = (today - timedelta(days=_CONSECUTIVE_FAIL_WINDOW_DAYS)).isoformat()
+    today_iso = today.isoformat()
+
+    def sort_key(e: MemoryEntry) -> str:
+        return e.verdict_date or e.date or ""
+
+    judged = [
+        e
+        for e in entries
+        if e.status == "done"
+        and e.verdict in ("pass", "fail")
+        and window_start <= sort_key(e) <= today_iso
+    ]
+    judged.sort(key=sort_key, reverse=True)
+    by_metric: dict[str, list[MemoryEntry]] = {}
+    for e in judged:
+        parsed = parse_pass_condition(e.action)
+        if not parsed:
+            continue
+        metric = parsed[0]
+        by_metric.setdefault(metric, []).append(e)
+    out: list[str] = []
+    for metric, ents in by_metric.items():
+        if len(ents) >= n and all((e.verdict or "") == "fail" for e in ents[:n]):
+            latest = ents[0]
+            cond = (latest.action or metric).strip()
+            out.append(f"{n}日連続FAIL: {latest.id} ({cond})")
+    return out
+
+
 def _is_iso_date(s: str) -> bool:
     try:
         date.fromisoformat(s)
