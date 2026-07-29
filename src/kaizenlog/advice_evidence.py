@@ -285,6 +285,39 @@ def _tool_error_concentration_sentence(stats: Mapping[str, Any]) -> str | None:
     )
 
 
+def _goal_category_minutes(
+    stats: Mapping[str, Any], category: str
+) -> float | None:
+    by_cat = stats.get("by_category")
+    if not isinstance(by_cat, Mapping):
+        return None
+    v = by_cat.get(category)
+    if isinstance(v, (int, float)) and isfinite(float(v)):
+        return float(v)
+    return None
+
+
+def _count_goal_days(
+    history: Sequence[Mapping[str, Any]] | None,
+    current: Mapping[str, Any] | None,
+    *,
+    window: int = 7,
+) -> tuple[int, int]:
+    """直近 window 日（当日含む）の目標記入日数。戻り値 (記入日数, 窓日数)。"""
+    days: list[Mapping[str, Any]] = []
+    if history:
+        days.extend(list(history)[-window:])
+    if current is not None:
+        # history に当日が含まれる実装もあるため day で重複除去
+        cur_day = current.get("day")
+        days = [d for d in days if d.get("day") != cur_day]
+        days.append(current)
+    days = days[-window:]
+    n_window = len(days) if days else window
+    n_goal = sum(1 for d in days if isinstance(d.get("goal_text"), str) and d.get("goal_text").strip())
+    return n_goal, max(n_window, 1)
+
+
 def _build_reader_summary(
     *,
     total_minutes: float,
@@ -305,9 +338,17 @@ def _build_reader_summary(
     parts: list[str] = [
         f"本日は合計{_fmt(total_minutes)}分の作業が記録されています。"
     ]
+    # 目標カテゴリ実測（断定なし・goal_category がある日のみ）
+    goal_cat = stats.get("goal_category")
+    if isinstance(goal_cat, str) and goal_cat.strip() and len(parts) < 3:
+        mins = _goal_category_minutes(stats, goal_cat.strip())
+        if mins is not None:
+            parts.append(
+                f"目標カテゴリ『{goal_cat.strip()}』は{_fmt(mins)}分が記録されています。"
+            )
     # 優先1: AI摩擦の集中
     friction = _tool_error_concentration_sentence(stats)
-    if friction:
+    if friction and len(parts) < 3:
         parts.append(friction)
     # 優先2: カテゴリ特徴（断定禁止・記録調）
     if len(parts) < 3 and category_stats_valid and by_category:
@@ -460,6 +501,21 @@ def build_advice_evidence(
         f"- [F1] 合計アクティブ時間 {_fmt(total_minutes)}分{f1_note} / "
         f"activity block {block_count_text} / カテゴリ変更 {context_switches}回{rate_text}。"
     )
+
+    # 今日の目標（stats に redact 済みで保存されたもののみ。達成断定はしない）
+    goal_text = stats.get("goal_text")
+    if isinstance(goal_text, str) and goal_text.strip():
+        # F14〜F16: F11 は依頼長さ層別が既に使用しているため衝突しない番号を使う
+        lines.append(f"- [F14] 今日の目標: {goal_text.strip()}")
+        goal_cat = stats.get("goal_category")
+        if isinstance(goal_cat, str) and goal_cat.strip():
+            gm = _goal_category_minutes(stats, goal_cat.strip())
+            if gm is not None:
+                lines.append(
+                    f"- [F15] 目標カテゴリ『{goal_cat.strip()}』の実測: {_fmt(gm)}分"
+                )
+        n_goal, n_win = _count_goal_days(history, stats, window=7)
+        lines.append(f"- [F16] 目標記入: {n_win}日中{n_goal}日")
 
     by_category_value = stats.get("by_category")
     category_stats_valid = _valid_number_mapping(by_category_value)

@@ -25,6 +25,7 @@ def atomic_write_text(path: Path, content: str) -> None:
 ACTIVITY_MARKER = "kaizenlog:activity"
 ADVICE_MARKER = "kaizenlog:advice"
 ACTIONS_MARKER = "kaizenlog:actions"  # 朝の引き継ぎ（未完了アクション転記）
+GOAL_MARKER = "kaizenlog:goal"  # 今日の作業目標（所有: goal コマンドのみ。generate/advise は読取）
 WEEKLY_CONTEXT_MARKER = "kaizenlog:weekly-context"  # 週次スコアカード（決定論）
 
 

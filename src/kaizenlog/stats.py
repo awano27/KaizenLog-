@@ -45,6 +45,9 @@ def build_stats(
     afk_watcher_available: bool | None = None,
     pricing: dict[str, float] | None = None,
     title_redactor: Callable[[str], str] | None = None,
+    goal_text: str | None = None,
+    goal_category: str | None = None,
+    internal_ai_sessions: int = 0,
 ) -> dict:
     projects: dict[str, dict] = {}
     for s in cc_sessions:
@@ -171,6 +174,7 @@ def build_stats(
         ],
         "ai": {
             "sessions": n_sess,
+            "internal_ai_sessions": int(internal_ai_sessions or 0),
             "fragmented": sum(1 for s in cc_sessions if s.is_fragmented),
             "tool_errors": sum(s.tool_errors for s in cc_sessions),
             "interruptions": sum(s.interruptions for s in cc_sessions),
@@ -228,6 +232,11 @@ def build_stats(
     # 判定・実験計測からの除外は本キー導入後も行わない（注記のみ。将来判断）。
     if afk_watcher_available is not None:
         stats["afk_watcher_available"] = bool(afk_watcher_available)
+    # 今日の目標（redact 適用後の文言のみ保存。generate がノートから読む）
+    if goal_text:
+        stats["goal_text"] = str(goal_text)
+        if goal_category:
+            stats["goal_category"] = str(goal_category)
     return stats
 
 
@@ -242,6 +251,9 @@ def write_stats(
     afk_watcher_available: bool | None = None,
     pricing: dict[str, float] | None = None,
     title_redactor: Callable[[str], str] | None = None,
+    goal_text: str | None = None,
+    goal_category: str | None = None,
+    internal_ai_sessions: int = 0,
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
@@ -258,6 +270,9 @@ def write_stats(
                 afk_watcher_available=afk_watcher_available,
                 title_redactor=title_redactor,
                 pricing=pricing,
+                goal_text=goal_text,
+                goal_category=goal_category,
+                internal_ai_sessions=internal_ai_sessions,
             ),
             ensure_ascii=False,
             indent=1,

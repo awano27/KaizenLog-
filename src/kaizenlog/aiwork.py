@@ -160,6 +160,8 @@ class AISession:
     tools_measurable: bool = True
     # ブラウザ応答の文字数（トークンではない。コスト/output_tokens に混ぜない）
     assistant_chars: int = 0
+    # KaizenLog 自身の LLM 呼び出し（advise 等）— 全指標から除外
+    is_internal: bool = False
 
     @property
     def minutes(self) -> float:
@@ -232,6 +234,54 @@ def normalize_prompt_text(text: str) -> str:
     return " ".join((text or "").split())
 
 
+def bundled_prompt_head_prefixes() -> tuple[str, ...]:
+    """同梱 prompts/*.md 各ファイルの最初の非空行（正規化）。
+
+    テンプレ改訂に自動追従する（ハードコードしない）。過去ログ除外用。
+    """
+    from importlib import resources
+
+    prefixes: list[str] = []
+    try:
+        root = resources.files("kaizenlog") / "prompts"
+    except (TypeError, FileNotFoundError, ModuleNotFoundError, AttributeError):
+        return tuple()
+    try:
+        names = sorted(p.name for p in root.iterdir() if p.name.endswith(".md"))
+    except (OSError, AttributeError):
+        return tuple()
+    for name in names:
+        try:
+            text = (root / name).read_text(encoding="utf-8")
+        except (OSError, TypeError, AttributeError):
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if line:
+                prefixes.append(normalize_prompt_text(line))
+                break
+    return tuple(prefixes)
+
+
+def is_kaizenlog_internal_text(text: str) -> bool:
+    """セッション初回ユーザー文が KaizenLog 内部呼び出しなら True。
+
+    - センチネル [kaizenlog-internal]
+    - 同梱プロンプト先頭行との前方一致（導入前の過去ログ用）
+    """
+    if not text:
+        return False
+    if "[kaizenlog-internal]" in text:
+        return True
+    head = normalize_prompt_text(text)
+    if not head:
+        return False
+    for prefix in bundled_prompt_head_prefixes():
+        if prefix and head.startswith(prefix):
+            return True
+    return False
+
+
 def session_title_from_text(text: str, max_chars: int = SESSION_TITLE_MAX) -> str:
     """依頼文から表用 title（先頭 max_chars 字）。ラッパーは呼び出し側で除外済み想定。"""
     t = normalize_prompt_text(text)
@@ -295,6 +345,9 @@ def _note_tool_use(session: AISession, name: str, tool_input: object = None) -> 
 def _maybe_set_title(session: AISession, text: str) -> None:
     if session.title is not None:
         return
+    # 初回ユーザー文で内部呼び出し判定（title 切詰前の全文を見る）
+    if is_kaizenlog_internal_text(text):
+        session.is_internal = True
     extracted = extract_session_title(text)
     if extracted is None:
         return
@@ -540,6 +593,8 @@ def scan_user_prompts(
                         continue
                     if _is_command_wrapper(text):
                         continue
+                    if is_kaizenlog_internal_text(text):
+                        continue
                     out.append(
                         UserPrompt(
                             timestamp=ts,
@@ -616,8 +671,12 @@ def collect_ai_telemetry(
     adapters: list[TelemetryAdapter],
     day_start: datetime,
     day_end: datetime,
-) -> tuple[list[AISession], list[UserPrompt]]:
-    """全アダプタのセッション・プロンプトをマージして時系列ソートする。"""
+) -> tuple[list[AISession], list[UserPrompt], int]:
+    """全アダプタのセッション・プロンプトをマージして時系列ソートする。
+
+    戻り値: (user sessions, user prompts, internal_ai_sessions 件数)
+    KaizenLog 自身の LLM 呼び出しセッションは除外し、件数だけ返す。
+    """
     sessions: list[AISession] = []
     prompts: list[UserPrompt] = []
     for adapter in adapters:
@@ -626,9 +685,22 @@ def collect_ai_telemetry(
             prompts.extend(adapter.scan_user_prompts(day_start, day_end))
         except OSError:
             continue
+    # アダプタ側で is_internal が立っていなくても、title/初回文から再判定
+    internal_n = 0
+    kept: list[AISession] = []
+    for s in sessions:
+        if s.is_internal:
+            internal_n += 1
+            continue
+        # title は切詰後なのでセンチネル短文は title に残る。テンプレ先頭は
+        # first_prompt_len と title だけでは足りない場合があるため、
+        # スキャン時の is_internal を主とする。
+        kept.append(s)
+    sessions = kept
+    prompts = [p for p in prompts if not is_kaizenlog_internal_text(p.text)]
     sessions.sort(key=lambda s: s.start)
     prompts.sort(key=lambda p: p.timestamp)
-    return sessions, prompts
+    return sessions, prompts, internal_n
 
 
 def _fmt_minutes(minutes: float) -> str:
@@ -777,6 +849,7 @@ def render_aiwork_markdown(
     session_titles: bool = True,
     redactor: Callable[[str], str] | None = None,
     retry_chains: Sequence[RetryChain] | None = None,
+    internal_ai_sessions: int = 0,
 ) -> str:
     """「AI作業の質」セクションのMarkdownを生成する。セッションが無ければ空文字。
 
@@ -833,14 +906,19 @@ def render_aiwork_markdown(
     # 総量の大半が単価不明だと「$0.04」がほぼ無意味で誤解を招くため。
     costed_tokens = max(0, int(output_tokens) - int(uncosted))
     if int(uncosted) > costed_tokens:
+        # S3: サマリ行の「出力トークン: N」と重複させない
         lines.append(
-            f"出力トークン: {output_tokens:,}"
-            f"（モデル単価不明分が大半のためコスト換算なし）"
+            "推定コスト: -（モデル単価不明分が大半のため換算なし）"
         )
     else:
         lines.append(
             f"推定コスト: ${est_cost:.2f}（output tokens ベース概算、"
             f"対象外 {uncosted:,} tok。input/cache 未計上）"
+        )
+    if int(internal_ai_sessions) > 0:
+        lines.append(
+            f"内部呼び出し（KaizenLog自身のLLM実行）: "
+            f"{int(internal_ai_sessions)}回を計測から除外"
         )
     if top_tools:
         lines.append(f"主なツール: {top_tools}")

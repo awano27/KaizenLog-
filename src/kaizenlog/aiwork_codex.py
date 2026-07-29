@@ -115,6 +115,7 @@ class _SessionAccum:
     edits: int = 0
     tests_run: bool = False
     ended_in_error: bool = False
+    is_internal: bool = False
 
     def add_token(self, ts: datetime, ot: int, day_start: datetime, day_end: datetime) -> None:
         if ts < day_start:
@@ -136,7 +137,11 @@ class _SessionAccum:
 
     def note_user_message(self, text: str) -> None:
         # コマンドラッパーは往復に数えない（Claude 側 _update_session と対称）
-        from .aiwork import _is_command_wrapper, normalize_prompt_text
+        from .aiwork import (
+            _is_command_wrapper,
+            is_kaizenlog_internal_text,
+            normalize_prompt_text,
+        )
 
         if _is_command_wrapper(text):
             return
@@ -145,6 +150,8 @@ class _SessionAccum:
         self.user_turns += 1
         if self.title is not None:
             return
+        if is_kaizenlog_internal_text(text):
+            self.is_internal = True
         extracted = extract_session_title(text)
         if extracted is None:
             return
@@ -192,6 +199,7 @@ class _SessionAccum:
             edits=self.edits,
             tests_run=self.tests_run,
             ended_in_error=self.ended_in_error,
+            is_internal=self.is_internal,
         )
 
 

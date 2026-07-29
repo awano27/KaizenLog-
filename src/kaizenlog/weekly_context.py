@@ -18,6 +18,16 @@ from .stats import load_stats
 from .vault import WEEKLY_CONTEXT_MARKER, atomic_write_text, upsert_section
 
 
+def _goal_minutes_for_day(stats: dict, category: str | None) -> float | None:
+    if not category:
+        return None
+    by_cat = stats.get("by_category") if isinstance(stats.get("by_category"), dict) else {}
+    v = by_cat.get(category)
+    if isinstance(v, (int, float)):
+        return float(v)
+    return None
+
+
 def monday_of(d: date) -> date:
     """月曜始まりの週の初日。"""
     return d - timedelta(days=d.weekday())
@@ -301,6 +311,32 @@ def render_weekly_context(
     lines.append(
         f"（スキル化済み {counts['skilled']}件 / 却下 {counts['dismissed']}件）"
     )
+
+    # 目標トレース（観察のみ・達成判定なし）
+    lines.extend(["", "## 目標", ""])
+    goal_days = 0
+    goal_rows: list[str] = []
+    for s in week_stats:
+        gt = s.get("goal_text")
+        if not (isinstance(gt, str) and gt.strip()):
+            continue
+        goal_days += 1
+        d = s.get("day") or "?"
+        gc = s.get("goal_category")
+        mins = _goal_minutes_for_day(s, gc if isinstance(gc, str) else None)
+        if isinstance(gc, str) and gc.strip() and mins is not None:
+            goal_rows.append(
+                f"- {d}: {gt.strip()} @{gc.strip()}（実測 {mins:.1f}分）"
+            )
+        elif isinstance(gc, str) and gc.strip():
+            goal_rows.append(f"- {d}: {gt.strip()} @{gc.strip()}")
+        else:
+            goal_rows.append(f"- {d}: {gt.strip()}")
+    if goal_days == 0:
+        lines.append("- 目標記入なし")
+    else:
+        lines.append(f"- 目標設定日数: 7日中{goal_days}日")
+        lines.extend(goal_rows)
     lines.append("")
     return "\n".join(lines)
 

@@ -13,6 +13,7 @@
   kaizenlog doctor                         セットアップと環境の健全性を診断
   kaizenlog morning [--date]               朝の追いつき・アクション再描画・通知
   kaizenlog today  [--date]                今日の未完了アクションを表示
+  kaizenlog goal   [\"目標 @カテゴリ\"]       今日の作業目標を設定/表示
   kaizenlog done   <id>                    アクションをターミナルから消化
   kaizenlog setup                          対話式セットアップウィザード
   kaizenlog init-config                    設定ファイルの雛形を出力する
@@ -31,6 +32,7 @@ from zoneinfo import ZoneInfo
 
 from .advisor import (
     AdviceContractError,
+    apply_internal_sentinel,
     AdviceResult,
     AdvisorError,
     generate_advice,
@@ -206,9 +208,12 @@ def cmd_generate(
     title_redactor = make_redactor(
         cfg.privacy.redact_patterns, cfg.privacy.replacement
     )
+    internal_ai_n = 0
     if cfg.aiwork.enabled:
         adapters = available_adapters(cfg)
-        ai_sessions, day_prompts = collect_ai_telemetry(adapters, day_start, day_end)
+        ai_sessions, day_prompts, internal_ai_n = collect_ai_telemetry(
+            adapters, day_start, day_end
+        )
         day_retry_chains = detect_retry_chains(day_prompts)
         retry_chain_count = len(day_retry_chains)
         aiwork_md = render_aiwork_markdown(
@@ -219,6 +224,7 @@ def cmd_generate(
             session_titles=bool(getattr(cfg.aiwork, "session_titles", True)),
             redactor=title_redactor,
             retry_chains=day_retry_chains,
+            internal_ai_sessions=internal_ai_n,
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
@@ -229,6 +235,13 @@ def cmd_generate(
     print(f"   合計 {summary.total_minutes:.0f}分 / {len(summary.blocks)}ブロック"
           f" / AI関連画面ブロック {summary.ai_activity_blocks}回"
           f" / AIセッション {len(ai_sessions)}回")
+
+    # 目標は goal コマンド専用区間。generate は読むだけ（書き換えない）
+    from .goal import goal_stats_fields, read_goal
+
+    note_after = store.read(day)
+    day_goal = read_goal(note_after, known_cats)
+    goal_text_stat, goal_cat_stat = goal_stats_fields(day_goal, title_redactor)
 
     # パターン検出用の機械可読な統計を蓄積する
     write_stats(
@@ -242,6 +255,9 @@ def cmd_generate(
         afk_watcher_available=afk_ok,
         pricing=pricing,
         title_redactor=title_redactor if cfg.aiwork.enabled else None,
+        goal_text=goal_text_stat,
+        goal_category=goal_cat_stat,
+        internal_ai_sessions=internal_ai_n,
     )
 
     # 実験の実測追記: running 全件 + adopted（deadline から30日以内のみ）
@@ -819,6 +835,8 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
             evidence_ctx,
             reflections=reflections,
         )
+        # dry-run / 本実行同一: generate_text と同じセンチネル規則を表示にも適用
+        system_prompt = apply_internal_sentinel(system_prompt, cfg.llm.backend)
         print("===== system prompt =====")
         print(system_prompt)
         print("===== user prompt =====")
@@ -945,6 +963,37 @@ def _sync_checkbox_statuses(cfg: Config, day: date) -> tuple[list, int]:
     return sorted(by_id.values(), key=lambda e: e.id), len(status_updates)
 
 
+def cmd_goal(cfg: Config, day: date, goal_arg: str | None) -> int:
+    """今日の作業目標を設定/表示する（goal マーカー区間の唯一の書き手）。"""
+    from .goal import format_goal_section, read_goal, write_goal
+
+    known = known_category_names(cfg.rules)
+    store = DailyNoteStore(cfg.daily_notes_path)
+    if not goal_arg or not str(goal_arg).strip():
+        content = store.read(day)
+        g = read_goal(content, known)
+        if g is None:
+            print("🎯 目標: 未設定（`kaizenlog goal \"...\"` で設定）")
+            return 0
+        cat = f" @{g.category}" if g.category else ""
+        print(f"🎯 今日の目標: {g.text}{cat}")
+        return 0
+    try:
+        path, g = write_goal(
+            cfg.daily_notes_path,
+            day,
+            goal_arg,
+            known_categories=known,
+        )
+    except ValueError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+    cat = f" @{g.category}" if g.category else ""
+    print(f"✅ 目標を書き込みました: {path}")
+    print(f"🎯 今日の目標: {g.text}{cat}")
+    return 0
+
+
 def cmd_today(
     cfg: Config,
     day: date,
@@ -953,6 +1002,18 @@ def cmd_today(
     show_all: bool = False,
 ) -> int:
     """ターミナルから今日の未完了アクションを見る。"""
+    # 目標行は未設定でも必ず1行（毎朝の想起）
+    from .goal import read_goal
+
+    known = known_category_names(cfg.rules)
+    store = DailyNoteStore(cfg.daily_notes_path)
+    g = read_goal(store.read(day), known)
+    if g is None:
+        print("🎯 目標: 未設定（`kaizenlog goal \"...\"` で設定）")
+    else:
+        cat = f" @{g.category}" if g.category else ""
+        print(f"🎯 今日の目標: {g.text}{cat}")
+
     if no_sync:
         entries = load_entries(cfg.memory_path)
         print("ℹ 同期せずに表示しています")
@@ -1179,7 +1240,7 @@ def cmd_prompts(
     end = datetime.combine(end_day, time.min, tzinfo=tz) + timedelta(days=1)
     start = end - timedelta(days=days)
     adapters = available_adapters(cfg) if cfg.aiwork.enabled else []
-    _, prompts = collect_ai_telemetry(adapters, start, end)
+    _, prompts, _ = collect_ai_telemetry(adapters, start, end)
     tracking: list[tuple[str, str]] = []
     for exp in load_experiments(cfg.experiments_path):
         if exp.status not in ("running", "adopted"):
@@ -1693,6 +1754,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     skp.add_argument("id", help="KZN-YYYYMMDD-NNN または proposed の ID 末尾")
     skp.add_argument("--reason", default="", help="スキップ理由（任意）")
+    gl = sub.add_parser(
+        "goal",
+        help="今日の作業目標を設定/表示（goal マーカー区間の唯一の書き手）",
+    )
+    gl.add_argument(
+        "text",
+        nargs="?",
+        default=None,
+        help='目標文（例: "リリースノート下書き @執筆・ノート"）。省略時は表示のみ',
+    )
+    gl.add_argument("--date", help="対象日 YYYY-MM-DD（省略時は今日）")
 
     args = parser.parse_args(argv)
 
@@ -1803,6 +1875,11 @@ def main(argv: list[str] | None = None) -> int:
             no_sync=bool(getattr(args, "no_sync", False)),
             show_all=bool(getattr(args, "show_all", False)),
         )
+
+    if args.command == "goal":
+        tz = ZoneInfo(cfg.timezone)
+        day = _parse_date(args.date, tz)
+        return cmd_goal(cfg, day, getattr(args, "text", None))
 
     if args.command == "done":
         tz = ZoneInfo(cfg.timezone)

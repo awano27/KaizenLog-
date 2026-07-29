@@ -345,6 +345,7 @@ kaizenlog prompts mark 001 dismissed
 | `kaizenlog advise [--date YYYY-MM-DD]` | 改善提案のみ |
 | `kaizenlog morning [--skip-catch-up]` | 朝: 追いつき→📌再描画→通知 |
 | `kaizenlog today [--no-sync] [--all]` | 未完了一覧（既定でノートチェック同期） |
+| `kaizenlog goal ["目標 @カテゴリ"]` | 今日の作業目標を設定/表示（goal マーカー専用） |
 | `kaizenlog done <id>` | アクションを消化 |
 | `kaizenlog experiment new --title ... --metric ... --target ...` | 実験の起票 |
 | `kaizenlog experiment list` | 実験一覧（効果量付き） |

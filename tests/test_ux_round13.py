@@ -312,8 +312,10 @@ def test_x3_today_no_sync_skips_note(tmp_path, monkeypatch, capsys):
     assert cli_mod.cmd_today(cfg, day, no_sync=True) == 0
     out = capsys.readouterr().out
     assert "同期せずに表示" in out
-    assert reads == []
+    # 目標表示のため当日ノートは1回だけ読む（チェック同期の複数日走査はしない）
+    assert reads == [day]
     assert "KZN-20260725-001" in out
+    assert "目標" in out
 
 
 # ---- X4 buckets -------------------------------------------------------------

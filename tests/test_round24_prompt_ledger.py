@@ -127,7 +127,7 @@ def test_pr1_redact_before_persist(tmp_path: Path):
     ledger = load_prompt_ledger(mem)
     assert ledger
     assert "ACME-SECRET-CLIENT" not in ledger[0].representative
-    assert "[REDACTED]" in ledger[0].representative or "redacted" in ledger[0].representative
+    assert "[REDACTED]" in ledger[0].representative
 
 
 def test_pr2_resolve_exact_suffix_ambiguous_missing(tmp_path: Path):

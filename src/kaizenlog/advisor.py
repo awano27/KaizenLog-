@@ -29,6 +29,29 @@ from .config import LLMConfig
 
 BUNDLED_PROMPTS = ("daily_advisor", "weekly_review", "ai_work_deep_review", "privacy_safe")
 
+# Claude Code / Copilot CLI はセッション JSONL にプロンプトが残るため、
+# KaizenLog 自身の呼び出しを計測から除外するためのセンチネル。
+# openai-compatible（Ollama 等）はセッションログを残さないため対象外。
+INTERNAL_SENTINEL = (
+    "[kaizenlog-internal] 本行は計測除外用マーカーです。回答に影響させず無視してください。"
+)
+INTERNAL_SENTINEL_TOKEN = "[kaizenlog-internal]"
+
+
+def apply_internal_sentinel(system_prompt: str, backend: str) -> str:
+    """CLI バックエンドの system 先頭に計測除外センチネルを付ける（冪等）。
+
+    dry-run 表示と本実行で同じ文字列になるよう、呼び出し側でも共有する。
+    openai-compatible はセッションログを残さないため付与しない。
+    """
+    if backend not in ("claude-code-cli", "copilot-cli"):
+        return system_prompt
+    text = system_prompt or ""
+    if text.lstrip().startswith(INTERNAL_SENTINEL_TOKEN):
+        return text
+    return INTERNAL_SENTINEL + chr(10) + text
+
+
 
 def load_bundled_prompt(name: str) -> str:
     return (resources.files("kaizenlog") / "prompts" / f"{name}.md").read_text(encoding="utf-8")
@@ -392,7 +415,9 @@ def generate_text(
         call = backend_calls[backend]
         for attempt in range(cfg.retries + 1):
             try:
-                return call(cfg, system_prompt, user_prompt)
+                # CLI のみセンチネル付与（backend ごとに。フォールバック先 openai は対象外）
+                sp = apply_internal_sentinel(system_prompt, backend)
+                return call(cfg, sp, user_prompt)
             except BackendUnavailable as e:
                 last_error = e
                 break  # 環境起因の失敗はリトライしても直らない

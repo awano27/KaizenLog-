@@ -172,9 +172,11 @@ def test_n4_uncosted_majority_hides_dollar():
     known = _sess(10_000, "claude-sonnet-4", "k")  # priced
     unknown = _sess(200_000, "unknown-local", "u")
     md = render_aiwork_markdown([known, unknown], timezone.utc)
-    assert "コスト換算なし" in md
+    # R25 S3: フォールバックは「推定コスト: -（…換算なし）」に統一（トークン数値は1回）
+    assert "換算なし" in md
     assert "推定コスト: $" not in md
     assert "210,000" in md or "210000" in md.replace(",", "")
+    assert md.count("210,000") == 1 or md.replace(",", "").count("210000") == 1
 
 
 def test_n4_costed_majority_keeps_dollar():
@@ -182,4 +184,4 @@ def test_n4_costed_majority_keeps_dollar():
     unknown = _sess(5_000, "unknown-local", "u")
     md = render_aiwork_markdown([known, unknown], timezone.utc)
     assert "推定コスト: $" in md
-    assert "コスト換算なし" not in md
+    assert "換算なし" not in md
