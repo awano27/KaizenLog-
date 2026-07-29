@@ -124,3 +124,42 @@ def test_readme_svg_assets_are_well_formed_and_self_contained():
             'href="https://',
         ):
             assert forbidden not in text
+
+
+def test_readme_presents_an_ai_optional_daily_journal_and_reflection_loop():
+    text = README.read_text(encoding="utf-8")
+    marker = "## 毎日の記録と振り返りに使う"
+    assert marker in text
+    section = text.split(marker, 1)[1].split("\n---", 1)[0]
+
+    for required in (
+        "AIを使わない日でも",
+        "架空の日誌例",
+        "**合計アクティブ時間**: 6h42m",
+        "コンテキストスイッチ: 18回",
+        "**集中ブロック**: 3回",
+        "執筆・ノート",
+        "会議",
+        "調査",
+        "事務作業",
+        "時間配分を見直す",
+        "集中と中断を振り返る",
+        "一日の流れを思い出す",
+        'kaizenlog goal "提案書の初稿を完成させる @執筆・ノート"',
+        "## 振り返り",
+        "管理マーカー区間だけを更新",
+        "その外側の手書き本文を置換しません",
+        "`generate --date YYYY-MM-DD`だけならLLMは不要です。",
+        "設定済みのLLMバックエンド",
+        "生産性を自動判定するものではありません",
+    ):
+        assert required in section
+
+    for forbidden in (
+        "## 毎日の記録として使う",
+        "Activity Logは勤務時間です",
+        "スマートフォンの行動も記録します",
+        "振り返りを自動生成します",
+        "日誌の作成にはLLMが必須です",
+    ):
+        assert forbidden not in text
