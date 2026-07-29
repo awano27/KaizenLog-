@@ -1,7 +1,54 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="120" viewBox="0 0 1200 120" role="img" aria-labelledby="t d">
-  <title id="t">Quick start</title>
-  <desc id="d">Install, setup, doctor, first run.</desc>
-  <rect width="1200" height="120" rx="18" fill="#0f161c"/>
-  <text x="48" y="48" fill="#e8a54b" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" letter-spacing="2">QUICK START</text>
-  <text x="48" y="88" fill="#eef3f6" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Hiragino Sans, Yu Gothic UI, Meiryo, sans-serif" font-size="32" font-weight="700">4コマンドで夜の自動ループまで</text>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="220" viewBox="0 0 1200 220"
+     role="img" aria-labelledby="title desc">
+  <title id="title">KaizenLogの初回セットアップ</title>
+  <desc id="desc">setup、doctor、generateの3コマンドで、設定から最初の日誌生成まで進む手順。</desc>
+
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#75CFA3" stroke-opacity=".05" stroke-width="1"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#75CFA3"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="220" rx="24" fill="#0B1211"/>
+  <rect width="1200" height="220" rx="24" fill="url(#grid)"/>
+
+  <text x="48" y="46" fill="#75CFA3"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="20" font-weight="700" letter-spacing="3">FIRST SUCCESS · 3 COMMANDS</text>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Yu Gothic UI', sans-serif">
+    <g transform="translate(48 76)">
+      <rect width="296" height="104" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/>
+      <text x="24" y="34" fill="#75CFA3" font-size="20" font-weight="750">01 · SETUP</text>
+      <text x="24" y="72" fill="#F4F0E8"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="27" font-weight="750">kaizenlog setup</text>
+    </g>
+
+    <path d="M364 128H426" stroke="#75CFA3" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+
+    <g transform="translate(448 76)">
+      <rect width="296" height="104" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/>
+      <text x="24" y="34" fill="#75CFA3" font-size="20" font-weight="750">02 · DOCTOR</text>
+      <text x="24" y="72" fill="#F4F0E8"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="27" font-weight="750">kaizenlog doctor</text>
+    </g>
+
+    <path d="M764 128H826" stroke="#75CFA3" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+
+    <g transform="translate(848 76)">
+      <rect width="304" height="104" rx="18" fill="#17231F" stroke="#F0B667" stroke-width="3"/>
+      <text x="24" y="34" fill="#F0B667" font-size="20" font-weight="800">03 · GENERATE</text>
+      <text x="24" y="72" fill="#F4F0E8"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="27" font-weight="750">kaizenlog generate</text>
+      <text x="280" y="33" text-anchor="end" fill="#F0B667" font-size="18" font-weight="750">最初の日誌</text>
+    </g>
+  </g>
 </svg>

@@ -1,9 +1,57 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="140" viewBox="0 0 1200 140" role="img" aria-labelledby="t d">
-  <title id="t">Daily loop</title>
-  <desc id="d">Night generate and advise, morning handoff, terminal today and done.</desc>
-  <rect width="1200" height="140" rx="20" fill="#0f161c"/>
-  <text x="48" y="52" fill="#7a9e8f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" letter-spacing="2">DAILY LOOP</text>
-  <text x="48" y="96" fill="#eef3f6" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Hiragino Sans, Yu Gothic UI, Meiryo, sans-serif" font-size="36" font-weight="700">夜に計測し、朝に届き、日中に消化する</text>
-  <circle cx="1120" cy="70" r="28" fill="none" stroke="#3d9a7a" stroke-width="3"/>
-  <path d="M1110 70 h20 M1120 60 v20" stroke="#3d9a7a" stroke-width="3" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="240" viewBox="0 0 1200 240"
+     role="img" aria-labelledby="title desc">
+  <title id="title">KaizenLogの毎日の改善ループ</title>
+  <desc id="desc">夜にPC作業を日誌へまとめ、朝に昨日の記録を確認し、日中に改善を1つ試す循環。</desc>
+
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#75CFA3" stroke-opacity=".05" stroke-width="1"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#75CFA3"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="240" rx="24" fill="#0B1211"/>
+  <rect width="1200" height="240" rx="24" fill="url(#grid)"/>
+
+  <text x="48" y="48" fill="#75CFA3"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="20" font-weight="700" letter-spacing="3">DAILY IMPROVEMENT LOOP</text>
+
+  <path d="M342 137H414" stroke="#75CFA3" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M742 137H814" stroke="#75CFA3" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M1052 197C1028 226 176 226 148 197" fill="none" stroke="#315244" stroke-width="3" stroke-dasharray="9 9" marker-end="url(#arrow)"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Yu Gothic UI', sans-serif">
+    <g transform="translate(48 78)">
+      <rect width="294" height="118" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/>
+      <text x="24" y="38" fill="#75CFA3"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="25" font-weight="800">NIGHT</text>
+      <text x="24" y="78" fill="#F4F0E8" font-size="27" font-weight="720">計測を日誌へ</text>
+      <text x="270" y="37" text-anchor="end" fill="#81958C" font-size="19">run</text>
+    </g>
+
+    <g transform="translate(448 78)">
+      <rect width="294" height="118" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/>
+      <text x="24" y="38" fill="#75CFA3"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="25" font-weight="800">MORNING</text>
+      <text x="24" y="78" fill="#F4F0E8" font-size="27" font-weight="720">昨日を確認</text>
+      <text x="270" y="37" text-anchor="end" fill="#81958C" font-size="19">morning</text>
+    </g>
+
+    <g transform="translate(848 78)">
+      <rect width="304" height="118" rx="18" fill="#17231F" stroke="#F0B667" stroke-width="3"/>
+      <text x="24" y="38" fill="#F0B667"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="25" font-weight="800">TODAY</text>
+      <rect x="24" y="58" width="25" height="25" rx="5" fill="none" stroke="#F0B667" stroke-width="3"/>
+      <text x="64" y="80" fill="#F4F0E8" font-size="27" font-weight="720">改善を1つ試す</text>
+      <text x="280" y="37" text-anchor="end" fill="#81958C" font-size="19">done</text>
+    </g>
+  </g>
 </svg>

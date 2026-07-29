@@ -1,58 +1,71 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="t d">
-  <title id="t">How KaizenLog works</title>
-  <desc id="d">ActivityWatch records, generate writes the journal, advise proposes actions, morning and today surface them, done closes the loop.</desc>
-  <rect width="1200" height="360" rx="24" fill="#0c1218"/>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="300" viewBox="0 0 1200 300"
+     role="img" aria-labelledby="title desc">
+  <title id="title">ActivityWatchからObsidianまでのデータフロー</title>
+  <desc id="desc">ActivityWatchの記録をKaizenLogが分類・集計し、Obsidianの管理マーカー区間へ保存する。LLMは任意で、送信前に設定済みのマスキングを適用する。</desc>
 
-  <!-- nodes -->
-  <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Hiragino Sans, Yu Gothic UI, Meiryo, sans-serif">
-    <rect x="40" y="60" width="200" height="100" rx="14" fill="#152028" stroke="#3d9a7a" stroke-width="2"/>
-    <text x="140" y="105" text-anchor="middle" fill="#8fd4b5" font-size="18" font-weight="700">ActivityWatch</text>
-    <text x="140" y="132" text-anchor="middle" fill="#8aa0ad" font-size="14">常駐・自動記録</text>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#75CFA3" stroke-opacity=".05" stroke-width="1"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#75CFA3"/>
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="8" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#81958C"/>
+    </marker>
+  </defs>
 
-    <rect x="300" y="60" width="200" height="100" rx="14" fill="#152028" stroke="#5d8aa0" stroke-width="2"/>
-    <text x="400" y="100" text-anchor="middle" fill="#b8d4e4" font-size="17" font-weight="700">generate</text>
-    <text x="400" y="126" text-anchor="middle" fill="#8aa0ad" font-size="14">分類・集計・日誌</text>
+  <rect width="1200" height="300" rx="24" fill="#0B1211"/>
+  <rect width="1200" height="300" rx="24" fill="url(#grid)"/>
 
-    <rect x="560" y="60" width="200" height="100" rx="14" fill="#152028" stroke="#e8a54b" stroke-width="2"/>
-    <text x="660" y="100" text-anchor="middle" fill="#f0c98a" font-size="17" font-weight="700">advise</text>
-    <text x="660" y="126" text-anchor="middle" fill="#8aa0ad" font-size="14">LLM 改善提案</text>
+  <text x="48" y="46" fill="#75CFA3"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="20" font-weight="700" letter-spacing="3">LOCAL JOURNAL PATH · OPTIONAL INTERPRETATION</text>
 
-    <rect x="820" y="60" width="200" height="100" rx="14" fill="#152028" stroke="#7a9e8f" stroke-width="2"/>
-    <text x="920" y="100" text-anchor="middle" fill="#b5d4c6" font-size="17" font-weight="700">morning</text>
-    <text x="920" y="126" text-anchor="middle" fill="#8aa0ad" font-size="14">📌 とトースト</text>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Yu Gothic UI', sans-serif">
+    <g transform="translate(48 102)">
+      <rect width="286" height="128" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/>
+      <circle cx="36" cy="38" r="10" fill="#75CFA3"/>
+      <text x="58" y="47" fill="#F4F0E8"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="27" font-weight="800">ACTIVITYWATCH</text>
+      <text x="24" y="91" fill="#B7C6BE" font-size="21">前景アプリの記録</text>
+    </g>
 
-    <rect x="300" y="220" width="200" height="100" rx="14" fill="#152028" stroke="#5d8aa0" stroke-width="2"/>
-    <text x="400" y="260" text-anchor="middle" fill="#b8d4e4" font-size="17" font-weight="700">today</text>
-    <text x="400" y="286" text-anchor="middle" fill="#8aa0ad" font-size="14">ターミナル一覧</text>
+    <path d="M354 166H430" stroke="#75CFA3" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
 
-    <rect x="560" y="220" width="200" height="100" rx="14" fill="#152028" stroke="#3d9a7a" stroke-width="2"/>
-    <text x="660" y="260" text-anchor="middle" fill="#8fd4b5" font-size="17" font-weight="700">done</text>
-    <text x="660" y="286" text-anchor="middle" fill="#8aa0ad" font-size="14">消化率を更新</text>
+    <g transform="translate(454 102)">
+      <rect width="292" height="128" rx="18" fill="#17231F" stroke="#75CFA3" stroke-width="3"/>
+      <text x="24" y="48" fill="#75CFA3"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="30" font-weight="800">KAIZENLOG</text>
+      <text x="24" y="91" fill="#F4F0E8" font-size="21">分類・集計・書き込み</text>
+    </g>
 
-    <rect x="820" y="220" width="200" height="100" rx="14" fill="#152028" stroke="#6a7f90" stroke-width="2"/>
-    <text x="920" y="260" text-anchor="middle" fill="#c5d4de" font-size="17" font-weight="700">Memory</text>
-    <text x="920" y="286" text-anchor="middle" fill="#8aa0ad" font-size="14">KZN ID · PASS</text>
+    <path d="M766 166H842" stroke="#75CFA3" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+
+    <g transform="translate(866 102)">
+      <rect width="286" height="128" rx="18" fill="#111D1A" stroke="#315244" stroke-width="2"/>
+      <text x="24" y="48" fill="#F4F0E8"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="30" font-weight="800">OBSIDIAN</text>
+      <text x="24" y="91" fill="#B7C6BE" font-size="21">管理マーカー内の日誌</text>
+    </g>
+
+    <path d="M600 102V45H702" fill="none" stroke="#81958C" stroke-width="3"
+          stroke-dasharray="7 6" marker-end="url(#arrow-muted)"/>
+
+    <g transform="translate(716 12)">
+      <rect width="436" height="66" rx="16" fill="#101B18" stroke="#81958C" stroke-width="2" stroke-dasharray="8 7"/>
+      <text x="22" y="29" fill="#F0B667"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="22" font-weight="800">OPTIONAL LLM</text>
+      <text x="22" y="53" fill="#B7C6BE"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="18" font-weight="700">LLM-BOUND PROMPT REDACTION</text>
+    </g>
   </g>
-
-  <!-- arrows -->
-  <g stroke="#3d5566" stroke-width="2.5" fill="none" stroke-linecap="round">
-    <path d="M240 110 H300"/>
-    <path d="M500 110 H560"/>
-    <path d="M760 110 H820"/>
-    <path d="M920 160 V220"/>
-    <path d="M400 160 V220"/>
-    <path d="M500 270 H560"/>
-    <path d="M760 270 H820"/>
-  </g>
-  <g fill="#3d5566">
-    <polygon points="296,110 286,104 286,116"/>
-    <polygon points="556,110 546,104 546,116"/>
-    <polygon points="816,110 806,104 806,116"/>
-    <polygon points="920,216 914,206 926,206"/>
-    <polygon points="400,216 394,206 406,206"/>
-    <polygon points="556,270 546,264 546,276"/>
-    <polygon points="816,270 806,264 806,276"/>
-  </g>
-
-  <text x="48" y="330" fill="#6f8796" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">markers only · LLM never writes outside kaizenlog sections · local-first</text>
 </svg>
