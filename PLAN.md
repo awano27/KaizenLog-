@@ -360,3 +360,68 @@
 - `README.md` が、30秒で価値を理解できる冒頭、最短導入、主要ワークフロー、出力例、安全・プライバシー、開発導線を持つ。
 - README内の相対リンクと画像参照がすべてリポジトリ内で解決し、記載CLIが現行 `--help` と矛盾しない。
 - `git diff --check` とREADME静的検査が成功し、最終 `git status --short` に対象外ファイルの変更が増えていない。
+
+# 現行コードベース準拠README再作成（2026-07-30）
+
+## Goal breakdown
+
+- 現在のローカルHEAD、dirty tree、CLI、設定、配布メタデータ、ドキュメント、README資産を再調査する。
+- 現行READMEの各主張を実装根拠と照合し、古くなった機能・コマンド・安全境界・導入手順を特定する。
+- 前回のDaily Ledgerビジュアルを現行プロダクトの中心価値に合わせて再評価し、ユーザー承認後にREADMEと必要なSVGだけを更新する。
+- GitHub幅とモバイル幅、リンク、SVG、CLIヘルプ、テストで最終成果物を検証する。
+
+## Dependencies and parallelizable work
+
+- 実リポジトリとdirty treeを確定してから、README、CLIヘルプ、`pyproject.toml`、設定、直近コミットを読む。
+- コマンド／配布契約と、プロダクト価値／出力例の根拠収集は独立して確認できる。
+- README構成とビジュアル資産は同じ承認済みストーリーに従い、本文確定後に整合させる。
+- 静的監査、ローカルリンク、SVG XML、デスクトップ／モバイル表示、全pytestは実装後に統合する。
+
+## Risks and mitigations
+
+- ローカル実装よりREADMEが先走る: READMEの各主張を現行コード、CLIヘルプ、設定、テストへ結び付ける。
+- 既存作業を混入する: 開始時の`git status`を記録し、ユーザー所有の変更を編集・stage・commit・pushしない。
+- 前回デザインを惰性で流用する: 現在の主要価値、初回成功、実出力が変わっていないかを確認してから採用する。
+- 配布状態を誤記する: ローカルのパッケージメタデータと必要に応じた公開状態を分けて確認する。
+- 承認前に実装する: brainstormingの設計ゲートを守り、設計書のレビュー後にのみREADMEを変更する。
+
+## Acceptance criteria and tests
+
+- 対象読者、中心価値、一次証拠、最初の成功、ビジュアル方向がユーザー承認済み。
+- READMEの主要コマンド、設定、バックエンド、安全境界、バージョンが現行実装と一致する。
+- READMEの相対リンク、画像参照、SVG構造がすべて解決する。
+- 900pxと360px相当で主要情報が読み取れ、画像がなくても本文だけで意味が通る。
+- README監査、`git diff --check`、CLIヘルプ照合、全pytestが成功する。
+- 開始時の対象外dirty filesが変更・stage・commit・pushされていない。
+
+# 改善ループ5機能の利用可能化とREADME統合（2026-07-30）
+
+## Goal breakdown
+
+- `main` / `origin/main` のコミット `05a408c` に取り込まれた Loop Tax、Prompt ROI、`handoff`、`coach`、`abtest` を正式な現行機能として扱う。
+- 利用確認で再現した `abtest new --help` / `abtest finish --help` のクラッシュを、回帰テストを先に追加して最小修正する。
+- READMEの中心メッセージを「AIとの仕事を、実測で調教する。」へ更新し、専門名より先に利用者の変化を説明する。
+- M365 Copilot向けChrome拡張は未実装の将来構想として分離し、現行機能と誤認させない。
+
+## Dependencies and parallelizable work
+
+- 設計書を承認内容に合わせて確定し、コミットしてから実装計画へ進む。
+- CLI修正は `argparse` のヘルプ文字列だけを対象とし、既存の実験計算や保存契約には触れない。
+- README本文と純SVG資産は同じ Measure → Teach → Verify ストーリーで更新する。
+- CLI回帰テスト、全pytest、READMEリンク監査、SVG XML検証、表示確認を最後に統合する。
+
+## Risks and mitigations
+
+- すでに正式取り込み済みの機能をPreviewと誤記する: HEADと`origin/main`の一致を根拠にAvailableとして記載する。
+- M365対応を実装済みと誤認させる: `Next / Planned`、未実装、自動収集・自動反映なしを近接表示する。
+- `abtest`修正で本体挙動を変える: 失敗するヘルプ回帰テストを先に作り、`%`の表示契約だけを直す。
+- 既存作業を混入する: 対象ファイルだけを編集・stageし、`.superpowers/`の一時成果物はコミットしない。
+- 外部副作用を起こす: ActivityWatch、Obsidian、実LLM、実日誌生成、公開・pushを検証対象に含めない。
+
+## Acceptance criteria and tests
+
+- `abtest new --help`と`abtest finish --help`が終了コード0で、`+N%`の説明を表示する。
+- 5機能がREADMEで「何ができるか → コマンド名」の順に説明され、正式な現行機能として扱われる。
+- M365 Copilot Chrome拡張が将来構想であり、現在未対応だと同じセクション内で分かる。
+- READMEとSVGがClosed Loop方向、Daily Ledger配色、純SVG、モバイル可読性を満たす。
+- 対象回帰テスト、全pytest、CLIヘルプ、READMEリンク、SVG XML、`git diff --check`が成功する。
