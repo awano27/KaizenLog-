@@ -13,3 +13,5 @@ eval/cases/
 .codex-pytest-tmp/
 # 別プロジェクトの実験ツリー
 grok-desktop-experiment/
+# Codexの分離実装用Git worktree
+.worktrees/
