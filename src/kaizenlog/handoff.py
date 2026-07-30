@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -14,9 +15,16 @@ from .vault import (
     read_text_preserve_newlines,
     upsert_section,
 )
+from .handoffledger import (
+    HandoffLesson,
+    load_handoff_ledger,
+    promoted_lesson_ids,
+    record_lessons_on_apply,
+    suppressed_ids_for_target,
+)
 
 
-def _retry_trend_block(stats_list: list[dict], as_of: date) -> str:
+def _retry_trend_text(stats_list: list[dict], as_of: date) -> str:
     """リトライ傾向 1-2 行。データ無しは計測なし。"""
     if not stats_list:
         return "(計測なし)"
@@ -47,7 +55,7 @@ def _retry_trend_block(stats_list: list[dict], as_of: date) -> str:
     )
 
 
-def _tool_errors_block(stats_list: list[dict]) -> str:
+def _tool_errors_text(stats_list: list[dict]) -> str:
     if not stats_list:
         return "(計測なし)"
     total = 0
@@ -71,30 +79,142 @@ def _tool_errors_block(stats_list: list[dict]) -> str:
     return f"ツールエラー: 30日合計 {total} 件（最多日: {peak_s}）。"
 
 
-def _fail_actions_block(memory_dir: Path, as_of: date) -> str:
-    entries = load_entries(memory_dir)
-    lines = consecutive_fail_actions(entries, as_of, n=2)
-    if not lines:
-        return "(計測なし)"
-    return "\n".join(f"- {ln}" for ln in lines)
-
-
-def _skilled_wait_block(
+def collect_handoff_lessons(
+    *,
+    stats_dir: Path,
     memory_dir: Path,
+    as_of: date | None = None,
     redactor=None,
-) -> str:
+    suppress_ids: set[str] | None = None,
+) -> list[HandoffLesson]:
+    """安定ID付きレッスン一覧を決定論生成。"""
+    as_of = as_of or date.today()
+    suppress_ids = suppress_ids or set()
+    stats_list = load_stats(Path(stats_dir), days=30, end_day=as_of)
+    lessons: list[HandoffLesson] = []
+
+    # retry / toolerr はブロック全体で1レッスン
+    if "HND-retry-trend" not in suppress_ids:
+        lessons.append(
+            HandoffLesson(
+                lesson_id="HND-retry-trend",
+                kind="retry",
+                ref_id="retry-trend",
+                text=_retry_trend_text(stats_list, as_of),
+            )
+        )
+    if "HND-tool-errors" not in suppress_ids:
+        lessons.append(
+            HandoffLesson(
+                lesson_id="HND-tool-errors",
+                kind="toolerr",
+                ref_id="tool-errors",
+                text=_tool_errors_text(stats_list),
+            )
+        )
+
+    # KZN 連続FAIL
+    for line in consecutive_fail_actions(load_entries(memory_dir), as_of, n=2):
+        m = re.search(r"(KZN-\d{8}-\d+)", line)
+        if not m:
+            continue
+        kid = m.group(1)
+        lid = f"HND-kzn-{kid}"
+        if lid in suppress_ids:
+            continue
+        lessons.append(
+            HandoffLesson(
+                lesson_id=lid,
+                kind="kzn",
+                ref_id=kid,
+                text=line,
+            )
+        )
+
+    # skilled 待ち PRM
     ledger = load_prompt_ledger(memory_dir)
     new_ents = [e for e in ledger if e.status == "new"]
-    if not new_ents:
-        return "(計測なし)"
     top = sorted(new_ents, key=lambda e: (-e.count_total, e.id))[:3]
-    lines = []
     for e in top:
+        lid = f"HND-prm-{e.id}"
+        if lid in suppress_ids:
+            continue
         rep = _redact_display(e.representative, redactor)
         if len(rep) > 60:
             rep = rep[:57] + "..."
-        lines.append(f"- {e.id} ({e.count_total}回): {rep or '（代表文なし）'}")
-    return "\n".join(lines)
+        lessons.append(
+            HandoffLesson(
+                lesson_id=lid,
+                kind="prm",
+                ref_id=e.id,
+                text=f"{e.id} ({e.count_total}回): {rep or '（代表文なし）'}",
+            )
+        )
+    return lessons
+
+
+def build_agent_context_with_lessons(
+    *,
+    stats_dir: Path,
+    memory_dir: Path,
+    as_of: date | None = None,
+    redactor=None,
+    target: str | Path | None = None,
+    include_promoted_exclude: bool = True,
+) -> tuple[str, list[HandoffLesson]]:
+    """handoff マーカー区間の本文とレッスン一覧。
+
+    target 指定時: 台帳の suppressed/promoted を除外。
+    include_promoted_exclude: promoted レッスンを各 target から除外（重複防止）。
+    """
+    as_of = as_of or date.today()
+    suppress: set[str] = set()
+    if target is not None:
+        ledger = load_handoff_ledger(memory_dir)
+        suppress |= suppressed_ids_for_target(ledger, target)
+        if include_promoted_exclude:
+            suppress |= promoted_lesson_ids(ledger)
+
+    lessons = collect_handoff_lessons(
+        stats_dir=stats_dir,
+        memory_dir=memory_dir,
+        as_of=as_of,
+        redactor=redactor,
+        suppress_ids=suppress,
+    )
+    header = (
+        "このセクションは KaizenLog が実測データから自動生成(再実行で上書き)。"
+        f"手動メモはマーカーの外へ。生成日: {as_of.isoformat()}"
+    )
+    by_id = {les.lesson_id: les for les in lessons}
+
+    def block_or_none(lid: str, title: str) -> list[str]:
+        les = by_id.get(lid)
+        if les is None:
+            return []  # suppressed またはデータなし → ブロックごと省略
+        return ["", f"### {title}", les.text]
+
+    parts: list[str] = [header]
+    parts.extend(block_or_none("HND-retry-trend", "リトライ傾向"))
+    parts.extend(block_or_none("HND-tool-errors", "頻出ツールエラー"))
+
+    kzn_lines = [f"- {les.text}" for les in lessons if les.kind == "kzn"]
+    # 元データ無し / 全抑制 → 見出し + (計測なし) で冪等維持
+    parts.extend(["", "### 連続FAIL中のKZN施策"])
+    if kzn_lines:
+        parts.extend(kzn_lines)
+    else:
+        parts.append("(計測なし)")
+
+    prm_lines = [f"- {les.text}" for les in lessons if les.kind == "prm"]
+    parts.extend(["", "### skilled化待ちPRMクラスタ"])
+    if prm_lines:
+        parts.extend(prm_lines)
+    else:
+        parts.append("(計測なし)")
+
+    section = "\n".join(parts).rstrip() + "\n"
+    return section, lessons
 
 
 def build_agent_context_section(
@@ -103,31 +223,19 @@ def build_agent_context_section(
     memory_dir: Path,
     as_of: date | None = None,
     redactor=None,
+    target: str | Path | None = None,
+    include_promoted_exclude: bool = True,
 ) -> str:
-    """handoff マーカー区間の本文（マーカー自体は含めない）。"""
-    as_of = as_of or date.today()
-    stats_list = load_stats(Path(stats_dir), days=30, end_day=as_of)
-    header = (
-        "このセクションは KaizenLog が実測データから自動生成(再実行で上書き)。"
-        f"手動メモはマーカーの外へ。生成日: {as_of.isoformat()}"
+    """handoff マーカー区間の本文（後方互換: str のみ返す）。"""
+    section, _ = build_agent_context_with_lessons(
+        stats_dir=stats_dir,
+        memory_dir=memory_dir,
+        as_of=as_of,
+        redactor=redactor,
+        target=target,
+        include_promoted_exclude=include_promoted_exclude,
     )
-    blocks = [
-        header,
-        "",
-        "### リトライ傾向",
-        _retry_trend_block(stats_list, as_of),
-        "",
-        "### 頻出ツールエラー",
-        _tool_errors_block(stats_list),
-        "",
-        "### 連続FAIL中のKZN施策",
-        _fail_actions_block(Path(memory_dir), as_of),
-        "",
-        "### skilled化待ちPRMクラスタ",
-        _skilled_wait_block(Path(memory_dir), redactor=redactor),
-        "",
-    ]
-    return "\n".join(blocks).rstrip() + "\n"
+    return section
 
 
 def apply_handoff(
@@ -152,3 +260,28 @@ def apply_handoff(
         target.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(target, updated)
     return updated
+
+
+def run_handoff_for_target(
+    *,
+    target: Path,
+    stats_dir: Path,
+    memory_dir: Path,
+    as_of: date,
+    redactor=None,
+    dry_run: bool = False,
+) -> tuple[str, list[HandoffLesson]]:
+    """1 target 分を生成・(非 dry_run なら)書き込み+台帳記録。"""
+    section, lessons = build_agent_context_with_lessons(
+        stats_dir=stats_dir,
+        memory_dir=memory_dir,
+        as_of=as_of,
+        redactor=redactor,
+        target=target,
+    )
+    apply_handoff(target, section, dry_run=dry_run)
+    if not dry_run:
+        record_lessons_on_apply(
+            memory_dir, target=target, lessons=lessons, as_of=as_of
+        )
+    return section, lessons

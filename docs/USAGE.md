@@ -400,7 +400,8 @@ kaizenlog guard status
 
 | コマンド | 説明 |
 | --- | --- |
-| `kaizenlog handoff [--target PATH ...] [--dry-run]` | 実測教訓（リトライ傾向・ツールエラー・連続FAIL・skilled待ちPRM）を CLAUDE.md / AGENTS.md の `kaizenlog:agent-context` 区間へ冪等注入。`--target` 未指定時は config `[handoff] targets` |
+| `kaizenlog handoff [--target PATH ...] [--dry-run]` | 実測教訓（リトライ傾向・ツールエラー・連続FAIL・skilled待ちPRM）を CLAUDE.md / AGENTS.md の `kaizenlog:agent-context` 区間へ冪等注入。`--target` 未指定時は config `[handoff] targets`。注入時に `handoff_ledger.jsonl` へ first_injected を記録 |
+| `kaizenlog handoff roi [--target PATH] [--suppress ID] [--unsuppress ID] [--promote ID]` | 申し送りROI: レッスン行ごとに概算家賃（tok×sess）と注入前後効果を対照。効果なし×30日経過は「→ 抑制候補」。2+ target で効いている行は「→ 昇格候補」。`--suppress`/`--unsuppress`/`--promote` は明示CLI=承認（自動では CLAUDE.md を変えない）。昇格は config `[handoff] global_target` 必須 |
 | `kaizenlog prompts --roi` | プロンプト資産ROIランキング（再発30日・推定tokens・skilled削減は後30日完了後のみ確定） |
 | `kaizenlog coach [--dry-run] [--apply FILE]` | 30日実測から CLAUDE.md 追記案を diff 提案（自動適用しない）。`--dry-run` はコンテキストのみ。`--apply` で承認適用（`kaizenlog:coach` 区間）。適用後は `coach_ledger.jsonl` で7日後に機械判定し、FAIL ならロールバック提案を生成（再適用も承認ゲート）。勝率は weekly/status/F18 に表示 |
 | `kaizenlog abtest new --predict +30 [--days 28]` | パーソナルMETR実験の開始（予測%） |
@@ -412,6 +413,7 @@ kaizenlog guard status
 ```toml
 # [handoff]
 # targets = ["C:/develop/myrepo/CLAUDE.md"]
+# global_target = "C:/Users/you/CLAUDE.md"  # handoff roi --promote の書き込み先
 
 # [aiwork]
 # usd_jpy = 150.0

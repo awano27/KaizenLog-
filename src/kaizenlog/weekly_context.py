@@ -387,6 +387,42 @@ def render_weekly_context(
     except OSError:
         pass
 
+    # 申し送りROI（台帳空なら省略）
+    try:
+        from .handoff import collect_handoff_lessons
+        from .handoffledger import (
+            build_roi_rows,
+            format_weekly_handoff_roi_section,
+            load_handoff_ledger,
+        )
+
+        h_ledger = load_handoff_ledger(memory_dir)
+        if h_ledger:
+            # weekly はセッション走査しない（家賃は不明になり得る。fail-closed）
+            as_of_w = days[-1]
+            lessons = collect_handoff_lessons(
+                stats_dir=stats_dir,
+                memory_dir=memory_dir,
+                as_of=as_of_w,
+            )
+            # 台帳上の target を1つ使って rows を組む（抑制候補・promoted 件数用）
+            t0 = h_ledger[0].target or "."
+            rows = build_roi_rows(
+                target=t0,
+                lessons=lessons,
+                ledger=h_ledger,
+                sessions=[],
+                prompts=[],
+                memory_dir=memory_dir,
+                stats_dir=stats_dir,
+                as_of=as_of_w,
+            )
+            h_sec = format_weekly_handoff_roi_section(rows, h_ledger)
+            if h_sec:
+                lines.extend(["", h_sec, ""])
+    except OSError:
+        pass
+
     # 目標トレース（観察のみ・達成判定なし）
     lines.extend(["", "## 目標", ""])
     goal_days = 0

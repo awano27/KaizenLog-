@@ -151,6 +151,8 @@ class HandoffConfig:
     """kaizenlog handoff の注入先（CLAUDE.md / AGENTS.md 等）。"""
 
     targets: list[str] = field(default_factory=list)
+    # 昇格レッスンの書き込み先（未設定時は promote コマンドがエラー）
+    global_target: str = ""
 
 
 @dataclass
@@ -500,8 +502,11 @@ def load_config(path: str | None = None) -> Config:
         cfg.aiwork.pricing = parsed
 
     handoff = data.get("handoff", {})
-    if isinstance(handoff, dict) and "targets" in handoff:
-        cfg.handoff.targets = _as_str_list(handoff.get("targets"), "handoff.targets")
+    if isinstance(handoff, dict):
+        if "targets" in handoff:
+            cfg.handoff.targets = _as_str_list(handoff.get("targets"), "handoff.targets")
+        if "global_target" in handoff and handoff.get("global_target") is not None:
+            cfg.handoff.global_target = str(handoff.get("global_target") or "").strip()
 
     guard = data.get("guard", {})
     if isinstance(guard, dict):
