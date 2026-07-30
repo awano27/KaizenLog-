@@ -41,9 +41,10 @@ Windows のPC作業を ActivityWatch + AI CLIセッションログから自動�
 | 31 | **空転ブレーカー**(実装: Grok): `kaizenlog guard` — UserPromptSubmit/Stopフックでセッション中のリトライ連鎖・ツールエラー連続を検知し、トースト+additionalContextで即時警告。増分tail・状態キャッシュ・デバウンス・全エラーexit 0。`guard install --write`(バックアップ・他フック不可侵)・live_episodes・日誌⚡行・doctor項目 |
 | 32 | 第31弾レビュー残件修正(実装: Grok): debounce設定値の一段目ゲート反映(effective_debounce保存方式)・空hooksブロック保護・⚡カウントのTZ変換・streak成功リセット(エラー優先規約)・doctor副作用除去・片側検証テスト6項目の実質化 |
 | 33 | **申し送りROIメーター**(実装: Grok): handoff_ledger.jsonl(自然キー安定ID HND-*・first_injected)・コンテキスト家賃(概算tok×リポジトリ帰属セッション、不一致は「不明」)・注入前後30日の効果測定(fail-closed)・`handoff roi --suppress/--unsuppress/--promote`(承認=コマンド、global_target注入+以後除外)・weekly小節 |
+| 34 | **日誌可読性と計測正直化**(実装: Grok、実日誌2026-07-30レビュー起点): システム注入XML(`<task-notification>`等)のユーザー発話除外(scan/user_turns/guard/codexアダプタ全系統)・ループ税のエピソード間セッションデデュープ(浪費≦総出力の不変条件)・codex過大計上注記・`$-.--`→「金額不明」・アクション文言(「未実行のままPASS到達」説明付き・達成済み分離+超過件数表示)・内容列basename/フォールバック・短小セッション畳み・結論の時分表記統一 |
 
-テスト基準線: **pytest 694 passed**(`./.venv/Scripts/python.exe -m pytest -q`)。
-**注意: 第33弾はワーキングツリーのみ(未コミット)**。第27-32弾はコミット済み(〜5bb5990)。レビュー済み(§A3のみ⚠️注記付き✅)、コミットはユーザー指示待ち。**ワーキングツリーには別セッションの並行変更(PLAN.md・advisor.py・prompts/・stats.py・test_patterns.py)が混在** — 第33弾のコミット時は除外すること。
+テスト基準線: **pytest 704 passed**(`./.venv/Scripts/python.exe -m pytest -q`)。
+**注意: 第34弾はワーキングツリーのみ(未コミット)**。第27-33弾はコミット済み(〜aefb64e)。レビュー済み(全§✅、§B1の達成済み超過消失バグと§C1テスト穴2件はClaude直接修正済み)、コミットはユーザー指示待ち。**ワーキングツリーには別セッションの並行変更(PLAN.md・advisor.py・prompts/・stats.py・test_patterns.py・test_round32_advice_metric_contract.py)が混在** — 第34弾のコミット時は除外すること。
 既知の限界(第33弾): retry系レッスンの効果指標は AISession に retry_chains 属性が無いため `is_fragmented`(細切れセッション)をプロキシに使用(handoffledger.py:278-294 にコメント明示)。UserPrompt.project でのプロンプトフィルタ+detect_retry_chains による真のリポジトリ別リトライ計測が次弾候補。
 既知のグレーゾーン: guard の `_has_successful_tool_result` は content 文字列ヒューリスティック併用のため「"no errors found" のような成功文」を成功と判定せず streak がリセットされない(発火過剰側の偏り・実害小。既知課題「Codexツールエラー判定の文字列ヒューリスティック」と同系)。
 既知の潜在バグ(第29弾レビューで発見・別タスク起票済み): `retry_chain_excerpts`/`session_title_from_text` が40字切詰め後にredactするため、秘匿パターンが境界をまたぐと一部漏れる余地(既存コード由来・顕在化例なし)。

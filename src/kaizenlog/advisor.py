@@ -80,6 +80,66 @@ def resolve_system_prompt(cfg: LLMConfig) -> str:
 # 後方互換: 既定のシステムプロンプト
 SYSTEM_PROMPT = load_bundled_prompt("daily_advisor")
 
+_BASIC_PASS_METRICS = (
+    "context_switches",
+    "total_active_minutes",
+)
+_STRUCTURED_AI_PASS_METRICS = (
+    "ai_cc_sessions",
+    "ai_fragmented_sessions",
+    "ai_retry_chains",
+    "ai_tool_errors",
+    "ai_interruptions",
+    "ai_avg_turns",
+    "ai_output_tokens",
+)
+_INPUT_PASS_METRICS = (
+    "focus_blocks",
+    "focus_minutes",
+    "input_keypresses",
+)
+_PASS_METRIC_CONTRACT_MARKER = "{{KAIZENLOG_PASS_METRIC_CONTRACT}}"
+
+
+def available_pass_metrics(evidence: AdviceEvidence) -> tuple[str, ...]:
+    """当日の evidence で翌日に機械判定できる PASS 指標だけを返す。"""
+    metrics = list(_BASIC_PASS_METRICS)
+    if evidence.structured_ai_metrics_available:
+        metrics.extend(_STRUCTURED_AI_PASS_METRICS)
+    if evidence.input_metrics_available:
+        metrics.extend(_INPUT_PASS_METRICS)
+    if evidence.known_categories:
+        metrics.extend(
+            f"category_minutes:{category}"
+            for category in sorted(evidence.known_categories)
+        )
+    if evidence.site_metrics_available and evidence.observed_sites:
+        metrics.extend(
+            f"site_minutes:{site}"
+            for site in sorted(evidence.observed_sites)
+        )
+    return tuple(metrics)
+
+
+def render_pass_metric_contract(evidence: AdviceEvidence) -> str:
+    """初回生成と修復で共有する、当日のPASS指標可否契約。"""
+    available = available_pass_metrics(evidence)
+    forbidden: list[str] = []
+    if not evidence.structured_ai_metrics_available:
+        forbidden.extend(_STRUCTURED_AI_PASS_METRICS)
+    if not evidence.input_metrics_available:
+        forbidden.extend(_INPUT_PASS_METRICS)
+    if not evidence.site_metrics_available:
+        forbidden.append("site_minutes:<ドメイン>")
+    available_text = " / ".join(available) or "なし"
+    forbidden_text = " / ".join(forbidden) or "なし"
+    return (
+        "## 当日使用可能なPASS指標\n"
+        f"{available_text}\n\n"
+        "## 当日使用禁止のPASS指標\n"
+        f"{forbidden_text}\n"
+    )
+
 
 def build_prompt(
     today_md: str,
@@ -698,12 +758,13 @@ def _contract_repair_prompt(
         "- interpretation / ai_review.text に算用数字を書かない"
         "（観測値の再掲禁止）\n"
         "- pass は機械構文のみ: `指標名 演算子 数値`"
-        "（例: `ai_tool_errors <= 60`、`category_minutes:エンタメ <= 35`）。"
-        "使用可能な指標は根拠セクションに列挙されたもののみ。自由文 PASS は禁止\n"
+        "（例: `context_switches <= 40`）。"
+        "当日使用可能なPASS指標だけを使い、自由文 PASS は禁止\n"
         "- fail は数値条件（機械構文可）。PASS 目標はベースラインより挑戦的に"
         "（減らす目標は baseline×1.2 超を禁止、増やす目標は baseline×0.8 未満を禁止）\n"
         "- KZN ID と HTML コメントは禁止\n"
         "- AI関連画面ブロックは会話数・セッション数・往復数ではない\n\n"
+        f"{render_pass_metric_contract(evidence)}\n"
         f"{_baseline_repair_hint(evidence)}"
         f"## 違反\n{rendered_errors}\n\n"
         "## 前回の回答（一部マスク済み）\n"
@@ -767,6 +828,15 @@ def prepare_advice_request(
         reflections=reflections,
     )
     system_prompt = resolve_system_prompt(cfg)
+    if daily_contract and evidence_ctx is not None:
+        if system_prompt.count(_PASS_METRIC_CONTRACT_MARKER) != 1:
+            raise AdvisorError(
+                "日次system promptにPASS指標契約マーカーが1個必要です"
+            )
+        system_prompt = system_prompt.replace(
+            _PASS_METRIC_CONTRACT_MARKER,
+            render_pass_metric_contract(evidence_ctx),
+        )
     if redactor:
         prompt = redactor(prompt)
         system_prompt = redactor(system_prompt)

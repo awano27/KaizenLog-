@@ -598,6 +598,38 @@ def test_r1_effective_debounce_zero_allows_chain(tmp_path: Path, monkeypatch):
     assert float(st2.get("effective_debounce")) == 0.0
 
 
+def test_a1_task_notification_does_not_fire_retry(tmp_path: Path, monkeypatch, capsys):
+    """§A1: task-notification 連投はリトライ連鎖に数えない。"""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    sid = "xml-spam"
+    st = load_state(sid)
+    st["effective_debounce"] = 0
+    save_state(sid, st)
+    settings = {
+        "enabled": True,
+        "debounce_seconds": 0,
+        "retry_threshold": 3,
+        "cooldown_seconds": 0,
+        "memory_dir": tmp_path / "m",
+    }
+    xml = '<task-notification> <task-id>a1d9fdd05e0</task-id> done'
+    for _ in range(5):
+        run_hook(
+            json.dumps(
+                {
+                    "session_id": sid,
+                    "hook_event_name": "UserPromptSubmit",
+                    "prompt": xml,
+                }
+            ),
+            settings=settings,
+        )
+    out = capsys.readouterr().out
+    assert "hookSpecificOutput" not in out
+    st2 = load_state(sid)
+    assert int(st2.get("chain_len") or 0) == 0
+
+
 def test_r1_effective_debounce_60_blocks_early(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
     sid = "deb60"

@@ -138,12 +138,12 @@ class _SessionAccum:
     def note_user_message(self, text: str) -> None:
         # コマンドラッパーは往復に数えない（Claude 側 _update_session と対称）
         from .aiwork import (
-            _is_command_wrapper,
+            _is_system_wrapper,
             is_kaizenlog_internal_text,
             normalize_prompt_text,
         )
 
-        if _is_command_wrapper(text):
+        if _is_system_wrapper(text):
             return
         if not normalize_prompt_text(text):
             return
@@ -408,6 +408,10 @@ class CodexAdapter:
                     text = ""
                 text = text.strip()
                 if len(text) < min_chars:
+                    continue
+                from .aiwork import _is_system_wrapper, is_kaizenlog_internal_text
+
+                if _is_system_wrapper(text) or is_kaizenlog_internal_text(text):
                     continue
                 out.append(
                     UserPrompt(

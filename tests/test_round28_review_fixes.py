@@ -287,7 +287,7 @@ def test_r4_multi_model_price_ambiguous():
     tax = compute_loop_tax([chain], [sess])
     assert tax.total_wasted_tokens == 1_000_000
     assert tax.est_cost_usd is None
-    assert "$-.--" in format_loop_tax_line(tax)
+    assert "金額不明" in format_loop_tax_line(tax)
 
 
 def test_r4_known_plus_unknown_totals_none():

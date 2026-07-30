@@ -425,3 +425,127 @@
 - M365 Copilot Chrome拡張が将来構想であり、現在未対応だと同じセクション内で分かる。
 - READMEとSVGがClosed Loop方向、Daily Ledger配色、純SVG、モバイル可読性を満たす。
 - 対象回帰テスト、全pytest、CLIヘルプ、READMEリンク、SVG XML、`git diff --check`が成功する。
+
+# 日誌指紋と改善提案PASS指標契約の修正（2026-07-30）
+
+## Goal breakdown
+
+- CRLFで保存されたActivity LogとLFで生成された同一内容が同じ`activity_sha256`になるよう、指紋入力を改行コード非依存にする。
+- `AdviceEvidence`の可用性フラグから、その日実際に自動判定できるPASS指標一覧を決定論的に作る。
+- 日次system promptと契約修復promptへ同じ許可一覧・禁止一覧を渡し、計測不能指標をLLMへ「使用可能」と誤提示しない。
+- 保存時の`validate_advice`は最終防衛線として維持し、不完全なアクションをKaizen Memoryへ入れない。
+
+## Dependencies and parallelizable work
+
+- 指紋修正は`src/kaizenlog/stats.py`と既存統計テストだけで独立してRED→GREENできる。
+- 指標一覧修正は`AdviceEvidence`の既存フラグと`known_categories` / `observed_sites`を唯一の入力とし、`advisor.py`のprompt準備・修復promptから共有する。
+- `src/kaizenlog/cli.py`、`.superpowers/`、実際のObsidian日誌、ActivityWatch、設定ファイルには実装中触れない。
+- 単体回帰がGREENになった後だけ、全pytest、`compileall`、`git diff --check`、一時ボールトを使ったCRLF generate→advise dry-run相当を統合確認する。
+
+## Risks and mitigations
+
+- 改行正規化で既存指紋を壊す: LF文字列のハッシュは従来値と一致させ、CRLF/CRだけをLFへ正規化する回帰テストを置く。
+- promptとvalidatorの指標集合が再び乖離する: 許可一覧を返す単一helperを作り、system promptとrepair promptの両方から使用する。
+- カテゴリ名・サイト名を無制限にpromptへ出す: evidenceで観測済みの値だけを決定論的にソートし、既存のprivacy redactor適用前に組み立てる。
+- custom system promptを壊す: 動的指標注記は`requires_daily_contract()`が真の`daily_advisor` / `privacy_safe`だけに追加する。
+- ユーザー作業を混入する: 開始時に未追跡だった`.superpowers/`を編集・stage・commitせず、対象ファイルだけを変更する。
+
+## TDD tasks
+
+### Task 1: 改行コード非依存のActivity指紋
+
+- [x] `tests/test_patterns.py`へ、LF/CRLF/CRの同一Activity本文が同じ指紋になり、LFの既存SHA-256値が変わらないテストを追加する。
+- [x] 対象テストを実行し、現行実装ではCRLFケースだけFAILすることを確認する。
+- [x] `src/kaizenlog/stats.py::activity_fingerprint`でCRLF/CRをLFへ正規化してから`strip()`・SHA-256計算する。
+- [x] 対象テストを再実行しGREENを確認する。
+
+### Task 2: evidence準拠のPASS指標一覧
+
+- [x] 新規`tests/test_round32_advice_metric_contract.py`へ、構造化AI・入力・サイト統計が無い場合に該当指標が許可一覧から外れ、基本指標と観測カテゴリだけが残るテストを追加する。
+- [x] 同テストを実行し、helper未実装でREDになることを確認する。
+- [x] `src/kaizenlog/advisor.py`へ`available_pass_metrics(evidence) -> tuple[str, ...]`を追加し、基本・構造化AI・入力・カテゴリ・サイトを可用性フラグから構築する。
+- [x] 対象テストを再実行しGREENを確認する。
+
+### Task 3: 初回promptと修復promptの契約統一
+
+- [x] 新規回帰テストへ、日次system promptに許可・禁止指標の決定論セクションが入り、修復promptにも同じ一覧が入るケースを追加する（custom prompt互換は既存全体テストで確認）。
+- [x] 対象テストを実行し、現行の固定「使用可能指標」表示と修復例によりREDになることを確認する。
+- [x] `prepare_advice_request`で日次promptだけに動的な許可・禁止注記を追加し、`_contract_repair_prompt`も同じhelperを使用する。
+- [x] 計測不能な`ai_tool_errors`を修復例から外し、常に許可される`context_switches`を例にする。
+- [x] 対象テストを再実行しGREENを確認する。
+
+## Acceptance criteria and tests
+
+- LF/CRLF/CRの同一Activity Logで`activity_fingerprint`が一致し、既存LFハッシュは不変。
+- 2026-07-30相当のCRLF日誌と既存statsの照合で`source_status=verified`になる。
+- 構造化AIテレメトリなしの日は`ai_retry_chains` / `ai_tool_errors`が許可一覧に出ず、修復promptにも使用可能例として出ない。
+- 構造化AIテレメトリありの日はAI指標が許可され、既存validatorを通過できる。
+- `python -m pytest -q`、`python -m compileall -q src`、`git diff --check`が成功する。
+- `.superpowers/`と実データ、設定、スケジュール、Memoryを変更しない。
+
+# 最新版再動作確認（2026-07-30）
+
+## Goal breakdown
+
+- `git fetch --prune origin`後の`origin/main`と現在の`HEAD`を比較し、「最新版」を上流同期状態と作業ツリー状態に分けて判定する。
+- 現在の未コミット修正を保持したまま、パッケージ版数、CLI、設定診断、全回帰テスト、コンパイル、差分健全性を再確認する。
+- 実データを書き換えない`advise --dry-run`で、最新の日誌・統計から改善提案要求を構築でき、計測可能なPASS指標契約が反映されることを確認する。
+
+## Dependencies and parallelizable work
+
+- 上流同期確認、静的検証、CLI診断は相互に独立だが、取得したコミットIDを基準として結果をまとめる。
+- pytestはリポジトリ`.venv`とOS一時ディレクトリの`--basetemp`を使う。
+- `generate`、通常の`advise`、`run`は日誌・統計・Memoryへ書き込むため、今回の再確認では実行しない。
+
+## Risks and mitigations
+
+- dirty treeを上流更新で壊す: fetchと比較だけを行い、pull、merge、reset、checkout、stashを行わない。
+- 未追跡のユーザー成果物を混入する: `.superpowers/`と`Kaizen/`を含む開始時の未追跡ファイルへ触れない。
+- 外部サービス状態をアプリ不良と誤認する: `doctor`の必須項目と任意watcher警告を分けて報告する。
+- dry-runでも意図しない書き込みが起きる: 実行前後の`git status --short`と対象日誌・statsの更新時刻を比較する。
+
+## Acceptance criteria and tests
+
+- `HEAD...origin/main`のahead/behind件数と両コミットIDを取得できる。
+- `.venv\Scripts\kaizenlog.exe --help`と主要サブコマンドのhelpが終了コード0。
+- `doctor`が必須経路の状態を診断できる。
+- 全pytest、`compileall`、`git diff --check`が成功する。
+- `advise --dry-run --date 2026-07-30`が終了コード0で、許可・禁止PASS指標契約を含む要求を生成する。
+- 検証前から存在する未コミット・未追跡ファイルを保存し、実日誌・stats・Memoryへ新規書き込みを行わない。
+
+## User-approved real journal regeneration
+
+- ユーザーの追加指示により、非書き込みdry-runだけでなく2026-07-30の実日誌を作り直す。
+- 実行直前の日誌、stats、Kaizen Memoryを日時付きバックアップへコピーする。
+- `generate --date 2026-07-30`後、Activity Log、統計値、`activity_sha256`をアプリ標準の`extract_section`と`activity_fingerprint`で照合する。
+- `advise --date 2026-07-30`後、改善提案マーカー、KZN ID、翌日チェックボックス、Memory記録、status/healthを照合する。
+- 同一失敗が2回起きた場合は再実行を止め、プロセス・ファイル・statusを調査する。
+
+# 「今日のアクション」可読性改善（2026-07-31）
+
+## Goal breakdown
+
+- Obsidian日誌の「今日のアクション」を、長い1行の羅列ではなく短時間で走査できる表示へ改善する。
+- 既存のチェックボックス同期、KZN ID、PASS/FAIL機械判定、最大3件、古い未完了件数、手書き領域保護を維持する。
+- 未コミットの第34弾変更（達成済み指標の分離・計測表現の正直化）を前提にし、上書きや後退を起こさない。
+
+## Dependencies and parallelizable work
+
+- まず現行renderer、実データ出力、既存テスト、未コミット差分を読み、見栄えの選択肢を設計する。
+- ユーザー承認後に設計書と実装計画を確定し、テストを先に失敗させてから最小実装を行う。
+- renderer変更後、単体テスト、関連回帰、全pytest、実Memoryからの非書き込みプレビュー、実日誌再描画を順に確認する。
+
+## Risks and mitigations
+
+- 長いアクション文字列の分解で情報を落とす: 構造化できる既存形式だけを分割し、旧形式は全文表示へフォールバックする。
+- Obsidianチェック同期を壊す: チェックボックス行にはKZN IDを残し、既存の`_CHECKBOX_RE`と`ID_PATTERN`契約を維持する。
+- 表形式でモバイル可読性を悪化させる: 横スクロールが必要なMarkdown表は推奨案から外す。
+- ユーザー作業を壊す: dirty treeの開始状態を記録し、対象renderer・テスト・承認済み設計文書以外を編集しない。
+
+## Acceptance criteria and tests
+
+- 主要アクションはチェックボックス、行動、PASS判定、提案日・実測を視覚的に分離して読める。
+- 1行にPASS/FAIL/ID/日付を詰め込まず、3件並んでも各アクションの境界が明確。
+- PASS達成済みの提案は通常アクションと別セクションで表示される。
+- チェック済み状態、最大3件、残件案内、`today --all`導線、手書きバイト保護が維持される。
+- 関連テスト、全pytest、`compileall`、`git diff --check`が成功する。

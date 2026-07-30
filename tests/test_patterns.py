@@ -1,3 +1,4 @@
+import hashlib
 from datetime import date, datetime, timedelta, timezone
 
 from kaizenlog.classifier import Classifier
@@ -195,6 +196,15 @@ def test_stats_roundtrip(tmp_path):
     assert s["ai_activity_blocks"] == 0
     assert s["activity_sha256"] == activity_fingerprint(activity_md)
     assert s["ai"]["sessions"] == 0
+
+
+def test_activity_fingerprint_is_newline_style_independent():
+    activity_lf = "## 📊 Activity Log\n\n**合計**: 10m\n- Code.exe"
+    expected = hashlib.sha256(activity_lf.encode("utf-8")).hexdigest()
+
+    assert activity_fingerprint(activity_lf) == expected
+    assert activity_fingerprint(activity_lf.replace("\n", "\r\n")) == expected
+    assert activity_fingerprint(activity_lf.replace("\n", "\r")) == expected
 
 
 def test_load_stats_skips_missing_and_broken(tmp_path):

@@ -146,7 +146,7 @@ def test_build_morning_notification():
     assert "保留" in msg
     assert "昨日の判定" in msg
     # 未実行 PASS/FAIL は層別: 未実行達成1件
-    assert "未実行での達成 1件" in msg or "✅" in msg
+    assert "未実行のままPASS到達 1件" in msg or "✅" in msg
     assert "secret" not in msg
     assert build_morning_notification([], today) is None
 

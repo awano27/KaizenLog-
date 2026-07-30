@@ -34,7 +34,8 @@ def _round_minutes(d: dict[str, float]) -> dict[str, float]:
 
 def activity_fingerprint(activity_md: str) -> str:
     """Activityセクションと統計が同じ生成結果か確認する指紋。"""
-    return hashlib.sha256(activity_md.strip().encode("utf-8")).hexdigest()
+    canonical = activity_md.replace("\r\n", "\n").replace("\r", "\n").strip()
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def build_stats(

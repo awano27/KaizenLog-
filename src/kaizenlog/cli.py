@@ -680,7 +680,7 @@ def build_morning_notification(
     if candidate_n or hold_n or done_pass or done_fail or undone_pass or streaks.current:
         judge = f"昨日の判定 実行済み✅{done_pass} ❌{done_fail}"
         if undone_pass:
-            judge += f"（未実行での達成 {undone_pass}件）"
+            judge += f"（未実行のままPASS到達 {undone_pass}件）"
         streak_s = f" / 🔥{streaks.current}日" if streaks.current >= 1 else ""
         parts.append(
             f"今日の候補 {candidate_n}件 / 保留 {hold_n}件 / {judge}{streak_s}"

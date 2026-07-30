@@ -139,7 +139,7 @@ def test_l1_summarize_calibration_not_polluted_by_pre_pass():
     ]
     text = summarize_for_prompt(entries, TODAY)
     assert "挑戦的" not in text  # 高PASS率較正が出ない
-    assert "未実行での達成" in text
+    assert "未実行のままPASS到達" in text
 
 
 # ---- §L2: F10 帯と当日計測可否の対称 ------------------------------------------

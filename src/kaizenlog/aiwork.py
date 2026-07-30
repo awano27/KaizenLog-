@@ -8,6 +8,7 @@ Claude Code は全セッションを ~/.claude/projects/<プロジェクト>/<�
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ _RETRY_SIMILARITY = 0.85
 
 # セッション内容列: 最初の依頼文の先頭 N 字
 SESSION_TITLE_MAX = 40
+# システム注入 XML: <task-notification> / <command-name> 等
+_SYSTEM_XML_TAG_RE = re.compile(r"^<[a-z][a-z0-9_-]*(\s|>|/)", re.IGNORECASE)
 # 依頼長さの層別閾値（字）。因果断定せず観察値のみ出す。
 PROMPT_LENGTH_SHORT = 80
 
@@ -217,17 +220,27 @@ def _project_name(record: dict, file_path: Path) -> str:
     return file_path.parent.name.split("-")[-1] or file_path.parent.name
 
 
-def _is_command_wrapper(text: str) -> bool:
-    """スラッシュコマンド等の XML ラッパー文か。
+def _is_system_wrapper(text: str) -> bool:
+    """システム注入 XML / スラッシュコマンドラッパーか。
 
-    user_turns やプロンプト資産化に混ぜると往復数が水増しされる。
+    user_turns・プロンプト資産化・リトライ連鎖・guard から除外する。
+    `< 1000円` のようなタグ形式でない文は除外しない。
     """
     if not text:
         return False
-    head = text.lstrip()[:40]
-    return text.lstrip().startswith("<") and (
-        "command-" in head or "local-command" in head
-    )
+    stripped = text.lstrip()
+    if not stripped.startswith("<"):
+        return False
+    if _SYSTEM_XML_TAG_RE.match(stripped):
+        return True
+    # 旧 command 系（タグ正規表現外の変形があっても拾う）
+    head = stripped[:40]
+    return "command-" in head or "local-command" in head
+
+
+def _is_command_wrapper(text: str) -> bool:
+    """後方互換エイリアス（=_is_system_wrapper）。"""
+    return _is_system_wrapper(text)
 
 
 def normalize_prompt_text(text: str) -> str:
@@ -283,9 +296,37 @@ def is_kaizenlog_internal_text(text: str) -> bool:
     return False
 
 
+def _prefer_path_basename(text: str, max_chars: int) -> str:
+    """長いパスは末尾要素優先（...docs\\file.md）。"""
+    t = text
+    if len(t) <= max_chars:
+        return t
+    if "\\" not in t and "/" not in t:
+        return t
+    sep = "\\" if t.count("\\") >= t.count("/") else "/"
+    parts = [p for p in re.split(r"[\\/]", t) if p]
+    if not parts:
+        return t
+    base = parts[-1]
+    if len(base) >= max_chars - 3:
+        return "..." + base[-(max_chars - 3) :]
+    if len(parts) >= 2:
+        cand = f"...{parts[-2]}{sep}{base}"
+        if len(cand) <= max_chars:
+            return cand
+    cand2 = f"...{base}"
+    if len(cand2) <= max_chars:
+        return cand2
+    return "..." + base[-(max_chars - 3) :]
+
+
 def session_title_from_text(text: str, max_chars: int = SESSION_TITLE_MAX) -> str:
-    """依頼文から表用 title（先頭 max_chars 字）。ラッパーは呼び出し側で除外済み想定。"""
+    """依頼文から表用 title。ラッパーは呼び出し側で除外済み想定。
+
+    ファイルパスは先頭切りではなく末尾要素優先。
+    """
     t = normalize_prompt_text(text)
+    t = _prefer_path_basename(t, max_chars)
     if len(t) <= max_chars:
         return t
     return t[:max_chars]
@@ -297,8 +338,9 @@ def extract_session_title(
     """初回依頼から (title, 整形後文字数) を返す。ラッパー・空は None。
 
     Claude / Codex 両アダプタの共通整形（ラッパー除去→一行化→40字切詰）。
+    システム XML は None（呼び出し側が次の実ユーザー発話へフォールバック）。
     """
-    if not text or _is_command_wrapper(text):
+    if not text or _is_system_wrapper(text):
         return None
     cleaned = normalize_prompt_text(text)
     if not cleaned:
@@ -384,8 +426,8 @@ def _update_session(session: AISession, record: dict, ts: datetime) -> None:
             joined = " ".join(texts)
             if _is_interruption(joined):
                 session.interruptions += 1
-            elif joined.strip() and not _is_command_wrapper(joined):
-                # コマンドラッパーはユーザー往復に数えない
+            elif joined.strip() and not _is_system_wrapper(joined):
+                # システム注入・コマンドラッパーはユーザー往復に数えない
                 session.user_turns += 1
                 _maybe_set_title(session, joined)
 
@@ -592,7 +634,7 @@ def scan_user_prompts(
                     ).strip()
                     if len(text) < min_chars or _is_interruption(text):
                         continue
-                    if _is_command_wrapper(text):
+                    if _is_system_wrapper(text):
                         continue
                     if is_kaizenlog_internal_text(text):
                         continue
@@ -746,14 +788,17 @@ def retry_chain_excerpts(
     redactor: Callable[[str], str] | None = None,
     max_chains: int = 3,
 ) -> list[str]:
-    """連鎖起点依頼の抜粋（40字・任意 redact）。"""
+    """連鎖起点依頼の抜粋（redact→正規化→先頭30字+「…」）。"""
     out: list[str] = []
     for chain in list(chains)[:max_chains]:
         if not chain.prompts:
             continue
-        raw = session_title_from_text(chain.prompts[0].text)
+        raw = chain.prompts[0].text or ""
         if redactor is not None:
             raw = redactor(raw)
+        raw = normalize_prompt_text(raw)
+        if len(raw) > 30:
+            raw = raw[:30] + "…"
         proj = chain.project
         out.append(f"連鎖起点（{proj}）: {_md_cell(raw)}")
     return out
@@ -839,14 +884,15 @@ def compute_loop_tax(
 
     浪費トークン: チェーンの最終試行を除く試行が属するセッションの
     output tokens をセッション単位で合算（按分なし）。
+    日次合計はエピソード横断で session_id 一意（多重計上しない）。
     1件でも不明があれば総量・総額を既知部分だけで断定しない。
     """
     episodes: list[LoopTaxEpisode] = []
-    total_tokens = 0
     any_unknown_tokens = False
-    total_cost = 0.0
     any_unknown_cost = False
-    any_cost = False
+    # 日次合計用: session_id → (tokens, cost_or_None)
+    unique_sess_tokens: dict[str, int] = {}
+    unique_sess_cost: dict[str, float | None] = {}
 
     for chain in chains:
         if len(chain.prompts) < 2:
@@ -879,12 +925,21 @@ def compute_loop_tax(
             if not s.output_tokens:
                 known = False
                 ep_cost_ok = False
+                # 不明セッションも unique に記録しない（tokens 不明扱い）
                 continue
-            wasted = int(wasted or 0) + int(s.output_tokens)
+            tok = int(s.output_tokens)
+            wasted = int(wasted or 0) + tok
+            # 日次: 同一 session は1回のみ
+            if s.session_id not in unique_sess_tokens:
+                unique_sess_tokens[s.session_id] = tok
+                if price is None:
+                    unique_sess_cost[s.session_id] = None
+                else:
+                    unique_sess_cost[s.session_id] = (tok / 1_000_000.0) * price
             if price is None:
                 ep_cost_ok = False
             else:
-                ep_cost += (int(s.output_tokens) / 1_000_000.0) * price
+                ep_cost += (tok / 1_000_000.0) * price
         # waste prompt に対応セッションが1件も無い → tokens不明
         if not matched_any:
             wasted = None
@@ -896,13 +951,8 @@ def compute_loop_tax(
 
         if wasted is None:
             any_unknown_tokens = True
-        else:
-            total_tokens += int(wasted)
         if not ep_cost_ok:
             any_unknown_cost = True
-        else:
-            total_cost += ep_cost
-            any_cost = True
 
         episodes.append(
             LoopTaxEpisode(
@@ -920,14 +970,18 @@ def compute_loop_tax(
             est_cost_usd=0.0,
             tokens_known=True,
         )
-    # 1件でも不明 → 総量・総額を既知部分だけで断定しない
-    total_wasted: int | None = None if any_unknown_tokens else total_tokens
-    if any_unknown_tokens or any_unknown_cost:
-        est: float | None = None
-    elif any_cost:
-        est = round(total_cost, 4)
+    # 日次合計: session 一意。1件でも不明エピソード → 総量断定しない
+    if any_unknown_tokens:
+        total_wasted: int | None = None
     else:
-        # tokens 既知だが単価経路を通らなかった（output_tokens=0 等）
+        total_wasted = sum(unique_sess_tokens.values())
+    if any_unknown_tokens or any_unknown_cost or any(
+        v is None for v in unique_sess_cost.values()
+    ):
+        est: float | None = None
+    elif unique_sess_cost:
+        est = round(sum(float(v or 0) for v in unique_sess_cost.values()), 4)
+    else:
         est = 0.0 if total_wasted == 0 else None
 
     return LoopTaxSummary(
@@ -943,7 +997,7 @@ def format_loop_tax_line(
     *,
     usd_jpy: float | None = None,
 ) -> str:
-    """日誌・status 用1行。不明は 0 にしない。"""
+    """日誌・status 用1行。不明は 0 にしない。金額不明時は「金額不明」。"""
     n = summary.episode_count
     if n == 0:
         return "💸 ループ税: $0.00（0エピソード / 0 tokens）"
@@ -952,13 +1006,16 @@ def format_loop_tax_line(
     else:
         tok_s = f"{summary.total_wasted_tokens} tokens"
     if summary.est_cost_usd is None:
-        money = "$-.--"
+        money = "金額不明"
     else:
         money = f"${summary.est_cost_usd:.2f}"
         if usd_jpy is not None and usd_jpy > 0:
             jpy = int(round(summary.est_cost_usd * usd_jpy))
             money = f"{money}（¥{jpy}）"
-    return f"💸 ループ税: {money}（{n}エピソード / {tok_s}）"
+    return (
+        f"💸 ループ税: {money}（{n}エピソード / {tok_s}）"
+        " ※エピソード間で同一セッションは1回のみ計上"
+    )
 
 
 def max_loop_episode(summary: LoopTaxSummary) -> LoopTaxEpisode | None:
@@ -1147,8 +1204,11 @@ def render_aiwork_markdown(
     tool_sessions = [s for s in sessions if s.tools_measurable]
     tool_errors_m = sum(s.tool_errors for s in tool_sessions)
     interruptions_m = sum(s.interruptions for s in tool_sessions)
+    codex_note = ""
+    if any("codex" in (s.source or "").lower() for s in tool_sessions):
+        codex_note = "（codexは文字列判定・過大計上の可能性）"
     lines.append(
-        f"ツールエラー: {tool_errors_m}回 / ユーザー中断・拒否: {interruptions_m}回"
+        f"ツールエラー: {tool_errors_m}回{codex_note} / ユーザー中断・拒否: {interruptions_m}回"
         f" / リトライ連鎖: {retry_chain_count}回"
         f" / 出力トークン: {output_tokens:,}"
     )
@@ -1189,7 +1249,18 @@ def render_aiwork_markdown(
         lines.append(f"⚡ ブレーカー発動: {int(breaker_fires)}回")
     lines.append("")
 
-    rows = sessions[:max_rows]
+    def _is_tiny_session(s: AISession) -> bool:
+        """往復0 かつ ツール<=1 かつ 変更0 → 表から省略（集計からは除外しない）。"""
+        tools_n = sum(s.tool_counts.values()) if s.tools_measurable else 0
+        return (
+            int(s.user_turns or 0) == 0
+            and tools_n <= 1
+            and int(s.edits or 0) == 0
+        )
+
+    table_sessions = [s for s in sessions if not _is_tiny_session(s)]
+    tiny_n = len(sessions) - len(table_sessions)
+    rows = table_sessions[:max_rows]
     if session_titles:
         lines.append(
             "| 時刻 | プロジェクト | 内容 | 往復 | ツール | エラー | 中断 | 変更 |"
@@ -1240,8 +1311,14 @@ def render_aiwork_markdown(
                 f"| {start}-{end} | {project} | {s.user_turns} "
                 f"| {tools_n} | {err_s} | {inter_s} | {outcome} |"
             )
-    if len(sessions) > max_rows:
+    omitted_rest = max(0, len(table_sessions) - max_rows)
+    if omitted_rest or tiny_n:
         lines.append("")
-        lines.append(f"（他 {len(sessions) - max_rows} セッション省略）")
+        bits: list[str] = []
+        if omitted_rest:
+            bits.append(f"他 {omitted_rest} セッション省略")
+        if tiny_n:
+            bits.append(f"ほか短小セッション {tiny_n}件")
+        lines.append(f"（{' / '.join(bits)}）")
     lines.append("")
     return "\n".join(lines)

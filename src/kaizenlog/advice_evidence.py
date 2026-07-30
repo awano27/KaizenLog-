@@ -121,6 +121,12 @@ def _fmt(value: float) -> str:
     return f"{value:.1f}".rstrip("0").rstrip(".")
 
 
+def _fmt_duration_ja(minutes: float) -> str:
+    """Activity Log と同型の「N時間M分」。結論用。"""
+    h, m = divmod(int(round(minutes)), 60)
+    return f"{h}時間{m}分" if h else f"{m}分"
+
+
 def _known_browser_minutes(by_app: Mapping[str, Any]) -> float:
     return sum(
         _number(minutes)
@@ -330,13 +336,14 @@ def _build_reader_summary(
     previous_day_available: bool,
 ) -> str:
     """「今日の結論」用の決定論文（最大3文）。数字は evidence 確定事実のみ。"""
+    total_hm = _fmt_duration_ja(total_minutes)
     if short_record:
         return (
-            f"本日の記録は合計{_fmt(total_minutes)}分のため、"
+            f"本日の記録は合計{total_hm}のため、"
             "1日の働き方を評価するにはデータ不足です。"
         )
     parts: list[str] = [
-        f"本日は合計{_fmt(total_minutes)}分の作業が記録されています。"
+        f"本日は合計{total_hm}の作業が記録されています。"
     ]
     # 目標カテゴリ実測（断定なし・goal_category がある日のみ）
     goal_cat = stats.get("goal_category")

@@ -585,6 +585,17 @@ def _run_hook_body(
         text = _extract_user_text(rec)
         if not text or len(text) < 8:
             continue
+        # システム注入 XML はリトライ連鎖に混ぜない（aiwork と同判定・lazy import）
+        try:
+            from .aiwork import _is_system_wrapper as _sys_wrap
+        except Exception:
+            try:
+                from .aiwork import _is_command_wrapper as _sys_wrap
+            except Exception:
+                def _sys_wrap(t: str) -> bool:  # type: ignore
+                    return False
+        if _sys_wrap(text):
+            continue
         ts = _record_ts(rec)
         norm = _normalize(text)
         # 連鎖判定

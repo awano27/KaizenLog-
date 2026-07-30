@@ -629,18 +629,21 @@ def render_action_stats_line(
         return f"{label}: まだ提案がありません"
     skip_part = f" / スキップ {stats.skipped}件" if stats.skipped else ""
     undone_part = (
-        f"（未実行での達成 {stats.undone_passed}件）"
+        f"（未実行のままPASS到達 {stats.undone_passed}件："
+        f"チェックなしで指標が目標値に達した提案）"
         if stats.undone_passed > 0
         else ""
     )
     streak_part = ""
     if streaks is not None and (streaks.current > 0 or streaks.best > 0):
         streak_part = f" / 🔥{streaks.current}日（最長{streaks.best}）"
+    pass_part = f"実行済みPASS {stats.done_passed}件"
+    if stats.pass_rate is not None:
+        pass_part += f"（{_pct_label(stats.pass_rate)}）"
     return (
         f"{label}: 提案 {stats.proposed}件 / 消化 {stats.done}件"
         f"（{_pct_label(stats.done_rate)}）{skip_part}"
-        f" / 実行済みPASS {stats.done_passed}件"
-        f"（{_pct_label(stats.pass_rate)}）{undone_part}{streak_part}"
+        f" / {pass_part}{undone_part}{streak_part}"
     )
 
 
@@ -853,7 +856,7 @@ def summarize_for_prompt(
             + (f" / スキップ{stats.skipped}件" if stats.skipped else "")
             + f" / 実行済みPASS率{_pct_label(stats.pass_rate)}"
             + (
-                f"（未実行での達成{stats.undone_passed}件）"
+                f"（未実行のままPASS到達{stats.undone_passed}件）"
                 if stats.undone_passed
                 else ""
             )
@@ -1009,10 +1012,14 @@ def render_actions_section(
     if stats.proposed > 0 or stats.skipped > 0:
         skip_part = f" / スキップ {stats.skipped}件" if stats.skipped else ""
         undone_part = (
-            f"（未実行での達成 {stats.undone_passed}件）"
+            f"（未実行のままPASS到達 {stats.undone_passed}件："
+            f"チェックなしで指標が目標値に達した提案）"
             if stats.undone_passed
             else ""
         )
+        pass_part = f"実行済みPASS {stats.done_passed}件"
+        if stats.pass_rate is not None:
+            pass_part += f"（{_pct_label(stats.pass_rate)}）"
         # 低調期の保護: 悪い消化率%の常時提示が記録行動を止める副作用への対策
         if (
             stats.done_rate is not None
@@ -1022,19 +1029,16 @@ def render_actions_section(
             lines.append(
                 f"今週の消化 {stats.done}件"
                 f"（提案 {stats.proposed}件）{skip_part}"
-                f" / 実行済みPASS {_pct_label(stats.pass_rate)}{undone_part}"
+                f" / {pass_part}{undone_part}"
             )
         else:
             lines.append(
                 f"直近{stats.window_days}日: 消化率 {_pct_label(stats.done_rate)}"
                 f"（{stats.proposed}件中{stats.done}件）{skip_part}"
-                f" / 実行済みPASS {_pct_label(stats.pass_rate)}{undone_part}"
+                f" / {pass_part}{undone_part}"
             )
 
-    # 新しい提案から最大3件（決定論。優先度推定ではない）
-    shown = buckets.recent[:TODAY_CANDIDATE_CAP]
-    for e in shown:
-        mark = "x" if e.id in checked_ids else " "
+    def _action_line(e: MemoryEntry, mark: str) -> str:
         try:
             d = date.fromisoformat(e.date)
             md = f"{d.month}/{d.day}"
@@ -1046,11 +1050,37 @@ def render_actions_section(
             tag = f"{md}提案・判定 {icon} 実測{val}"
         else:
             tag = f"{md}提案"
-        lines.append(f"- [{mark}] {e.id}: {e.action}（{tag}）")
+        return f"- [{mark}] {e.id}: {e.action}（{tag}）"
 
-    rest_recent = max(0, len(buckets.recent) - len(shown))
+    # 判定✅かつ未チェックは未完了リストから分離
+    pass_achieved = [
+        e
+        for e in buckets.recent
+        if e.verdict == "pass" and e.id not in checked_ids
+    ]
+    still_open = [
+        e
+        for e in buckets.recent
+        if not (e.verdict == "pass" and e.id not in checked_ids)
+    ]
+    # 新しい提案から最大3件（決定論。優先度推定ではない）
+    shown = still_open[:TODAY_CANDIDATE_CAP]
+    for e in shown:
+        mark = "x" if e.id in checked_ids else " "
+        lines.append(_action_line(e, mark))
+
+    if pass_achieved:
+        lines.append("### ☑ 指標は達成済み（習慣化するならチェック）")
+        for e in pass_achieved[:TODAY_CANDIDATE_CAP]:
+            lines.append(_action_line(e, " "))
+        rest_achieved = max(0, len(pass_achieved) - TODAY_CANDIDATE_CAP)
+        if rest_achieved:
+            # 表示上限超過分を無言で落とさない（全件は today --all）
+            lines.append(f"ほか達成済み {rest_achieved}件")
+
+    rest_recent = max(0, len(still_open) - len(shown))
     if rest_recent or buckets.stale or buckets.older or not shown:
-        if not shown:
+        if not shown and not pass_achieved:
             hold = len(buckets.stale) + len(buckets.older)
             lines.append(f"今日の候補なし。保留 {hold}件")
         lines.append(
