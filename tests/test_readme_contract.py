@@ -126,7 +126,7 @@ def test_readme_svg_assets_are_well_formed_and_self_contained():
             assert forbidden not in text
 
 
-def test_readme_presents_an_ai_optional_daily_journal_and_reflection_loop():
+def test_readme_presents_three_ai_optional_daily_journal_stories():
     text = README.read_text(encoding="utf-8")
     marker = "## 毎日の記録と振り返りに使う"
     assert marker in text
@@ -134,35 +134,46 @@ def test_readme_presents_an_ai_optional_daily_journal_and_reflection_loop():
 
     for required in (
         "AIを使わない日でも",
-        "架空の日誌例",
-        "実在する利用者のデータや改善効果ではありません。",
-        "**合計アクティブ時間**: 6h42m",
-        "コンテキストスイッチ: 18回",
-        "**集中ブロック**: 3回",
-        "執筆・ノート",
-        "会議",
-        "調査",
-        "事務作業",
-        "時間配分を見直す",
-        "集中と中断を振り返る",
-        "一日の流れを思い出す",
+        "朝に目標を書く → 日中は自動記録 → 夜に振り返る → 必要な場合だけAI提案",
+        "数値と文章はすべて**架空の例**です。実在する利用者のデータ、導入実績、改善効果ではありません。",
+        "#### 1. ソフトウェア開発者",
+        "6時間12分｜実装 3時間05分｜レビュー 1時間20分｜会議 50分",
+        "会議後に開発へ戻るまで時間がかかった",
+        "午前中にレビュー対応を終える",
+        "#### 2. 企画・営業",
+        "5時間48分｜顧客会議 2時間10分｜提案書 1時間45分｜調査 1時間05分",
+        "会議が続き、提案書の作成が夕方に偏った",
+        "最初の会議までに提案書の骨子を作る",
+        "#### 3. ライター・研究者",
+        "5時間30分｜執筆 2時間35分｜調査 1時間50分｜推敲 45分",
+        "午前の調査が長引いたが、午後は執筆に集中できた",
+        "調査を90分で区切り、初稿へ進む",
+        "各例のカテゴリ時間は主な内訳であり、合計時間の完全な内訳ではありません。",
+        "「自分の振り返り」と「明日の目標」は本人が書くもので、自動生成ではありません。",
+        "Activity LogはActivityWatchが観測したPC前景活動の記録です。勤務時間、目標達成、集中力、生産性を判定するものではありません。",
+        "スマートフォン、他デバイス、離席中の行動は既定では測定できません。",
+        "入力watcherから統計を取得できる場合は、25分以上入力が続いた区間を「集中ブロック」として表示します。",
         'kaizenlog goal "提案書の初稿を完成させる @執筆・ノート"',
         "## 振り返り",
         "管理マーカー区間だけを更新",
         "その外側の手書き本文を置換しません",
-        "`generate --date YYYY-MM-DD`だけならLLMは不要です。",
-        "設定済みのLLMバックエンド",
-        "集中ブロックは、入力watcherから統計を取得できる場合だけ表示されます。",
-        "Activity Logは観測できたPC作業の記録であり、勤務時間、目標達成、集中力、生産性を自動判定するものではありません。",
-        "生産性を自動判定するものではありません",
+        "`generate --date YYYY-MM-DD`による日誌生成と、本人が書く振り返りにはLLMが不要です。",
+        "振り返りを翌日の改善提案へ反映するときだけ、設定済みのLLMバックエンドを使います。",
     ):
         assert required in section
 
+    assert section.count("**自動記録（Activity Log）**") == 3
+    assert section.count("**自分の振り返り（手書き）**") == 3
+    assert section.count("**明日の目標（自分で設定）**") == 3
+
     for forbidden in (
-        "## 毎日の記録として使う",
+        "### こんな日誌が残ります",
+        "**集中ブロック**: 3回",
+        "15分以上",
         "Activity Logは勤務時間です",
         "スマートフォンの行動も記録します",
         "振り返りを自動生成します",
+        "AIが明日の目標を決めます",
         "日誌の作成にはLLMが必須です",
     ):
-        assert forbidden not in text
+        assert forbidden not in section
