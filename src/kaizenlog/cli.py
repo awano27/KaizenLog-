@@ -9,9 +9,11 @@
   kaizenlog prompts [--days N] [--unhandled] [--roi]  繰り返し依頼の発掘＋ROI
   kaizenlog prompts mark <id> skilled|dismissed [--skill NAME]
   kaizenlog handoff [--target PATH ...] [--dry-run]  実測教訓を CLAUDE.md 等へ注入
+  kaizenlog handoff roi [--suppress|--unsuppress|--promote ID]  申し送りROI
   kaizenlog coach [--dry-run] [--apply FILE]  コパイロット調教パック（承認制）
   kaizenlog abtest new|finish|status       パーソナル METR 実験
   kaizenlog excavate [--days N] [--write] [--card]  過去ログ発掘監査
+  kaizenlog guard --hook|install|status    空転ブレーカー（Claude Code フック）
   kaizenlog backfill [--days N]            欠損日の日誌・統計をまとめて補完する
   kaizenlog status                         実行履歴（最終成功・直近の失敗）を表示
   kaizenlog doctor                         セットアップと環境の健全性を診断
@@ -225,6 +227,14 @@ def cmd_generate(
         loop_tax = compute_loop_tax(
             day_retry_chains, ai_sessions, pricing=pricing
         )
+        try:
+            from .guard import count_live_breaker_fires
+
+            breaker_n = count_live_breaker_fires(
+                cfg.memory_path, day, tz=tz
+            )
+        except Exception:
+            breaker_n = 0
         aiwork_md = render_aiwork_markdown(
             ai_sessions,
             tz,
@@ -236,6 +246,7 @@ def cmd_generate(
             internal_ai_sessions=internal_ai_n,
             usd_jpy=getattr(cfg.aiwork, "usd_jpy", None),
             loop_tax_summary=loop_tax,
+            breaker_fires=breaker_n,
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
@@ -263,6 +274,16 @@ def cmd_generate(
     print(f"   合計 {summary.total_minutes:.0f}分 / {len(summary.blocks)}ブロック"
           f" / AI関連画面ブロック {summary.ai_activity_blocks}回"
           f" / AIセッション {len(ai_sessions)}回")
+
+    # 空転ブレーカー状態掃除（7日超過）
+    try:
+        from .guard import cleanup_old_states
+
+        cleaned = cleanup_old_states(max_age_days=7)
+        if cleaned:
+            print(f"🧹 guard 状態ファイルを {cleaned} 件削除（7日超過）")
+    except Exception:
+        pass
 
     # 目標は goal コマンド専用区間。generate は読むだけ（書き換えない）
     from .goal import goal_stats_fields, read_goal
@@ -1417,6 +1438,69 @@ def cmd_prompts(
     )
 
 
+def cmd_guard(cfg: Config, args: argparse.Namespace) -> int:
+    """空転ブレーカー: install / status（--hook は main で先に処理）。"""
+    import json as _json
+
+    from .guard import (
+        build_hook_command,
+        build_hooks_snippet,
+        format_guard_status,
+        install_hooks_write,
+    )
+
+    sub = getattr(args, "guard_command", None)
+    g = cfg.guard
+
+    if sub == "install":
+        py = sys.executable
+        cfg_path = None
+        try:
+            found = find_config_file(getattr(args, "config", None))
+            if found:
+                cfg_path = str(found)
+        except Exception:
+            pass
+        cmd = build_hook_command(python_exe=py, config_path=cfg_path)
+        snippet = build_hooks_snippet(cmd)
+        if not getattr(args, "write", False):
+            print("# 以下を .claude/settings.json の hooks にマージしてください")
+            print("# PostToolUse には登録しないでください（レイテンシ税）")
+            print(_json.dumps({"hooks": snippet}, ensure_ascii=False, indent=2))
+            print()
+            print(f"# コマンド: {cmd}")
+            print("# 書き込み: kaizenlog guard install --write --project")
+            return 0
+        if getattr(args, "user", False):
+            target = Path.home() / ".claude" / "settings.json"
+        else:
+            target = Path.cwd() / ".claude" / "settings.json"
+        try:
+            bak = install_hooks_write(target, cmd)
+            print(f"✅ hooks を書き込みました: {target}")
+            if bak != target and Path(bak).is_file():
+                print(f"   バックアップ: {bak}")
+        except ValueError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            return 1
+        except OSError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    # status（既定）
+    print(
+        format_guard_status(
+            enabled=g.enabled,
+            retry_threshold=g.retry_threshold,
+            tool_error_streak=g.tool_error_streak,
+            cooldown_seconds=g.cooldown_seconds,
+            debounce_seconds=g.debounce_seconds,
+        )
+    )
+    return 0
+
+
 def cmd_excavate(
     cfg: Config,
     *,
@@ -1480,7 +1564,7 @@ def cmd_handoff(
     as_of: date | None = None,
 ) -> int:
     """実測教訓を CLAUDE.md / AGENTS.md の agent-context 区間へ注入。"""
-    from .handoff import apply_handoff, build_agent_context_section
+    from .handoff import build_agent_context_section, run_handoff_for_target
 
     paths = list(targets or [])
     if not paths:
@@ -1494,19 +1578,232 @@ def cmd_handoff(
         return 1
     as_of = as_of or datetime.now(ZoneInfo(cfg.timezone)).date()
     redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
-    section = build_agent_context_section(
-        stats_dir=cfg.stats_path,
-        memory_dir=cfg.memory_path,
-        as_of=as_of,
-        redactor=redactor,
-    )
     if dry_run:
+        # dry-run: 先頭 target の生成結果を表示（台帳は書かない）
+        section = build_agent_context_section(
+            stats_dir=cfg.stats_path,
+            memory_dir=cfg.memory_path,
+            as_of=as_of,
+            redactor=redactor,
+            target=Path(paths[0]).expanduser(),
+        )
         print(section)
         return 0
     for t in paths:
         p = Path(t).expanduser()
-        apply_handoff(p, section, dry_run=False)
+        run_handoff_for_target(
+            target=p,
+            stats_dir=cfg.stats_path,
+            memory_dir=cfg.memory_path,
+            as_of=as_of,
+            redactor=redactor,
+            dry_run=False,
+        )
         print(f"✅ handoff を書き込みました: {p}")
+    return 0
+
+
+def cmd_handoff_roi(
+    cfg: Config,
+    *,
+    targets: list[str] | None = None,
+    suppress: str | None = None,
+    unsuppress: str | None = None,
+    promote: str | None = None,
+    as_of: date | None = None,
+) -> int:
+    """申し送りROI表・抑制/復帰/昇格（明示CLI=承認）。"""
+    from .aiwork import collect_ai_telemetry
+    from .handoff import collect_handoff_lessons, run_handoff_for_target
+    from .handoffledger import (
+        HandoffLesson,
+        build_roi_rows,
+        format_roi_table,
+        inject_promoted_lesson,
+        load_handoff_ledger,
+        mark_promote_candidates,
+        set_lesson_status,
+    )
+
+    as_of = as_of or datetime.now(ZoneInfo(cfg.timezone)).date()
+    redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
+    paths = list(targets or [])
+    if not paths:
+        paths = list(cfg.handoff.targets or [])
+
+    # --- 抑制 / 復帰 / 昇格 ---
+    action_id = suppress or unsuppress or promote
+    if action_id:
+        if suppress and unsuppress:
+            print("❌ --suppress と --unsuppress は同時指定できません。", file=sys.stderr)
+            return 1
+        if promote and (suppress or unsuppress):
+            print("❌ --promote は他の status 変更と同時指定できません。", file=sys.stderr)
+            return 1
+
+        target_one: Path | None = None
+        if targets and len(targets) == 1:
+            target_one = Path(targets[0]).expanduser()
+        elif targets and len(targets) > 1 and (suppress or unsuppress):
+            print(
+                "❌ --suppress/--unsuppress では --target を1つに限定するか省略してください。",
+                file=sys.stderr,
+            )
+            return 1
+
+        try:
+            if suppress:
+                set_lesson_status(
+                    cfg.memory_path,
+                    suppress,
+                    "suppressed",
+                    target=target_one,
+                    as_of=as_of,
+                )
+                print(f"✅ suppressed: {suppress}")
+            elif unsuppress:
+                set_lesson_status(
+                    cfg.memory_path,
+                    unsuppress,
+                    "active",
+                    target=target_one,
+                    as_of=as_of,
+                )
+                print(f"✅ unsuppressed (active): {unsuppress}")
+            elif promote:
+                gt = (cfg.handoff.global_target or "").strip()
+                if not gt:
+                    print(
+                        "❌ [handoff] global_target が未設定です。"
+                        " config に global_target を設定してから --promote してください。",
+                        file=sys.stderr,
+                    )
+                    return 1
+                lessons = collect_handoff_lessons(
+                    stats_dir=cfg.stats_path,
+                    memory_dir=cfg.memory_path,
+                    as_of=as_of,
+                    redactor=redactor,
+                    suppress_ids=set(),
+                )
+                les = next((x for x in lessons if x.lesson_id == promote), None)
+                if les is None:
+                    led = load_handoff_ledger(cfg.memory_path)
+                    hit = next((e for e in led if e.lesson_id == promote), None)
+                    if hit is None:
+                        print(f"❌ 不明な lesson_id: {promote}", file=sys.stderr)
+                        return 1
+                    les = HandoffLesson(
+                        lesson_id=hit.lesson_id,
+                        kind=hit.kind,
+                        ref_id=hit.ref_id,
+                        text=f"(昇格) {hit.lesson_id}",
+                    )
+                try:
+                    set_lesson_status(
+                        cfg.memory_path, promote, "promoted", as_of=as_of
+                    )
+                except KeyError:
+                    print(
+                        f"❌ lesson_id が台帳にありません（先に handoff を実行）: {promote}",
+                        file=sys.stderr,
+                    )
+                    return 1
+                inject_promoted_lesson(Path(gt).expanduser(), les, as_of=as_of)
+                print(f"✅ promoted → {gt}: {promote}")
+        except KeyError:
+            print(
+                f"❌ 不明な lesson_id（台帳に無し）: {action_id}",
+                file=sys.stderr,
+            )
+            return 1
+        except ValueError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            return 1
+
+        # 抑制/復帰後は対象 handoff を再実行してセクションから除去/復帰
+        if suppress or unsuppress:
+            re_paths = [str(target_one)] if target_one else paths
+            if not re_paths:
+                print(
+                    "⚠️ targets 未設定のため handoff 再実行をスキップしました。",
+                    file=sys.stderr,
+                )
+            else:
+                for t in re_paths:
+                    p = Path(t).expanduser()
+                    run_handoff_for_target(
+                        target=p,
+                        stats_dir=cfg.stats_path,
+                        memory_dir=cfg.memory_path,
+                        as_of=as_of,
+                        redactor=redactor,
+                        dry_run=False,
+                    )
+                    print(f"✅ handoff 再実行: {p}")
+        elif promote:
+            for t in paths:
+                p = Path(t).expanduser()
+                run_handoff_for_target(
+                    target=p,
+                    stats_dir=cfg.stats_path,
+                    memory_dir=cfg.memory_path,
+                    as_of=as_of,
+                    redactor=redactor,
+                    dry_run=False,
+                )
+                print(f"✅ handoff 再実行(昇格除外): {p}")
+        return 0
+
+    # --- ROI 表 ---
+    if not paths:
+        print(
+            "❌ targets が未設定です。"
+            " --target を指定するか config [handoff] targets を設定してください。",
+            file=sys.stderr,
+        )
+        return 1
+
+    tz = ZoneInfo(cfg.timezone)
+    start = datetime.combine(as_of - timedelta(days=29), time.min, tzinfo=tz)
+    end = datetime.combine(as_of, time.max, tzinfo=tz)
+    adapters = available_adapters(cfg) if cfg.aiwork.enabled else []
+    try:
+        sessions, prompts, _ = collect_ai_telemetry(adapters, start, end)
+    except Exception:
+        sessions, prompts = [], []
+
+    ledger = load_handoff_ledger(cfg.memory_path)
+    lessons = collect_handoff_lessons(
+        stats_dir=cfg.stats_path,
+        memory_dir=cfg.memory_path,
+        as_of=as_of,
+        redactor=redactor,
+        suppress_ids=set(),
+    )
+    rows_by_target: dict[str, list] = {}
+    for t in paths:
+        p = Path(t).expanduser()
+        try:
+            tkey = str(p.resolve())
+        except OSError:
+            tkey = str(p)
+        rows = build_roi_rows(
+            target=p,
+            lessons=lessons,
+            ledger=ledger,
+            sessions=sessions,
+            prompts=prompts,
+            memory_dir=cfg.memory_path,
+            stats_dir=cfg.stats_path,
+            as_of=as_of,
+            redactor=redactor,
+        )
+        rows_by_target[tkey] = rows
+    mark_promote_candidates(rows_by_target)
+    for t, rows in rows_by_target.items():
+        print(f"\n### target: {t}\n")
+        print(format_roi_table(rows))
     return 0
 
 
@@ -2238,6 +2535,13 @@ def main(argv: list[str] | None = None) -> int:
         help="実測教訓を CLAUDE.md / AGENTS.md の agent-context 区間へ注入",
     )
     ho.add_argument(
+        "handoff_action",
+        nargs="?",
+        default=None,
+        choices=["roi"],
+        help="roi: 申し送りROI表・抑制/昇格",
+    )
+    ho.add_argument(
         "--target",
         action="append",
         dest="targets",
@@ -2250,6 +2554,24 @@ def main(argv: list[str] | None = None) -> int:
         help="生成セクションを表示するだけでファイルへ書かない",
     )
     ho.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
+    ho.add_argument(
+        "--suppress",
+        default=None,
+        metavar="LESSON_ID",
+        help="handoff roi: レッスンを抑制（台帳+再生成）。CLI実行=承認",
+    )
+    ho.add_argument(
+        "--unsuppress",
+        default=None,
+        metavar="LESSON_ID",
+        help="handoff roi: 抑制を解除して復帰",
+    )
+    ho.add_argument(
+        "--promote",
+        default=None,
+        metavar="LESSON_ID",
+        help="handoff roi: global_target へ昇格（各 target からは除外）",
+    )
 
     ch = sub.add_parser("coach", help="コパイロット調教パック（承認制 diff 提案）")
     ch.add_argument(
@@ -2305,6 +2627,38 @@ def main(argv: list[str] | None = None) -> int:
     )
     exca.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
 
+    gd = sub.add_parser(
+        "guard",
+        help="空転ブレーカー（Claude Code フック / install / status）",
+    )
+    gd.add_argument(
+        "--hook",
+        action="store_true",
+        help="フック本体（stdin JSON）。エラーでも exit 0",
+    )
+    gd.add_argument(
+        "guard_command",
+        nargs="?",
+        choices=("install", "status"),
+        default=None,
+        help="install: フック登録 / status: 状態表示",
+    )
+    gd.add_argument(
+        "--write",
+        action="store_true",
+        help="install 時に settings.json へ書き込む（要バックアップ）",
+    )
+    gd.add_argument(
+        "--project",
+        action="store_true",
+        help="install 先: カレント .claude/settings.json",
+    )
+    gd.add_argument(
+        "--user",
+        action="store_true",
+        help="install 先: ~/.claude/settings.json",
+    )
+
     args = parser.parse_args(argv)
 
     # 古いWindowsコンソール（cp932）での絵文字・日本語の文字化けを防ぐ
@@ -2317,6 +2671,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init-config":
         return cmd_init_config(getattr(args, "output", None))
+
+    # guard --hook は設定欠落でも沈黙 exit 0（セッションを壊さない）
+    if args.command == "guard" and bool(getattr(args, "hook", False)):
+        from .guard import run_hook
+
+        try:
+            return run_hook(config_path=getattr(args, "config", None))
+        except Exception:
+            return 0
 
     # setup bootstraps config — must not require load_config first
     if args.command == "setup":
@@ -2397,6 +2760,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"❌ {e}", file=sys.stderr)
         return 2
+
+    if args.command == "guard":
+        return cmd_guard(cfg, args)
 
     if args.command == "morning":
         tz = ZoneInfo(cfg.timezone)
@@ -2493,6 +2859,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "handoff":
         tz = ZoneInfo(cfg.timezone)
         day = _parse_date(getattr(args, "date", None), tz)
+        if getattr(args, "handoff_action", None) == "roi":
+            return cmd_handoff_roi(
+                cfg,
+                targets=getattr(args, "targets", None),
+                suppress=getattr(args, "suppress", None),
+                unsuppress=getattr(args, "unsuppress", None),
+                promote=getattr(args, "promote", None),
+                as_of=day,
+            )
         return cmd_handoff(
             cfg,
             targets=getattr(args, "targets", None),
