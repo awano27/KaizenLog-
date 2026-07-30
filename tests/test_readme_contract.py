@@ -150,7 +150,7 @@ def test_readme_presents_three_ai_optional_daily_journal_stories():
         "調査を90分で区切り、初稿へ進む",
         "各例のカテゴリ時間は主な内訳であり、合計時間の完全な内訳ではありません。",
         "「自分の振り返り」と「明日の目標」は本人が書くもので、自動生成ではありません。",
-        "Activity LogはActivityWatchが観測したPC前景活動の記録です。勤務時間、目標達成、集中力、生産性を判定するものではありません。",
+        "Activity LogはActivityWatchが観測したPC前景活動の記録です。生活全体の記録でもありませんし、勤務時間、目標達成、集中力、生産性を判定するものでもありません。",
         "スマートフォン、他デバイス、離席中の行動は既定では測定できません。",
         "入力watcherから統計を取得できる場合は、25分以上入力が続いた区間を「集中ブロック」として表示します。",
         'kaizenlog goal "提案書の初稿を完成させる @執筆・ノート"',
@@ -165,6 +165,26 @@ def test_readme_presents_three_ai_optional_daily_journal_stories():
     assert section.count("**自動記録（Activity Log）**") == 3
     assert section.count("**自分の振り返り（手書き）**") == 3
     assert section.count("**明日の目標（自分で設定）**") == 3
+
+    role_headings = (
+        "#### 1. ソフトウェア開発者",
+        "#### 2. 企画・営業",
+        "#### 3. ライター・研究者",
+    )
+    role_blocks = []
+    for index, heading in enumerate(role_headings):
+        block_start = section.index(heading) + len(heading)
+        block_end = (
+            section.index(role_headings[index + 1], block_start)
+            if index + 1 < len(role_headings)
+            else section.index("各例のカテゴリ時間", block_start)
+        )
+        role_blocks.append(section[block_start:block_end])
+
+    for block in role_blocks:
+        assert block.count("**自動記録（Activity Log）**") == 1
+        assert block.count("**自分の振り返り（手書き）**") == 1
+        assert block.count("**明日の目標（自分で設定）**") == 1
 
     for forbidden in (
         "### こんな日誌が残ります",
