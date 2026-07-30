@@ -406,6 +406,71 @@ def _check_artifacts(c: Check, cfg: Config) -> None:
                 c.warn(f"browser_export_dir が明示設定されていますが存在しません: {bdir}")
 
 
+def _check_guard(c: Check, cfg: Config) -> None:
+    """空転ブレーカー: 状態 dir 書き込み可 / settings フック登録の有無。
+
+    mkdir しない（読み取り専用診断）。未作成は情報表示のみ。
+    """
+    try:
+        from .guard import state_dir, _is_kaizenlog_guard_command
+    except Exception as e:
+        c.warn(f"guard モジュールを読み込めません: {e}")
+        return
+    # 状態ディレクトリ（存在時のみ書き込み可否。mkdir しない）
+    d = state_dir()
+    if not d.exists():
+        c.ok(
+            f"guard 状態ディレクトリ: 未作成（guard 初回実行時に作成）: {d}"
+        )
+    elif not d.is_dir():
+        c.warn(f"guard 状態パスがディレクトリではありません: {d}")
+    else:
+        try:
+            if os.access(d, os.W_OK):
+                c.ok(f"guard 状態ディレクトリ: 書き込み可 ({d})")
+            else:
+                c.warn(f"guard 状態ディレクトリに書けません: {d}")
+        except OSError as e:
+            c.warn(f"guard 状態ディレクトリを確認できません: {e}")
+    # settings.json フック
+    candidates = [
+        Path.cwd() / ".claude" / "settings.json",
+        Path.home() / ".claude" / "settings.json",
+    ]
+    found = False
+    for sp in candidates:
+        if not sp.is_file():
+            continue
+        try:
+            data = json.loads(sp.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        hooks = data.get("hooks") if isinstance(data, dict) else None
+        if not isinstance(hooks, dict):
+            continue
+        for _ev, blocks in hooks.items():
+            if not isinstance(blocks, list):
+                continue
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                for h in block.get("hooks") or []:
+                    if isinstance(h, dict) and _is_kaizenlog_guard_command(
+                        str(h.get("command") or "")
+                    ):
+                        found = True
+                        break
+        if found:
+            c.ok(f"guard フック登録: あり ({sp})")
+            break
+    if not found:
+        c.warn(
+            "guard フック未登録（任意）。"
+            "`kaizenlog guard install --write --project` で UserPromptSubmit/Stop に登録可"
+            "（PostToolUse は登録しない）"
+        )
+
+
 def run_doctor(
     cfg: Config,
     config_path: str | None = None,
@@ -447,5 +512,6 @@ def run_doctor(
         _check_history(c, cfg)
         _check_advise_health(c, cfg)
         _check_artifacts(c, cfg)
+        _check_guard(c, cfg)
     verdict = "\n❌ 修正が必要な項目があります。" if c.has_error else "\n✅ すべて正常です。"
     return "\n".join(c.lines) + verdict, c.has_error

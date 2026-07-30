@@ -12,6 +12,7 @@
   kaizenlog coach [--dry-run] [--apply FILE]  コパイロット調教パック（承認制）
   kaizenlog abtest new|finish|status       パーソナル METR 実験
   kaizenlog excavate [--days N] [--write] [--card]  過去ログ発掘監査
+  kaizenlog guard --hook|install|status    空転ブレーカー（Claude Code フック）
   kaizenlog backfill [--days N]            欠損日の日誌・統計をまとめて補完する
   kaizenlog status                         実行履歴（最終成功・直近の失敗）を表示
   kaizenlog doctor                         セットアップと環境の健全性を診断
@@ -225,6 +226,14 @@ def cmd_generate(
         loop_tax = compute_loop_tax(
             day_retry_chains, ai_sessions, pricing=pricing
         )
+        try:
+            from .guard import count_live_breaker_fires
+
+            breaker_n = count_live_breaker_fires(
+                cfg.memory_path, day, tz=tz
+            )
+        except Exception:
+            breaker_n = 0
         aiwork_md = render_aiwork_markdown(
             ai_sessions,
             tz,
@@ -236,6 +245,7 @@ def cmd_generate(
             internal_ai_sessions=internal_ai_n,
             usd_jpy=getattr(cfg.aiwork, "usd_jpy", None),
             loop_tax_summary=loop_tax,
+            breaker_fires=breaker_n,
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
@@ -263,6 +273,16 @@ def cmd_generate(
     print(f"   合計 {summary.total_minutes:.0f}分 / {len(summary.blocks)}ブロック"
           f" / AI関連画面ブロック {summary.ai_activity_blocks}回"
           f" / AIセッション {len(ai_sessions)}回")
+
+    # 空転ブレーカー状態掃除（7日超過）
+    try:
+        from .guard import cleanup_old_states
+
+        cleaned = cleanup_old_states(max_age_days=7)
+        if cleaned:
+            print(f"🧹 guard 状態ファイルを {cleaned} 件削除（7日超過）")
+    except Exception:
+        pass
 
     # 目標は goal コマンド専用区間。generate は読むだけ（書き換えない）
     from .goal import goal_stats_fields, read_goal
@@ -1417,6 +1437,69 @@ def cmd_prompts(
     )
 
 
+def cmd_guard(cfg: Config, args: argparse.Namespace) -> int:
+    """空転ブレーカー: install / status（--hook は main で先に処理）。"""
+    import json as _json
+
+    from .guard import (
+        build_hook_command,
+        build_hooks_snippet,
+        format_guard_status,
+        install_hooks_write,
+    )
+
+    sub = getattr(args, "guard_command", None)
+    g = cfg.guard
+
+    if sub == "install":
+        py = sys.executable
+        cfg_path = None
+        try:
+            found = find_config_file(getattr(args, "config", None))
+            if found:
+                cfg_path = str(found)
+        except Exception:
+            pass
+        cmd = build_hook_command(python_exe=py, config_path=cfg_path)
+        snippet = build_hooks_snippet(cmd)
+        if not getattr(args, "write", False):
+            print("# 以下を .claude/settings.json の hooks にマージしてください")
+            print("# PostToolUse には登録しないでください（レイテンシ税）")
+            print(_json.dumps({"hooks": snippet}, ensure_ascii=False, indent=2))
+            print()
+            print(f"# コマンド: {cmd}")
+            print("# 書き込み: kaizenlog guard install --write --project")
+            return 0
+        if getattr(args, "user", False):
+            target = Path.home() / ".claude" / "settings.json"
+        else:
+            target = Path.cwd() / ".claude" / "settings.json"
+        try:
+            bak = install_hooks_write(target, cmd)
+            print(f"✅ hooks を書き込みました: {target}")
+            if bak != target and Path(bak).is_file():
+                print(f"   バックアップ: {bak}")
+        except ValueError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            return 1
+        except OSError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    # status（既定）
+    print(
+        format_guard_status(
+            enabled=g.enabled,
+            retry_threshold=g.retry_threshold,
+            tool_error_streak=g.tool_error_streak,
+            cooldown_seconds=g.cooldown_seconds,
+            debounce_seconds=g.debounce_seconds,
+        )
+    )
+    return 0
+
+
 def cmd_excavate(
     cfg: Config,
     *,
@@ -2305,6 +2388,38 @@ def main(argv: list[str] | None = None) -> int:
     )
     exca.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
 
+    gd = sub.add_parser(
+        "guard",
+        help="空転ブレーカー（Claude Code フック / install / status）",
+    )
+    gd.add_argument(
+        "--hook",
+        action="store_true",
+        help="フック本体（stdin JSON）。エラーでも exit 0",
+    )
+    gd.add_argument(
+        "guard_command",
+        nargs="?",
+        choices=("install", "status"),
+        default=None,
+        help="install: フック登録 / status: 状態表示",
+    )
+    gd.add_argument(
+        "--write",
+        action="store_true",
+        help="install 時に settings.json へ書き込む（要バックアップ）",
+    )
+    gd.add_argument(
+        "--project",
+        action="store_true",
+        help="install 先: カレント .claude/settings.json",
+    )
+    gd.add_argument(
+        "--user",
+        action="store_true",
+        help="install 先: ~/.claude/settings.json",
+    )
+
     args = parser.parse_args(argv)
 
     # 古いWindowsコンソール（cp932）での絵文字・日本語の文字化けを防ぐ
@@ -2317,6 +2432,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init-config":
         return cmd_init_config(getattr(args, "output", None))
+
+    # guard --hook は設定欠落でも沈黙 exit 0（セッションを壊さない）
+    if args.command == "guard" and bool(getattr(args, "hook", False)):
+        from .guard import run_hook
+
+        try:
+            return run_hook(config_path=getattr(args, "config", None))
+        except Exception:
+            return 0
 
     # setup bootstraps config — must not require load_config first
     if args.command == "setup":
@@ -2397,6 +2521,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"❌ {e}", file=sys.stderr)
         return 2
+
+    if args.command == "guard":
+        return cmd_guard(cfg, args)
 
     if args.command == "morning":
         tz = ZoneInfo(cfg.timezone)

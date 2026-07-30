@@ -38,9 +38,12 @@ Windows のPC作業を ActivityWatch + AI CLIセッションログから自動�
 | 28 | 第27弾レビュー残件修正(実装: Grok): マーカー外1バイト完全保持・ループ税fail-closed会計・stats保存と週次実値化・coach evidence契約/失敗時ゼロ書き込み・abtest同曜日正規化fail-closed |
 | 29 | **発掘監査と風化検知**(実装: Grok): `excavate`(過去ログのシングルパス空転税監査・stats/日誌不変・SVGカード)・改善風化センチネル(skilled PRM再発/実験退行/KZN PASS後悪化→decay_ledger+weekly/status/F17)・通知の_notify統一とstatus無言失敗解消 |
 | 30 | **コーチ効果検証台帳**(実装: Grok): coach_ledger.jsonl(CCH-ID・watching/superseded/pass/fail/rolled_back)・適用後7日窓の同曜日正規化機械判定(過半数方式・fail-closed)・FAIL時ロールバック提案(承認ゲート・区間一致検証・ゼロ書き込み)・weekly「コーチ勝率」/status/F18・摩擦3指標(ai_retry_chains/ai_tool_errors/loop_tax_episodes)をKZN機械PASS構文でも使用可能に |
+| 31 | **空転ブレーカー**(実装: Grok): `kaizenlog guard` — UserPromptSubmit/Stopフックでセッション中のリトライ連鎖・ツールエラー連続を検知し、トースト+additionalContextで即時警告。増分tail・状態キャッシュ・デバウンス・全エラーexit 0。`guard install --write`(バックアップ・他フック不可侵)・live_episodes・日誌⚡行・doctor項目 |
+| 32 | 第31弾レビュー残件修正(実装: Grok): debounce設定値の一段目ゲート反映(effective_debounce保存方式)・空hooksブロック保護・⚡カウントのTZ変換・streak成功リセット(エラー優先規約)・doctor副作用除去・片側検証テスト6項目の実質化 |
 
-テスト基準線: **pytest 660 passed**(`./.venv/Scripts/python.exe -m pytest -q`)。
-**注意: 第30弾はワーキングツリーのみ(未コミット)**。第27-29弾はコミット済み(〜57a61da)。レビュー済み(全§✅)、コミットはユーザー指示待ち。実装者にGrokが加わった(禁止事項はCodexと同一、commit禁止を遵守)。
+テスト基準線: **pytest 678 passed**(`./.venv/Scripts/python.exe -m pytest -q`)。
+**注意: 第31-32弾はワーキングツリーのみ(未コミット)**。第27-30弾はコミット済み(〜27f8dab)。レビュー済み(全§✅)、コミットはユーザー指示待ち。実装者にGrokが加わった(禁止事項はCodexと同一、commit禁止を遵守)。
+既知のグレーゾーン: guard の `_has_successful_tool_result` は content 文字列ヒューリスティック併用のため「"no errors found" のような成功文」を成功と判定せず streak がリセットされない(発火過剰側の偏り・実害小。既知課題「Codexツールエラー判定の文字列ヒューリスティック」と同系)。
 既知の潜在バグ(第29弾レビューで発見・別タスク起票済み): `retry_chain_excerpts`/`session_title_from_text` が40字切詰め後にredactするため、秘匿パターンが境界をまたぐと一部漏れる余地(既存コード由来・顕在化例なし)。
 
 ## 運用状態

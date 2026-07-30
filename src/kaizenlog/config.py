@@ -154,6 +154,17 @@ class HandoffConfig:
 
 
 @dataclass
+class GuardConfig:
+    """空転ブレーカー（Claude Code フック）。"""
+
+    enabled: bool = True
+    retry_threshold: int = 3
+    tool_error_streak: int = 3
+    cooldown_seconds: int = 300
+    debounce_seconds: int = 30
+
+
+@dataclass
 class Config:
     timezone: str = "Asia/Tokyo"
     vault_dir: Path = Path(".")
@@ -169,6 +180,7 @@ class Config:
     aiwork: AIWorkConfig = field(default_factory=AIWorkConfig)
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     handoff: HandoffConfig = field(default_factory=HandoffConfig)
+    guard: GuardConfig = field(default_factory=GuardConfig)
     min_block_minutes: float = 3.0  # タイムラインに載せる最小ブロック長
     session_gap_minutes: float = 5.0  # この間隔以上空いたら別画面ブロック扱い
     # 「📌 今日のアクション」の初回挿入位置（既存区間は移動しない）
@@ -328,6 +340,13 @@ session_titles = true
 # [handoff]
 # targets = ["C:/develop/myrepo/CLAUDE.md"]
 
+# [guard]
+# enabled = true
+# retry_threshold = 3
+# tool_error_streak = 3
+# cooldown_seconds = 300
+# debounce_seconds = 30
+
 [llm]
 # "claude-code-cli"   : Claude Code CLI（要: https://claude.com/claude-code & ログイン済み）
 # "copilot-cli"       : GitHub Copilot CLI（要: npm install -g @github/copilot & ログイン済み）
@@ -483,6 +502,27 @@ def load_config(path: str | None = None) -> Config:
     handoff = data.get("handoff", {})
     if isinstance(handoff, dict) and "targets" in handoff:
         cfg.handoff.targets = _as_str_list(handoff.get("targets"), "handoff.targets")
+
+    guard = data.get("guard", {})
+    if isinstance(guard, dict):
+        if "enabled" in guard:
+            cfg.guard.enabled = bool(guard.get("enabled"))
+        if "retry_threshold" in guard:
+            cfg.guard.retry_threshold = _coerce(
+                int, guard.get("retry_threshold"), "guard.retry_threshold"
+            )
+        if "tool_error_streak" in guard:
+            cfg.guard.tool_error_streak = _coerce(
+                int, guard.get("tool_error_streak"), "guard.tool_error_streak"
+            )
+        if "cooldown_seconds" in guard:
+            cfg.guard.cooldown_seconds = _coerce(
+                int, guard.get("cooldown_seconds"), "guard.cooldown_seconds"
+            )
+        if "debounce_seconds" in guard:
+            cfg.guard.debounce_seconds = _coerce(
+                int, guard.get("debounce_seconds"), "guard.debounce_seconds"
+            )
 
     cats = data.get("categories", {})
     user_rules = cats.get("rules", [])

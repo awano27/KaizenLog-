@@ -366,6 +366,23 @@ kaizenlog prompts mark 001 dismissed
 | `kaizenlog --config PATH <cmd>` | 明示設定パス（サブコマンドより前） |
 
 
+### 空転ブレーカー（第31弾）
+
+セッション中のドゥームループを Claude Code フックで遮断する（リアルタイム）。
+
+```powershell
+kaizenlog guard install                 # 登録用 JSON を表示のみ
+kaizenlog guard install --write --project   # .claude/settings.json に冪等マージ（.bak 作成）
+kaizenlog guard status
+```
+
+- 登録するのは **UserPromptSubmit** と **Stop** のみ
+- **PostToolUse には登録しない**（ツール毎の Python 起動はレイテンシ税が大きく非受容。リトライはユーザー発話、ツールエラー連続は Stop で足りる）
+- フックは内部エラーでも **exit 0**（セッションを壊さない）。transcript には書かない
+- 発火はトースト + `additionalContext` + `memory/live_episodes.jsonl`（通知履歴。トークン会計は夜間ループ税が正）
+- 状態キャッシュ `%LOCALAPPDATA%/kaizenlog/guard/` で増分 tail・デバウンス（既定30秒。`debounce_seconds` は前回完全実行時の値を一段目ゲートに使う＝設定変更は1回遅れで反映）
+- リトライ検知の正規化・類似度は**夜間の `detect_retry_chains` と同一**（`promptmine.normalize` + 類似度0.85・窓30分）
+
 ### 発掘監査と風化センチネル（第29弾）
 
 | コマンド | 説明 |

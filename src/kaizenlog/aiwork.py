@@ -1096,6 +1096,7 @@ def render_aiwork_markdown(
     internal_ai_sessions: int = 0,
     usd_jpy: float | None = None,
     loop_tax_summary: LoopTaxSummary | None = None,
+    breaker_fires: int = 0,
 ) -> str:
     """「AI作業の質」セクションのMarkdownを生成する。セッションが無ければ空文字。
 
@@ -1106,6 +1107,9 @@ def render_aiwork_markdown(
 
     成果列は決定論プロキシ（変更数・テスト・末尾エラー）のみ。
     出力の正しさの LLM 判定は日次では行わない（週次レビューへ集約）。
+
+    breaker_fires: 空転ブレーカーの当日発火回数（live_episodes の通知履歴。
+    トークン会計には使わない — 夜間ループ税が正。二重計上禁止）。
     """
     if not sessions:
         return ""
@@ -1180,6 +1184,9 @@ def render_aiwork_markdown(
         tax = compute_loop_tax(retry_chains, sessions, pricing=pricing)
     if tax is not None and tax.episode_count > 0:
         lines.append(format_loop_tax_line(tax, usd_jpy=usd_jpy))
+    # 空転ブレーカー発火（通知履歴のみ。会計はループ税側）
+    if int(breaker_fires or 0) > 0:
+        lines.append(f"⚡ ブレーカー発動: {int(breaker_fires)}回")
     lines.append("")
 
     rows = sessions[:max_rows]
