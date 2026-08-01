@@ -7,14 +7,19 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, tzinfo
 from math import isfinite
-import re
 from statistics import median
+import re
 from typing import Any
 
 from .collector import _is_browser_app
 
 _MIN_BASELINE_DAYS = 3
 _MIN_BASELINE_ACTIVE_MINUTES = 60.0
+_SCREEN_TOOL_WEB_SOURCES = {
+    "chatgpt": ("chatgpt-web",),
+    "claude": ("claude-web",),
+    "gemini": ("gemini-web",),
+}
 
 
 @dataclass(frozen=True)
@@ -39,7 +44,7 @@ class AdviceEvidence:
     input_metrics_available: bool = False  # focus_blocks / focus_minutes / input_keypresses
     structured_ai_metrics_available: bool = False  # ai_cc_sessions 等（画面ブロック ai_activity は別）
     site_metrics_available: bool = False  # by_site 統計が有効（web watcher 経路）
-    # 指標 → 挑戦性検査用ベースライン（当日実測優先。無い指標は入口で検査しない）
+    # 指標 → 挑戦性検査用ベースライン（直近履歴の中央値。無い指標は入口で検査しない）
     metric_baselines: Mapping[str, float] | None = None
 
 
@@ -234,30 +239,148 @@ _BASELINE_SIMPLE_METRICS = (
 )
 
 
-def _metric_baselines_from_stats(stats: Mapping[str, Any]) -> dict[str, float]:
-    """当日実測から挑戦性検査用ベースラインを組み立てる。
+def _strict_simple_metric_source(metric: str, stats: Mapping[str, Any]) -> bool:
+    """``metric_from_stats`` が読む生値が厳密な非負有限数かを確認する。"""
+    if metric == "context_switches":
+        return _valid_nonnegative_number(stats.get("context_switches"))
+    if metric == "total_active_minutes":
+        return _valid_nonnegative_number(stats.get("total_minutes"))
+    if metric == "ai_activity_blocks":
+        value = (
+            stats.get("ai_activity_blocks")
+            if "ai_activity_blocks" in stats
+            else stats.get("ai_sessions")
+        )
+        return _valid_nonnegative_number(value)
 
-    履歴中央値や F10 帯は別経路。初日・新指標でキーが無い場合は入口検査をスキップ
-    （無い指標を弾かない）。
-    """
+    input_stats = stats.get("input")
+    input_keys = {
+        "focus_blocks": "focus_blocks",
+        "focus_minutes": "focus_minutes",
+        "input_keypresses": "keypresses",
+    }
+    if metric in input_keys:
+        return (
+            isinstance(input_stats, Mapping)
+            and _valid_nonnegative_number(input_stats.get(input_keys[metric]))
+        )
+
+    ai = stats.get("ai")
+    if not isinstance(ai, Mapping):
+        return False
+    ai_keys = {
+        "ai_cc_sessions": "sessions",
+        "ai_fragmented_sessions": "fragmented",
+        "ai_retry_chains": "retry_chains",
+        "ai_tool_errors": "tool_errors",
+        "ai_interruptions": "interruptions",
+        "ai_output_tokens": "output_tokens",
+    }
+    if metric in ai_keys:
+        return _valid_nonnegative_number(ai.get(ai_keys[metric]))
+    if metric == "ai_avg_turns":
+        if "avg_turns" in ai:
+            return _valid_nonnegative_number(ai.get("avg_turns"))
+        sessions = ai.get("sessions")
+        if not _valid_nonnegative_number(sessions):
+            return False
+        if "turns_total" in ai:
+            return _valid_nonnegative_number(ai.get("turns_total"))
+        projects = ai.get("projects")
+        return isinstance(projects, Mapping) and bool(projects) and all(
+            isinstance(project, Mapping)
+            and _valid_nonnegative_number(project.get("turns"))
+            for project in projects.values()
+        )
+
+    return False
+
+
+def _unique_prior_history(
+    history: Sequence[Mapping[str, Any]] | None, current_day: date
+) -> list[tuple[date, Mapping[str, Any]]]:
+    """同日重複を丸ごと除外した、日付昇順の過去統計を返す。"""
+    by_day: dict[date, Mapping[str, Any]] = {}
+    duplicate_days: set[date] = set()
+    for item in history or ():
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            item_day = date.fromisoformat(str(item.get("day")))
+        except (TypeError, ValueError):
+            continue
+        if item_day >= current_day:
+            continue
+        if item_day in by_day:
+            duplicate_days.add(item_day)
+            continue
+        by_day[item_day] = item
+    return [
+        (item_day, item)
+        for item_day, item in sorted(by_day.items())
+        if item_day not in duplicate_days
+    ]
+
+
+def _metric_baselines_from_history(
+    stats: Mapping[str, Any], history: Sequence[Mapping[str, Any]] | None
+) -> dict[str, float]:
+    """有効な直近履歴3日以上の中央値だけをPASS検査用に返す。"""
     from .experiments import metric_from_stats
 
-    stats_dict = dict(stats) if not isinstance(stats, dict) else stats
+    try:
+        current_day = date.fromisoformat(str(stats.get("day")))
+    except (TypeError, ValueError):
+        return {}
+
+    valid_history = _unique_prior_history(history, current_day)
+
+    category_metrics: set[str] = set()
+    site_metrics: set[str] = set()
+    for _, item in valid_history:
+        by_category = item.get("by_category")
+        if isinstance(by_category, Mapping):
+            category_metrics.update(f"category_minutes:{name}" for name in by_category)
+        by_site = item.get("by_site")
+        if isinstance(by_site, Mapping):
+            site_metrics.update(f"site_minutes:{str(name).lower()}" for name in by_site)
+    metrics = [
+        *_BASELINE_SIMPLE_METRICS,
+        *sorted(category_metrics),
+        *sorted(site_metrics),
+    ]
+
     out: dict[str, float] = {}
-    for metric in _BASELINE_SIMPLE_METRICS:
-        value = metric_from_stats(metric, stats_dict)
-        if value is not None and isfinite(float(value)):
-            out[metric] = float(value)
-    by_cat = stats.get("by_category")
-    if isinstance(by_cat, Mapping):
-        for name, minutes in by_cat.items():
-            if isinstance(minutes, (int, float)) and isfinite(float(minutes)):
-                out[f"category_minutes:{name}"] = float(minutes)
-    by_site = stats.get("by_site")
-    if isinstance(by_site, Mapping):
-        for name, minutes in by_site.items():
-            if isinstance(minutes, (int, float)) and isfinite(float(minutes)):
-                out[f"site_minutes:{str(name).lower()}"] = float(minutes)
+    for metric in metrics:
+        values_by_day: dict[date, float] = {}
+        for item_day, item in valid_history:
+            if metric.startswith("category_minutes:"):
+                mapping = item.get("by_category")
+                key = metric.split(":", 1)[1]
+                if not isinstance(mapping, Mapping) or key not in mapping:
+                    continue
+                raw_value = mapping[key]
+            elif metric.startswith("site_minutes:"):
+                mapping = item.get("by_site")
+                key = metric.split(":", 1)[1]
+                if not isinstance(mapping, Mapping):
+                    continue
+                raw_value = next(
+                    (value for name, value in mapping.items() if str(name).lower() == key),
+                    None,
+                )
+            else:
+                if not _strict_simple_metric_source(metric, item):
+                    continue
+                raw_value = None
+            if metric.startswith(("category_minutes:", "site_minutes:")) and not _valid_nonnegative_number(raw_value):
+                continue
+            value = metric_from_stats(metric, dict(item))
+            if not _valid_nonnegative_number(value):
+                continue
+            values_by_day[item_day] = float(value)
+        if len(values_by_day) >= _MIN_BASELINE_DAYS:
+            out[metric] = float(median(values_by_day.values()))
     return out
 
 
@@ -267,7 +390,7 @@ def _tool_error_concentration_sentence(stats: Mapping[str, Any]) -> str | None:
     if not isinstance(ai, Mapping):
         return None
     total = ai.get("tool_errors")
-    if not isinstance(total, (int, float)) or float(total) <= 0:
+    if not _valid_nonnegative_number(total) or float(total) <= 0:
         return None
     total_f = float(total)
     projects = ai.get("projects")
@@ -279,15 +402,19 @@ def _tool_error_concentration_sentence(stats: Mapping[str, Any]) -> str | None:
         if not isinstance(bucket, Mapping):
             continue
         err = bucket.get("errors")
-        if isinstance(err, (int, float)) and float(err) > best_err:
+        if not _valid_nonnegative_number(err):
+            return None
+        if float(err) > best_err:
             best_err = float(err)
             best_name = str(name)
     if best_err <= 0 or best_err <= total_f * 0.5:
         return None
     # プロジェクト名は表セルと同様に一行化（改行で結論を壊さない）
     safe = " ".join(best_name.split())
+    percentage = best_err / total_f * 100
     return (
-        f"ツールエラー{int(total_f)}回中{int(best_err)}回が『{safe}』に集中しています。"
+        f"ツールエラー{int(total_f)}回中{int(best_err)}回（{percentage:.0f}%）が"
+        f"『{safe}』に集中しています。"
     )
 
 
@@ -324,6 +451,65 @@ def _count_goal_days(
     return n_goal, max(n_window, 1)
 
 
+def _reader_history_with_current(
+    stats: Mapping[str, Any], history: Sequence[Mapping[str, Any]] | None
+) -> list[tuple[date, Mapping[str, Any]]]:
+    """現在日より前の有効な履歴と、末尾の現在統計を日付順にする。"""
+    try:
+        current_day = date.fromisoformat(str(stats.get("day")))
+    except ValueError:
+        return []
+    return [*_unique_prior_history(history, current_day), (current_day, stats)]
+
+
+def _ai_work_trend_sentence(
+    stats: Mapping[str, Any], history: Sequence[Mapping[str, Any]] | None
+) -> str | None:
+    records = _reader_history_with_current(stats, history)
+    ai_minutes: list[float] = []
+    for _, item in records:
+        by_category = item.get("by_category")
+        if not isinstance(by_category, Mapping):
+            return None
+        value = by_category.get("AI作業")
+        if not _valid_nonnegative_number(value):
+            return None
+        ai_minutes.append(_number(value))
+    if any(later <= earlier for earlier, later in zip(ai_minutes, ai_minutes[1:])):
+        return None
+    increase_count = sum(
+        later > earlier for earlier, later in zip(ai_minutes, ai_minutes[1:])
+    )
+    if increase_count < 3:
+        return None
+    current = ai_minutes[-1]
+    is_adjacent = all(
+        later_day == earlier_day + timedelta(days=1)
+        for (earlier_day, _), (later_day, _) in zip(records, records[1:])
+    )
+    qualifier = (
+        f"{increase_count}日連続で増加"
+        if is_adjacent
+        else f"記録のある{len(records)}日で単調増加"
+    )
+    return f"AI作業は{qualifier}し、本日 {_fmt_duration_ja(current)}が記録されています。"
+
+
+def _recorded_day_total_is_maximum(
+    stats: Mapping[str, Any], history: Sequence[Mapping[str, Any]] | None
+) -> int | None:
+    records = _reader_history_with_current(stats, history)
+    if len(records) < 3:
+        return None
+    totals: list[float] = []
+    for _, item in records:
+        value = item.get("total_minutes")
+        if not _valid_nonnegative_number(value):
+            return None
+        totals.append(_number(value))
+    return len(records) if totals[-1] == max(totals) else None
+
+
 def _build_reader_summary(
     *,
     total_minutes: float,
@@ -342,9 +528,8 @@ def _build_reader_summary(
             f"本日の記録は合計{total_hm}のため、"
             "1日の働き方を評価するにはデータ不足です。"
         )
-    parts: list[str] = [
-        f"本日は合計{total_hm}の作業が記録されています。"
-    ]
+    ai_trend = _ai_work_trend_sentence(stats, history)
+    parts: list[str] = [ai_trend or f"本日は合計{total_hm}の作業が記録されています。"]
     # 目標カテゴリ実測（断定なし・goal_category がある日のみ）
     goal_cat = stats.get("goal_category")
     if isinstance(goal_cat, str) and goal_cat.strip() and len(parts) < 3:
@@ -365,9 +550,15 @@ def _build_reader_summary(
             default=None,
         )
         if top and top[1] > 0:
-            parts.append(
-                f"カテゴリ別では「{top[0]}」が最多（{_fmt(top[1])}分）でした。"
-            )
+            maximum_days = _recorded_day_total_is_maximum(stats, history)
+            if maximum_days is not None:
+                parts.append(
+                    f"合計 {total_hm} は記録のある直近{maximum_days}日で最長です。"
+                )
+            else:
+                parts.append(
+                    f"カテゴリ別では「{top[0]}」が最多（{_fmt(top[1])}分）でした。"
+                )
         if (
             len(parts) < 3
             and entertainment_minutes is not None
@@ -888,6 +1079,36 @@ def build_advice_evidence(
             f"AI関連画面は{ai_time}記録されていますが、会話回数や回答品質は"
             "計測できないため、画面切り替えだけからAIの使い方を評価しません。"
         )
+    else:
+        screen_minutes = stats.get("ai_screen_tool_minutes")
+        source_buckets = ai_telemetry.get("sources")
+
+        def _has_web_session(expected_sources: Sequence[str]) -> bool:
+            if not isinstance(source_buckets, Mapping):
+                return False
+            for source in expected_sources:
+                bucket = source_buckets.get(source)
+                if not isinstance(bucket, Mapping):
+                    continue
+                sessions = bucket.get("sessions")
+                if _valid_nonnegative_number(sessions) and _number(sessions) > 0:
+                    return True
+            return False
+
+        unlogged_minutes = 0.0
+        if isinstance(screen_minutes, Mapping):
+            for tool, minutes in screen_minutes.items():
+                if not _valid_nonnegative_number(minutes):
+                    continue
+                expected_sources = _SCREEN_TOOL_WEB_SOURCES.get(str(tool), ())
+                if not _has_web_session(expected_sources):
+                    unlogged_minutes += _number(minutes)
+        if unlogged_minutes >= 30:
+            reader_notes.append(
+                "セッションログを取得できないAI画面が"
+                f"{_fmt(unlogged_minutes)}分記録されています。🧠の数値はCLI・拡張由来のみで、"
+                "AI利用全体の質ではありません。"
+            )
     if (
         browser_category_minutes is not None
         and 0 < browser_category_minutes < 30
@@ -904,9 +1125,6 @@ def build_advice_evidence(
         reader_notes.append(
             "AFKウォッチャーが無いため、合計時間は離席を含む可能性があります。"
         )
-    if not reader_notes:
-        reader_notes.append("現時点で、追加の計測上の注意はありません。")
-
     if short_record:
         lines.append(
             "- [L9] 当日の記録が120分未満で評価材料が少ない。問題を作らず、"
@@ -937,7 +1155,7 @@ def build_advice_evidence(
     )
     # input_metrics_available / structured_ai_metrics_available / site_metrics_available
     # は F10 直前で計算済み（入口ガードと同じ判定源）
-    metric_baselines = _metric_baselines_from_stats(stats)
+    metric_baselines = _metric_baselines_from_history(stats, history)
 
     # F17: 風化した改善（直近7日イベント。達成断定・自動再オープンはしない）
     for de in (decay_events or []):

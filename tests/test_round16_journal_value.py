@@ -57,10 +57,10 @@ def test_n1_ge_challenge_bounds():
         metric_baselines=basemap,
         input_metrics_available=True,
     )
-    # >= 2.8 is >= 3.4*0.8=2.72 → ok; >= 1 too loose
-    ok = _action("focus_blocks >= 2.8", "2")
+    # >= 3.6 is >= 3.4*1.05=3.57 → ok; >= 3.5 is too loose
+    ok = _action("focus_blocks >= 3.6", "2")
     assert validate_advice(ok, ev) == []
-    bad = _action("focus_blocks >= 1", "0")
+    bad = _action("focus_blocks >= 3.5", "3")
     errs = validate_advice(bad, ev)
     assert any("緩すぎ" in e or "ベースライン" in e for e in errs)
 
@@ -167,16 +167,16 @@ def _sess(tokens: int, model: str, sid: str = "1") -> AISession:
     )
 
 
+# 第35弾§B2で第25弾§S3の「トークン数値は日誌内で1回」不変条件を意図的に廃止したため、再掲回数は検証しない。
 def test_n4_uncosted_majority_hides_dollar():
     # known small + unknown large
     known = _sess(10_000, "claude-sonnet-4", "k")  # priced
     unknown = _sess(200_000, "unknown-local", "u")
     md = render_aiwork_markdown([known, unknown], timezone.utc)
-    # R25 S3: フォールバックは「推定コスト: -（…換算なし）」に統一（トークン数値は1回）
-    assert "換算なし" in md
+    assert "推定コスト: 換算なし — 出力210,000 tok のうち単価未登録が200,000 tok。" in md
+    assert "未登録モデル: unknown-local。" in md
+    assert "kaizenlog.toml の [aiwork.pricing] に $/1Mtok を設定すると金額換算されます。" in md
     assert "推定コスト: $" not in md
-    assert "210,000" in md or "210000" in md.replace(",", "")
-    assert md.count("210,000") == 1 or md.replace(",", "").count("210000") == 1
 
 
 def test_n4_costed_majority_keeps_dollar():

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, tzinfo
+from math import isfinite
 
 from .classifier import ClassifiedEvent
 from .focus import FOCUS_MIN_MINUTES, InputStats
@@ -155,6 +157,118 @@ def _markdown_table_cell(value: object) -> str:
     return text.replace("|", "\\|")
 
 
+def _fmt_under_threshold_minutes(minutes: float) -> str:
+    """細切れ集計用の丸めた分数（カテゴリ別は時間表記にしない）。"""
+    return f"{int(round(minutes))}分"
+
+
+def _under_threshold_lines(
+    blocks: list[Block],
+    *,
+    total_minutes: float,
+    min_block_minutes: float,
+    min_label: str,
+    tz: tzinfo,
+) -> list[str]:
+    under = [block for block in blocks if block.minutes < min_block_minutes]
+    if not under:
+        return []
+
+    under_minutes = sum(block.minutes for block in under)
+    ratio = under_minutes / total_minutes * 100 if total_minutes > 0 else 0.0
+    lines = [
+        f"表示外: {min_label}未満のブロック {len(under)}件・計"
+        f"{_fmt_under_threshold_minutes(under_minutes)}（合計 {_fmt_minutes(total_minutes)} の{ratio:.0f}%）。"
+    ]
+    by_category: dict[str, float] = defaultdict(float)
+    by_hour: dict[int, tuple[int, float]] = {}
+    for block in under:
+        by_category[block.category] += block.minutes
+        hour = block.start.astimezone(tz).hour
+        count, minutes = by_hour.get(hour, (0, 0.0))
+        by_hour[hour] = (count + 1, minutes + block.minutes)
+    categories = sorted(by_category.items(), key=lambda item: (-item[1], item[0]))[:4]
+    lines.append(
+        "内訳は "
+        + " / ".join(
+            f"{category} {_fmt_under_threshold_minutes(minutes)}"
+            for category, minutes in categories
+        )
+        + "。"
+    )
+    hours = sorted(by_hour.items(), key=lambda item: (-item[1][1], item[0]))[:3]
+    lines.append(
+        "細切れが集中した時間帯: "
+        + "、".join(
+            f"{hour}時台 {count}件・{_fmt_under_threshold_minutes(minutes)}"
+            for hour, (count, minutes) in hours
+        )
+        + "。"
+    )
+    return lines
+
+
+def _stat_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if isfinite(number) else None
+
+
+def _nested_stat(stats: Mapping, *keys: str) -> float | None:
+    value: object = stats
+    for key in keys:
+        if not isinstance(value, Mapping) or key not in value:
+            return None
+        value = value[key]
+    return _stat_number(value)
+
+
+def _fmt_change_number(value: float) -> str:
+    return str(int(value)) if value.is_integer() else f"{value:g}"
+
+
+def render_change_table(today: Mapping, prev: Mapping | None) -> str:
+    """前日との差を欠損値を補わずに表示する。"""
+    if prev is None:
+        return ""
+    metrics = (
+        ("ツールエラー", ("ai", "tool_errors"), False),
+        ("リトライ連鎖", ("ai", "retry_chains"), False),
+        ("2往復以下のセッション", ("ai", "fragmented"), False),
+        ("AI作業", ("by_category", "AI作業"), True),
+        ("合計アクティブ", ("total_minutes",), True),
+    )
+    rows: list[str] = []
+    for label, keys, is_minutes in metrics:
+        before = _nested_stat(prev, *keys)
+        current = _nested_stat(today, *keys)
+        if before is None or current is None:
+            continue
+        before_text = _fmt_minutes(before) if is_minutes else _fmt_change_number(before)
+        current_text = _fmt_minutes(current) if is_minutes else _fmt_change_number(current)
+        delta = current - before
+        delta_text = (
+            ("+" if delta >= 0 else "-") + _fmt_minutes(abs(delta))
+            if is_minutes
+            else f"{delta:+g}"
+        )
+        rows.append(f"| {label} | {before_text} | {current_text} | {delta_text} |")
+    if not rows:
+        return ""
+    return "\n".join(
+        [
+            "### 前日からの変化",
+            "",
+            "| 指標 | 前日 | 今日 | 増減 |",
+            "| --- | ---: | ---: | ---: |",
+            *rows,
+            "",
+            "※ 数値の向きだけを示します。稼働時間が短い日は多くの指標が自動的に下がるため、改善提案の効果を示すものではありません。",
+        ]
+    )
+
+
 def render_markdown(
     summary: DailySummary,
     tz: tzinfo,
@@ -242,6 +356,13 @@ def render_markdown(
         if float(min_block_minutes).is_integer()
         else f"{min_block_minutes}分"
     )
+    under_lines = _under_threshold_lines(
+        summary.blocks,
+        total_minutes=summary.total_minutes,
+        min_block_minutes=min_block_minutes,
+        min_label=min_label,
+        tz=tz,
+    )
     rows = eligible
     overflow_omitted = 0
     if eligible_blocks > max_timeline_rows:
@@ -249,30 +370,33 @@ def render_markdown(
         rows.sort(key=lambda b: b.start)
         overflow_omitted = eligible_blocks - max_timeline_rows
     shown_blocks = len(rows)
-    if rows:
+    if rows or under_lines:
         lines.append("### タイムライン")
         lines.append("")
-        lines.append(f"{min_label}以上の画面ブロックを時刻順に表示。")
+        if rows:
+            lines.append(f"{min_label}以上の画面ブロックを時刻順に表示。")
+        lines.extend(under_lines)
         if overflow_omitted > 0:
             lines.append(
                 f"全{total_blocks}件中、{min_label}以上は{eligible_blocks}件です。"
                 f"長時間の上位{shown_blocks}件を時刻順に表示し、"
                 f"対象内の{overflow_omitted}件を省略しています。"
             )
-        lines.append("")
-        lines.append("| 時刻 | 時間 | カテゴリ | アプリ | 内容 |")
-        lines.append("| --- | ---: | --- | --- | --- |")
-        for b in rows:
-            title = b.titles[0] if b.titles else ""
-            if len(title) > 60:
-                title = title[:57] + "..."
-            lines.append(
-                f"| {_fmt_time(b.start, tz)}-{_fmt_time(b.end, tz)} "
-                f"| {_fmt_minutes(b.minutes)} "
-                f"| {_markdown_table_cell(b.category)} "
-                f"| {_markdown_table_cell(b.app)} "
-                f"| {_markdown_table_cell(title)} |"
-            )
-        lines.append("")
+        if rows:
+            lines.append("")
+            lines.append("| 時刻 | 時間 | カテゴリ | アプリ | 内容 |")
+            lines.append("| --- | ---: | --- | --- | --- |")
+            for b in rows:
+                title = b.titles[0] if b.titles else ""
+                if len(title) > 60:
+                    title = title[:57] + "..."
+                lines.append(
+                    f"| {_fmt_time(b.start, tz)}-{_fmt_time(b.end, tz)} "
+                    f"| {_fmt_minutes(b.minutes)} "
+                    f"| {_markdown_table_cell(b.category)} "
+                    f"| {_markdown_table_cell(b.app)} "
+                    f"| {_markdown_table_cell(title)} |"
+                )
+            lines.append("")
 
     return "\n".join(lines)

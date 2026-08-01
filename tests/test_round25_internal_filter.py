@@ -230,7 +230,8 @@ def test_s2_stats_internal_ai_sessions():
     assert stats["ai"]["internal_ai_sessions"] == 2
 
 
-def test_s3_token_number_appears_once_on_cost_fallback():
+# 第35弾§B2で第25弾§S3の「トークン数値は日誌内で1回」不変条件を意図的に廃止し、3行ガイダンスを採用した。
+def test_s3_cost_fallback_shows_three_line_guidance():
     s = AISession(
         session_id="u",
         project="p",
@@ -242,9 +243,11 @@ def test_s3_token_number_appears_once_on_cost_fallback():
     )
     # pricing 空 → 全トークン uncosted → フォールバック
     md = render_aiwork_markdown([s], TZ, pricing={})
-    assert md.count("12,345") == 1
+    assert md.count("12,345") == 3
     assert md.count("出力トークン") == 1
-    assert "推定コスト: -（モデル単価不明分が大半のため換算なし）" in md
+    assert "推定コスト: 換算なし — 出力12,345 tok のうち単価未登録が12,345 tok。" in md
+    assert "未登録モデル: unknown-model-xyz。" in md
+    assert "kaizenlog.toml の [aiwork.pricing] に $/1Mtok を設定すると金額換算されます。" in md
     assert "コスト換算なし）" not in md.split("出力トークン")[1] if False else True
 
 

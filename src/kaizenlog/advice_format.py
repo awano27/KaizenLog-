@@ -33,10 +33,9 @@ def _contract_error(msg: str):
     return AdviceContractError(msg)
 
 
-# 減らす目標: 閾値が baseline * 1.2 超 → 緩すぎ
-# 増やす目標: 閾値が baseline * 0.8 未満 → 緩すぎ
-_CHALLENGE_LOOSE_LE = 1.2
-_CHALLENGE_LOOSE_GE = 0.8
+# 履歴中央値に対し、減らす目標は5%以上、増やす目標は5%以上の改善を求める。
+_MEDIAN_CHALLENGE_LE = 0.95
+_MEDIAN_CHALLENGE_GE = 1.05
 _PASS_OP_RE = re.compile(r"^(\S+)\s*(<=|>=|<|>|==?)\s*([\d.]+)\s*$")
 
 
@@ -75,19 +74,19 @@ def _pass_challenge_error(
     except ValueError:
         return None
     if op in ("<=", "<"):
-        # ベースライン未満は挑戦的なので常に可。1.2倍超だけ拒否
-        if target > bl * _CHALLENGE_LOOSE_LE:
+        # 履歴中央値より5%以上低い目標だけを許可する。
+        if target > bl * _MEDIAN_CHALLENGE_LE:
             return (
                 f"actions[{index}] の pass: {metric} {op} {target:g} は"
                 f"ベースライン {bl:g} より緩すぎます"
-                f"（上限の目安は {bl * _CHALLENGE_LOOSE_LE:g} 以下）"
+                f"（上限の目安は {bl * _MEDIAN_CHALLENGE_LE:g} 以下）"
             )
     elif op in (">=", ">"):
-        if target < bl * _CHALLENGE_LOOSE_GE:
+        if target < bl * _MEDIAN_CHALLENGE_GE:
             return (
                 f"actions[{index}] の pass: {metric} {op} {target:g} は"
                 f"ベースライン {bl:g} より緩すぎます"
-                f"（下限の目安は {bl * _CHALLENGE_LOOSE_GE:g} 以上）"
+                f"（下限の目安は {bl * _MEDIAN_CHALLENGE_GE:g} 以上）"
             )
     return None
 

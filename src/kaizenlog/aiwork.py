@@ -10,10 +10,11 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from difflib import SequenceMatcher
+from math import isfinite
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -21,6 +22,7 @@ from typing import Protocol, runtime_checkable
 # 言い直し・言い換えクラスタではなく、短時間のほぼ同一依頼を対象にするため。
 _RETRY_WINDOW_MINUTES = 30
 _RETRY_SIMILARITY = 0.85
+_MEASURABLE_TOOL_SOURCES = frozenset({"claude-code", "codex"})
 
 # セッション内容列: 最初の依頼文の先頭 N 字
 SESSION_TITLE_MAX = 40
@@ -115,14 +117,15 @@ def estimate_sessions_cost(
         # ブラウザ等: output_tokens 未設定 → コスト集計から除外（文字数をトークンと偽らない）
         if not s.tools_measurable and not s.output_tokens:
             continue
-        src = s.source or "claude-code"
+        src = s.source.strip() if isinstance(s.source, str) and s.source.strip() else "unknown"
         bucket = per_source.setdefault(
             src, {"est_cost_usd": 0.0, "uncosted_tokens": 0, "output_tokens": 0}
         )
         bucket["output_tokens"] += int(s.output_tokens or 0)
-        models = list(s.models) if s.models else []
-        model = models[0] if models else None
-        price = resolve_output_price(model, pricing)
+        price = _resolve_session_price_costing(
+            set(s.models) if s.models else None,
+            pricing,
+        )
         if price is None or not s.output_tokens:
             uncosted += int(s.output_tokens or 0)
             bucket["uncosted_tokens"] += int(s.output_tokens or 0)
@@ -757,6 +760,21 @@ def _md_cell(value: object) -> str:
     return text.replace("|", "\\|")
 
 
+def _normalize_screen_tool_minutes(value: object) -> dict[str, float]:
+    """画面AI時間を表示・保存可能な有限の非負数へ限定する。"""
+    if not isinstance(value, Mapping):
+        return {}
+    normalized: dict[str, float] = {}
+    for tool, minutes in value.items():
+        if not isinstance(minutes, (int, float)) or isinstance(minutes, bool):
+            continue
+        number = float(minutes)
+        if not isfinite(number) or number < 0:
+            continue
+        normalized[str(tool)] = number
+    return normalized
+
+
 def prompt_length_observation(sessions: Sequence[AISession]) -> str | None:
     """依頼長さ層別の観察1行。両層に2セッション以上ある日のみ。
 
@@ -789,18 +807,30 @@ def retry_chain_excerpts(
     max_chains: int = 3,
 ) -> list[str]:
     """連鎖起点依頼の抜粋（redact→正規化→先頭30字+「…」）。"""
-    out: list[str] = []
-    for chain in list(chains)[:max_chains]:
+    grouped: dict[tuple[str, str], int] = {}
+    for chain in chains:
         if not chain.prompts:
             continue
+        project = chain.project
+        if redactor is not None:
+            project = redactor(project)
         raw = chain.prompts[0].text or ""
         if redactor is not None:
             raw = redactor(raw)
         raw = normalize_prompt_text(raw)
-        if len(raw) > 30:
-            raw = raw[:30] + "…"
-        proj = chain.project
-        out.append(f"連鎖起点（{proj}）: {_md_cell(raw)}")
+        key = (project, raw)
+        grouped[key] = grouped.get(key, 0) + 1
+
+    out: list[str] = []
+    for (proj, raw), count in list(grouped.items())[:max_chains]:
+        if not raw:
+            excerpt = "（依頼本文が無いため省略）"
+        else:
+            excerpt = raw[:30] + "…" if len(raw) > 30 else raw
+            excerpt = _md_cell(excerpt)
+        if count > 1:
+            excerpt += f" ×{count}件"
+        out.append(f"連鎖起点（{_md_cell(proj)}）: {excerpt}")
     return out
 
 
@@ -853,6 +883,10 @@ def _resolve_session_price(
 ) -> tuple[float | None, str | None]:
     """セッションのモデル群から単価を決定論的に解決する。
 
+    ループ税の金額用（第28弾 §R4: 単価が割れたら fail-closed で「不明」）。
+    コスト概算は登録済みトークンを未登録と偽らないため
+    `_resolve_session_price_costing` を使うこと。
+
     戻り値: (price | None, representative_model | None)
     - モデル無し → (None, None)
     - 複数モデルで解決単価が異なる/一部未登録 → (None, sorted first model)
@@ -872,6 +906,27 @@ def _resolve_session_price(
     if len(set(prices)) != 1:
         return None, ordered[0]
     return prices[0], ordered[0]
+
+
+def _resolve_session_price_costing(
+    models: set[str] | None,
+    pricing: dict[str, float] | None,
+) -> float | None:
+    """コスト概算用の単価解決（決定論・全モデル登録済みなら上限単価）。
+
+    一部でも未登録なら None（そのトークンは uncosted へ）。全モデル登録済みなら
+    単価が割れていても上限単価で換算する。ここで None を返すと日誌が
+    「単価未登録が N tok」と表示し、登録済みのトークンを未登録と偽ることになる。
+    """
+    if not models:
+        return None
+    prices: list[float] = []
+    for m in sorted(str(x) for x in models if x):
+        p = resolve_output_price(m, pricing)
+        if p is None:
+            return None
+        prices.append(float(p))
+    return max(prices) if prices else None
 
 
 def compute_loop_tax(
@@ -996,6 +1051,8 @@ def format_loop_tax_line(
     summary: LoopTaxSummary,
     *,
     usd_jpy: float | None = None,
+    day_output_tokens: int | None = None,
+    redactor: Callable[[str], str] | None = None,
 ) -> str:
     """日誌・status 用1行。不明は 0 にしない。金額不明時は「金額不明」。"""
     n = summary.episode_count
@@ -1004,7 +1061,8 @@ def format_loop_tax_line(
     if summary.total_wasted_tokens is None:
         tok_s = "tokens不明"
     else:
-        tok_s = f"{summary.total_wasted_tokens} tokens"
+        token_format = "," if day_output_tokens is not None else ""
+        tok_s = f"{summary.total_wasted_tokens:{token_format}} tokens"
     if summary.est_cost_usd is None:
         money = "金額不明"
     else:
@@ -1012,9 +1070,42 @@ def format_loop_tax_line(
         if usd_jpy is not None and usd_jpy > 0:
             jpy = int(round(summary.est_cost_usd * usd_jpy))
             money = f"{money}（¥{jpy}）"
-    return (
+    line = (
         f"💸 ループ税: {money}（{n}エピソード / {tok_s}）"
         " ※エピソード間で同一セッションは1回のみ計上"
+    )
+    if day_output_tokens is None or summary.total_wasted_tokens is None:
+        return line
+
+    day_tokens = int(day_output_tokens)
+    if day_tokens <= 0:
+        return line
+    ratio = (summary.total_wasted_tokens / day_tokens) * 100
+    if ratio > 100:
+        ratio_text = "100.0%（入力不整合のため上限）"
+    else:
+        ratio_text = f"{ratio:.1f}%"
+    line += f" / 当日出力 {day_tokens:,} tok に対し {ratio_text}"
+
+    max_ep = max_loop_episode(summary)
+    if max_ep is None:
+        return line
+    excerpts = retry_chain_excerpts(
+        [max_ep.chain],
+        redactor=redactor,
+        max_chains=1,
+    )
+    excerpt = excerpts[0] if excerpts else "連鎖起点: 不明"
+    wasted = (
+        f"浪費{max_ep.wasted_tokens:,} tok"
+        if max_ep.wasted_tokens is not None
+        else "浪費tokens不明"
+    )
+    has_error = "ツールエラーあり" if max_ep.has_tool_error else "ツールエラーなし"
+    return (
+        f"{line}\n"
+        f"   — 最悪例: {max_ep.chain.length}往復 / {wasted}"
+        f" / {has_error} / {excerpt}"
     )
 
 
@@ -1154,6 +1245,7 @@ def render_aiwork_markdown(
     usd_jpy: float | None = None,
     loop_tax_summary: LoopTaxSummary | None = None,
     breaker_fires: int = 0,
+    screen_tool_minutes: Mapping[str, float] | None = None,
 ) -> str:
     """「AI作業の質」セクションのMarkdownを生成する。セッションが無ければ空文字。
 
@@ -1182,13 +1274,15 @@ def render_aiwork_markdown(
         all_tools.update(s.tool_counts)
     top_tools = ", ".join(f"{name}×{n}" for name, n in all_tools.most_common(5))
 
-    def _source_bucket(src: str) -> str:
-        s = src or "claude-code"
+    def _source_bucket(src: str | None) -> str:
+        s = src.strip() if isinstance(src, str) else ""
+        if not s:
+            return "unknown"
         if s.endswith("-web") or s in ("chatgpt-web", "claude-web", "gemini-web"):
             return "web"
         return s
 
-    by_source: Counter = Counter(_source_bucket(s.source or "claude-code") for s in sessions)
+    by_source: Counter = Counter(_source_bucket(s.source) for s in sessions)
     source_bits = " / ".join(
         f"{name} {count}" for name, count in sorted(by_source.items())
     )
@@ -1196,6 +1290,30 @@ def render_aiwork_markdown(
     lines: list[str] = []
     lines.append("### 🧠 AI作業の質")
     lines.append("")
+    lines.append("計測範囲: セッションログのある AI CLI / ブラウザ拡張のみが対象です。")
+    screen_sources = {
+        "chatgpt": ("chatgpt-web",),
+        "claude": ("claude-web",),
+        "gemini": ("gemini-web",),
+    }
+    session_sources = {
+        s.source.strip()
+        for s in sessions
+        if isinstance(s.source, str) and s.source.strip()
+    }
+    unlogged_screen_tools: list[tuple[str, float]] = []
+    for tool, minutes in _normalize_screen_tool_minutes(screen_tool_minutes).items():
+        if minutes <= 0:
+            continue
+        expected_sources = screen_sources.get(str(tool), ())
+        if not any(source in session_sources for source in expected_sources):
+            unlogged_screen_tools.append((str(tool), float(minutes)))
+    if unlogged_screen_tools:
+        rendered_tools = "・".join(f"{tool} {minutes:g}分" for tool, minutes in unlogged_screen_tools)
+        lines.append(
+            f"画面計測のAI作業のうち {rendered_tools} はログが無く、"
+            "往復・エラー・トークンは計測できません。"
+        )
     lines.append(
         f"セッション: {len(sessions)}回（{source_bits}） / ユーザー発話: {total_turns}回"
         f"（平均 {avg_turns:.1f}回/セッション、2往復以下: {fragmented}回）"
@@ -1204,21 +1322,76 @@ def render_aiwork_markdown(
     tool_sessions = [s for s in sessions if s.tools_measurable]
     tool_errors_m = sum(s.tool_errors for s in tool_sessions)
     interruptions_m = sum(s.interruptions for s in tool_sessions)
-    codex_note = ""
-    if any("codex" in (s.source or "").lower() for s in tool_sessions):
-        codex_note = "（codexは文字列判定・過大計上の可能性）"
+    def _known_tool_source(source: object) -> str | None:
+        if not isinstance(source, str):
+            return None
+        normalized = source.strip()
+        return normalized if normalized in _MEASURABLE_TOOL_SOURCES else None
+
+    tool_sources = [_known_tool_source(s.source) for s in tool_sessions]
+    measurable_sources = list(dict.fromkeys(source for source in tool_sources if source is not None))
+
+    def _source_detail(values: Mapping[str, int]) -> str:
+        return " / ".join(f"{source} {values[source]}" for source in measurable_sources)
+
+    tool_errors_by_source = {
+        source: sum(s.tool_errors for s in tool_sessions if _known_tool_source(s.source) == source)
+        for source in measurable_sources
+    }
+    interruptions_by_source = {
+        source: sum(s.interruptions for s in tool_sessions if _known_tool_source(s.source) == source)
+        for source in measurable_sources
+    }
+    split_tool_metrics = len(measurable_sources) > 1 and all(source is not None for source in tool_sources)
+    errors_part = f"ツールエラー: {tool_errors_m}回"
+    interruptions_part = f"ユーザー中断・拒否: {interruptions_m}回"
+    if split_tool_metrics:
+        error_detail = _source_detail(tool_errors_by_source)
+        if any("codex" in source.lower() for source in measurable_sources):
+            error_detail += "。codexは文字列判定・過大計上の可能性"
+        errors_part += f"（{error_detail}）"
+        interruptions_part += f"（{_source_detail(interruptions_by_source)}）"
+    elif any(source == "codex" for source in measurable_sources):
+        errors_part += "（codexは文字列判定・過大計上の可能性）"
+
+    retry_part = f"リトライ連鎖: {retry_chain_count}回"
+    if split_tool_metrics and retry_chain_count > 0 and retry_chains:
+        retry_sources: list[str] = []
+        for chain in retry_chains:
+            if not chain.prompts:
+                retry_sources = []
+                break
+            source = _known_tool_source(chain.prompts[0].source)
+            if source is None:
+                retry_sources = []
+                break
+            retry_sources.append(source)
+        if len(retry_sources) == retry_chain_count and all(source in measurable_sources for source in retry_sources):
+            retry_counts = {source: retry_sources.count(source) for source in measurable_sources}
+            retry_part += f"（{_source_detail(retry_counts)}）"
     lines.append(
-        f"ツールエラー: {tool_errors_m}回{codex_note} / ユーザー中断・拒否: {interruptions_m}回"
-        f" / リトライ連鎖: {retry_chain_count}回"
+        f"{errors_part} / {interruptions_part} / {retry_part}"
         f" / 出力トークン: {output_tokens:,}"
     )
     # 対象外トークンが計上分を上回る日は $ 額を出さない。
     # 総量の大半が単価不明だと「$0.04」がほぼ無意味で誤解を招くため。
     costed_tokens = max(0, int(output_tokens) - int(uncosted))
     if int(uncosted) > costed_tokens:
-        # S3: サマリ行の「出力トークン: N」と重複させない
         lines.append(
-            "推定コスト: -（モデル単価不明分が大半のため換算なし）"
+            f"推定コスト: 換算なし — 出力{output_tokens:,} tok のうち単価未登録が{int(uncosted):,} tok。"
+        )
+        unknown_models = sorted(
+            {
+                str(model)
+                for session in sessions
+                for model in (session.models or set())
+                if model and resolve_output_price(str(model), pricing) is None
+            }
+        )
+        if unknown_models:
+            lines.append(f"未登録モデル: {', '.join(unknown_models)}。")
+        lines.append(
+            "kaizenlog.toml の [aiwork.pricing] に $/1Mtok を設定すると金額換算されます。"
         )
     else:
         lines.append(
@@ -1235,18 +1408,72 @@ def render_aiwork_markdown(
     obs = prompt_length_observation(sessions)
     if obs:
         lines.append(obs)
-    if retry_chains:
-        for excerpt in retry_chain_excerpts(retry_chains, redactor=redactor):
-            lines.append(f"リトライ{excerpt}")
+
     # ループ税（エピソード会計）
     tax = loop_tax_summary
     if tax is None and retry_chains:
         tax = compute_loop_tax(retry_chains, sessions, pricing=pricing)
+    worst_excerpt: str | None = None
+    # 抑止条件は format_loop_tax_line の出力条件と一致させる。
+    # total_wasted_tokens が None の日は最悪例行が出ないため、ここで抑止すると
+    # 最悪チェーンの抜粋が日誌から完全に消える。
+    if (
+        output_tokens > 0
+        and tax is not None
+        and tax.episode_count > 0
+        and tax.total_wasted_tokens is not None
+    ):
+        max_ep = max_loop_episode(tax)
+        if max_ep is not None:
+            excerpts = retry_chain_excerpts(
+                [max_ep.chain], redactor=redactor, max_chains=1
+            )
+            worst_excerpt = excerpts[0] if excerpts else None
+    if retry_chains:
+        for excerpt in retry_chain_excerpts(retry_chains, redactor=redactor):
+            if worst_excerpt is not None and excerpt == worst_excerpt:
+                continue
+            lines.append(f"リトライ{excerpt}")
     if tax is not None and tax.episode_count > 0:
-        lines.append(format_loop_tax_line(tax, usd_jpy=usd_jpy))
+        lines.append(
+            format_loop_tax_line(
+                tax,
+                usd_jpy=usd_jpy,
+                day_output_tokens=output_tokens,
+                redactor=redactor,
+            )
+        )
     # 空転ブレーカー発火（通知履歴のみ。会計はループ税側）
     if int(breaker_fires or 0) > 0:
         lines.append(f"⚡ ブレーカー発動: {int(breaker_fires)}回")
+    digests = session_digests_for_stats(
+        sessions,
+        sessions[0].start.astimezone(tz).date().isoformat(),
+        redactor=redactor,
+        retry_chains=retry_chains,
+    )
+    worst = top_friction_sessions(digests, limit=1)
+    if worst:
+        digest = worst[0]
+        title = _md_cell(digest.get("title") or "—") if session_titles else "—"
+        project_raw = str(digest.get("project") or "—")
+        source_raw = str(digest.get("source") or "—")
+        if redactor is not None:
+            project_raw = redactor(project_raw)
+            source_raw = redactor(source_raw)
+        project = _md_cell(project_raw)
+        source = _md_cell(source_raw)
+        errors = int(digest.get("tool_errors") or 0)
+        interruptions = int(digest.get("interruptions") or 0)
+        retry_touch = int(digest.get("retry_touch") or 0)
+        friction = int(digest.get("friction") or 0)
+        lines.extend(
+            [
+                f"⚠ 本日の摩擦ワースト: {project} ({source})「{title}」",
+                f"   — 摩擦{friction}（ツールエラー{errors} ＋ 中断{interruptions}×5 ＋ リトライ連鎖関与{retry_touch}×5）",
+                "   ※ 摩擦はスコア順位であり、AIの良し悪しの判定ではありません。",
+            ]
+        )
     lines.append("")
 
     def _is_tiny_session(s: AISession) -> bool:

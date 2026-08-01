@@ -571,22 +571,55 @@ def render_reader_advice(advice_md: str, evidence: AdviceEvidence) -> str:
     """検証済みの内部回答を、F-IDを見せない読者向け日次提案へ変換する。"""
     sections = _level3_sections(advice_md)
     actions = _ACTION_RE.findall(sections.get("明日の最小アクション", ""))
+    proposal_contexts = {
+        int(match.group("index")): (
+            re.sub(r"\s{2,}", " ", _FACT_ID_RE.sub("", match.group("why"))).strip(),
+            re.sub(r"\s{2,}", " ", _FACT_ID_RE.sub("", match.group("metric"))).strip(),
+        )
+        for match in re.finditer(
+            r"^\s*(?P<index>\d+)\.\s*(?P<why>.+?)。(?P<proposal>[^。]+)。翌日見る指標:\s*(?P<metric>.+?)\s*$",
+            sections.get("今日の改善提案", ""),
+            re.MULTILINE,
+        )
+    }
     rendered_actions = []
-    for action in actions:
+    for index, action in enumerate(actions, 1):
         without_ids = _FACT_ID_RE.sub("", action)
         cleaned = re.sub(r"\s{2,}", " ", without_ids).strip()
-        rendered_actions.append(f"- [ ] {cleaned}")
+        if cleaned:
+            rendered = f"- [ ] {cleaned}"
+            if (context := proposal_contexts.get(index)) is not None:
+                why, metric = context
+                if why and metric:
+                    rendered += f"\n    - なぜ: {why}\n    - 明日見る数字: {metric}"
+            rendered_actions.append(rendered)
+    if not rendered_actions:
+        raise AdviceContractError(
+            "読者向け再構成に必要な明日の最小アクションを抽出できません",
+            violations=["明日の最小アクションに有効なチェックボックスがありません"],
+        )
 
-    notes = "\n".join(evidence.reader_notes)
-    return (
+    rendered = (
         "## 🚀 Kaizen（AIからの改善提案）\n\n"
         "### 今日の結論\n\n"
         f"{evidence.reader_summary}\n\n"
         "### 明日試すこと\n\n"
         + "\n".join(rendered_actions)
-        + "\n\n### 計測上の注意\n\n"
-        + notes
     )
+    ai_review_lines = [
+        re.sub(
+            r"\s{2,}",
+            " ",
+            re.sub(r"^-\s+", "- ", _FACT_ID_RE.sub("", line)),
+        ).strip()
+        for line in sections.get("AI作業の改善", "").splitlines()
+        if line.startswith("- ")
+    ]
+    if ai_review_lines:
+        rendered += "\n\n### AI作業の見立て\n\n" + "\n".join(ai_review_lines)
+    if not evidence.reader_notes:
+        return rendered
+    return rendered + "\n\n### 計測上の注意\n\n" + "\n".join(evidence.reader_notes)
 
 
 def _has_uncertainty_language(sentence: str) -> bool:
@@ -720,13 +753,13 @@ def _baseline_repair_hint(evidence: AdviceEvidence) -> str:
     ]
     if not bits:
         # 先頭数件
-        for k, v in list(basemap.items())[:5]:
+        for k, v in sorted(basemap.items())[:5]:
             if isinstance(v, (int, float)):
                 bits.append(f"{k}={float(v):g}")
     if not bits:
         return ""
     return (
-        "## ベースライン（当日実測・PASS はこの値より挑戦的に）\n"
+        "## ベースライン（直近履歴の中央値・PASS はこの値より挑戦的に）\n"
         + " / ".join(bits)
         + "\n\n"
     )
@@ -761,7 +794,7 @@ def _contract_repair_prompt(
         "（例: `context_switches <= 40`）。"
         "当日使用可能なPASS指標だけを使い、自由文 PASS は禁止\n"
         "- fail は数値条件（機械構文可）。PASS 目標はベースラインより挑戦的に"
-        "（減らす目標は baseline×1.2 超を禁止、増やす目標は baseline×0.8 未満を禁止）\n"
+        "（減らす目標は baseline×0.95 超を禁止、増やす目標は baseline×1.05 未満を禁止）\n"
         "- KZN ID と HTML コメントは禁止\n"
         "- AI関連画面ブロックは会話数・セッション数・往復数ではない\n\n"
         f"{render_pass_metric_contract(evidence)}\n"

@@ -549,3 +549,155 @@
 - PASS達成済みの提案は通常アクションと別セクションで表示される。
 - チェック済み状態、最大3件、残件案内、`today --all`導線、手書きバイト保護が維持される。
 - 関連テスト、全pytest、`compileall`、`git diff --check`が成功する。
+
+# 第35〜38弾 Codexプロンプト改善（2026-07-31）
+
+## Goal breakdown
+
+- `docs/codex-prompts/0731_Codex_日誌情報設計の再構成指示プロンプト_第35弾.md`、第36弾、第37弾、第38弾を、単独実行時の安全性と、35→36→37→38の依存関係が同じ読み方になる指示書へ改善する。
+- 各文書の根拠、対象範囲、非目標、実装順、後方互換、失敗時挙動、受け入れテスト、実挙動確認、最終報告形式を再点検し、実装エージェントが行番号のずれや推測で scope を広げない状態にする。
+- アプリケーションコード、テストコード、ユーザーのボールト、Memory台帳、設定、リモート、commit/push は変更しない。変更対象は4本のプロンプトと、作業計画としての本 `PLAN.md` に限定する。
+
+## Current baseline and file map
+
+- 実リポジトリ: `C:\develop\KaizenLog\KaizenLog-`
+- 開始時ブランチ/HEAD: `main` / `fea5609`
+- 開始時に確認した既存の未追跡ファイル: 対象4プロンプト、`.superpowers/`、`docs/2026-07-31-journal-value-proposal.md`。これらのうち対象4本だけを今回の編集対象とする。
+- 改善対象:
+  - `docs/codex-prompts/0731_Codex_日誌情報設計の再構成指示プロンプト_第35弾.md`: 描画層9件、既存スキーマ不変の前提
+  - `docs/codex-prompts/0731_Codex_判定の2段階確定指示プロンプト_第36弾.md`: `verdict_stage` と暫定/確定の同期
+  - `docs/codex-prompts/0731_Codex_提案の質と学習ループ再起動指示プロンプト_第37弾.md`: 提案品質、2トラック、因果仮説、PRM
+  - `docs/codex-prompts/0731_Codex_提案寿命管理と成果可視化指示プロンプト_第38弾.md`: 提案寿命、digest、git突合
+
+## Dependencies and parallelizable work
+
+- 4本の個別レビューは、対象ファイルの読み取りと契約抽出だけなら相互に独立するため、サブエージェント4体へ並列依頼する。
+- 各サブエージェントは担当ファイルだけを編集せず、矛盾、曖昧さ、根拠不足、テスト不足、後続弾への影響を `§ID / file:line / evidence / proposed wording` 形式で返す。
+- Sol はレビュー結果を統合し、共通実行契約（前提弾、変更許可、禁止事項、証拠の扱い、テスト、報告）と弾間の依存グラフを決定する。個別レビュー結果を無検証で採用しない。
+- 4本の編集は同じディレクトリ内だがファイルが分離しているため、統合方針確定後はファイル単位で編集できる。ただし最終段階では4本を一括で読み直し、契約の相互整合を確認する。
+
+## Risks and mitigations
+
+- **現行実装と行番号がずれる:** 行番号を唯一の識別子にせず、関数名・定数名・CLI名・テスト名を主軸にする。確認できない根拠は `Unknown` と明記し、断定文を作らない。
+- **35〜38弾の境界が衝突する:** 35は描画層、36は判定stage、37は提案品質/学習、38は寿命/digest/git突合という境界を固定し、別弾のデータモデルや表示責務を勝手に前倒ししない。
+- **先行弾適用前後の読み違い:** 各プロンプトの冒頭に「適用済み前提」「未適用時の扱い」「参照が見つからない場合の停止条件」を揃える。
+- **巨大な受け入れ条件が実行不能になる:** 実装前に静的契約、focused test、full regression、実データ確認を分離し、各PhaseのPASS条件を具体的なコマンドと期待結果で書く。テスト件数は未確認なら固定値として断定しない。
+- **ユーザーデータや外部副作用の混入:** 4本すべてに、既存データの一括migration禁止、実LLM/外部サービス禁止、リモート禁止、commit/push禁止を一貫して残す。
+
+## Acceptance criteria and verification
+
+- 4本すべてが、目的・前提・対象/非対象・Phase/§ID・受け入れ条件・最終報告を持ち、担当弾の境界と35→36→37→38の依存関係が矛盾しない。
+- 実装エージェントが、確認できない実装事実を捏造せず、行番号変更に追随でき、失敗時に停止/報告できる。
+- テスト条件が「何を固定するか」「どの境界を含むか」「期待する終了コード/出力/バイト保全」を明記し、単なる「テストを追加する」に留まらない。
+- 共通禁止事項、fail-closed、redact、既存データ保全、no commit/push が4本で意味を変えず、より厳しい弾の条件を後続弾が打ち消さない。
+- 変更後に以下を実行する:
+  - 対象4ファイルの見出し・必須節・弾番号・参照パスの静的契約スキャン
+  - `git diff --check`
+  - `git status --short` と `git diff --stat --` で対象外の変更がないことを確認
+  - 必要に応じて既存のプロンプト関連テストを読み取り専用で確認し、アプリケーション全体テストはコード変更がないため必須証拠と混同しない
+- commit、push、外部サービス、実LLM、実ボールト書き込みは行わない。
+
+## Workflow
+
+1. 現行4本と関連提案書・履歴を読み、開始時のdirty baselineを保持する。
+2. 4体のサブエージェントへ個別レビューを並列依頼する。
+3. Sol が各報告を根拠・重複・弾間整合・保守性の観点でレビューし、採用する改善方針を決める。
+4. 設計方針をユーザーへ提示し、承認後に4本だけを編集する。
+5. 静的契約、diff check、対象外差分確認を実行し、未確認事項は未確認のまま報告する。
+
+# 第35弾 日誌情報設計の実装計画（2026-08-01）
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development for the Phase単位実装と、各Phase後の仕様レビュー・品質レビュー。
+
+**Goal:** `docs/codex-prompts/0731_Codex_日誌情報設計の再構成指示プロンプト_第35弾.md` の§A1〜§D2を現行第34弾コードへ実装し、§E1の新規テスト・USAGE追記・隔離fixture検証まで完了する。指示書自体は編集しない。
+
+**Architecture:** 既存の決定論的 renderer/evidence/stats の経路を拡張する。新しい計測源・LLM呼び出し・永続化スキーマ変更は行わず、`DailySummary.ai_tool_minutes`だけをstatsへ加算保存する。共有ファイルをPhase順に触り、各Phaseはテスト先行、focused test、仕様レビュー、品質レビューを通過してから次へ進む。
+
+**Tech Stack:** Python 3、既存の `pytest`、dataclass/Mappingベースのstats、Markdown renderer、既存のprivacy redactor。
+
+## 開始時の証拠と変更境界
+
+- 実リポジトリ: `C:\develop\KaizenLog\KaizenLog-`
+- 開始時: `main` / `fea56091cdad` / `705 tests collected`
+- 既存dirty/untrackedは保全する。対象変更は `src/`、`tests/`、`docs/USAGE.md`、本 `PLAN.md` に限り、プロンプト・ボールト・台帳・設定・リモート・commit/pushは変更しない。
+- 実日誌・実statsの再生成は行わず、§E1は一時fixtureまたは承認済みコピーだけで検証する。
+
+## Task 1: Phase 1 §A1〜§A3 — 空行、ソース分離、画面AIの計測限界
+
+**Files:**
+
+- Modify: `src/kaizenlog/advisor.py` (`render_reader_advice`)
+- Modify: `src/kaizenlog/aiwork.py` (`retry_chain_excerpts`, `render_aiwork_markdown`)
+- Modify: `src/kaizenlog/stats.py` (`build_stats`の加算キー)
+- Modify: `src/kaizenlog/cli.py`（`summary.ai_tool_minutes`のrenderer配線）
+- Test: `tests/test_round35_journal_information_design.py`
+
+- [ ] `reader_notes=()`で見出し・本文を出さず、非空notesは従来文面を保つテストを先に追加し、focused testが機能不足で失敗することを確認する。
+- [ ] `retry_chain_excerpts`を正規化済み本文・同一project単位で畳み、初出順と畳み込み後`max_chains`を固定する。空本文だけ既存の省略文へ倒す。
+- [ ] sourceが2種類以上のときだけmeasurable sessionのエラー/中断/連鎖をsource別に展開し、1 source時は既存文字列を維持する。
+- [ ] `render_aiwork_markdown(..., screen_tool_minutes=None)`を追加し、明示テーブルにない画面ツールをログ無し側へ倒す。`DailySummary.ai_tool_minutes`は`build_stats`で`ai_screen_tool_minutes`として丸めて保存し、旧statsにキーが無い場合は注記を増やさない。
+- [ ] `ai_stats_valid and telemetry_sessions > 0`の既存条件は変更せず、画面時間30分以上かつ対応`-web`セッション無しの日だけreader noteを追加する。
+- [ ] `pytest tests/test_round35_journal_information_design.py -q`で§A1〜§A3がgreenになることを確認する。
+
+## Task 2: Phase 2 §B1〜§B2 — 摩擦、コスト、ループ税
+
+**Files:**
+
+- Modify: `src/kaizenlog/aiwork.py` (`render_aiwork_markdown`, `format_loop_tax_line`)
+- Test: `tests/test_round35_journal_information_design.py`
+
+- [ ] 摩擦ワースト0件/1件 fixtureを先に追加し、表の並び順を変えず表直前に3行を挿入する仕様を固定する。
+- [ ] cost未登録分岐を、桁区切り・未登録モデル一覧・`[aiwork.pricing]`案内の3行へ置き換え、全モデル単価登録時は旧金額行を保つ。
+- [ ] `format_loop_tax_line(..., day_output_tokens=None)`を後方互換に保ち、指定時だけ割合・比較対象を表示する。実計算の重複排除不変条件をfixtureで検証し、不整合入力だけ100%超注記を許す。
+- [ ] 最長episodeは`ep.chain.length`、`ep.wasted_tokens`、`ep.has_tool_error`と既存excerptだけを使い、存在しない属性を参照しない。
+- [ ] focused test後、`tests/test_round27_loop_tax.py`、`tests/test_round34_journal_quality.py`を回帰実行する。
+
+## Task 3: Phase 3 §C1〜§C2 — Activity説明と前日比
+
+**Files:**
+
+- Modify: `src/kaizenlog/report.py` (`render_markdown`, `render_change_table`)
+- Modify: `src/kaizenlog/advice_evidence.py` (`_build_reader_summary`)
+- Modify: `src/kaizenlog/cli.py`（section確定後のchange table配線）
+- Test: `tests/test_round35_journal_information_design.py`
+
+- [ ] 閾値未満0件、全件閾値未満、eligibleあり/上限超過をテストし、`under_threshold_count > 0`の説明行と上限超過文を別行で出す。閾値は`min_block_minutes`から取得する。
+- [ ] `render_change_table(today, prev)`は両辺のstatsに明示キーがある行だけを出し、0埋めしない。前日欠落は空文字とする。
+- [ ] 当日の生成済みsectionへchange tableをappendしてから`write_stats(activity_md=section)`へ渡す。既存statsファイルを当日比較元にしない。
+- [ ] 履歴のトレンド文は暦日隣接を確認し、欠損日がある場合は「記録のあるN日」へフォールバックする。7/31のように最長でない日は最長断定を出さない。
+- [ ] focused test後、`tests/test_report_vault.py`、`tests/test_ux_round13.py`、`tests/test_round34_journal_quality.py`を回帰実行する。
+
+## Task 4: Phase 4 §D1〜§D2 — reader復活と履歴中央値ゲート
+
+**Files:**
+
+- Modify: `src/kaizenlog/advisor.py` (`render_reader_advice`, `_baseline_repair_hint`)
+- Modify: `src/kaizenlog/advice_evidence.py` (`_metric_baselines_from_history`、notes)
+- Modify: `src/kaizenlog/advice_format.py`（中央値係数）
+- Modify: `tests/test_round16_journal_value.py`（既存係数期待値のみ）
+- Test: `tests/test_round35_journal_information_design.py`
+
+- [ ] `今日の改善提案`と`AI作業の改善`をJSON/Markdown/reader renderer間で運び、チェックボックス行のPASS/FAIL・ID・`parse_pass_condition`入力を変更しない。因果2行は素のインデント箇条書きにする。
+- [ ] `reader_notes`空、`ai_review`空、actions/proposals件数不一致の境界を先にテストする。
+- [ ] `_metric_baselines_from_history(stats, history)`で当日除外、暦日・値の有効性、3日未満スキップ、category/siteキー欠損除外を固定する。現在の当日-only関数は置換し、呼び出し側の履歴を渡す。
+- [ ] `_MEDIAN_CHALLENGE_LE=0.95` / `_MEDIAN_CHALLENGE_GE=1.05`を導入し、旧1.2/0.8定数の参照がないことを確認する。`tests/test_round16_journal_value.py:51-64`は`>=3.6`境界へ更新する。
+- [ ] focused test後、`tests/test_advice_evidence.py`、`tests/test_advice_format.py`、`tests/test_round16_journal_value.py`を回帰実行する。
+
+## Task 5: Phase 5 §E1 — 追加テスト、USAGE、隔離fixture
+
+**Files:**
+
+- Modify: `docs/USAGE.md`
+- Test: `tests/test_round35_journal_information_design.py`
+
+- [ ] §A1〜§D2を少なくとも1テストずつ、出す/出さない・空/非空・前日あり/なし・旧stats欠落・冗長化境界を含めて固定する。
+- [ ] USAGEへ「計測範囲」「ループ税100%超は不整合入力のみ」「PASS基準は履歴中央値」を追記する。
+- [ ] `pytest --collect-only -q -p no:cacheprovider`、focused tests、全`pytest -q`、`compileall`、`git diff --check`を実行する。
+- [ ] 実挙動は一時fixtureまたは承認済みコピーのみで7/30・7/31相当を確認し、Activity/Advice/Actions、stats、Memory、実験、run logの変更を許可範囲と照合する。実データ未確認は`Unknown`、未実施は`⚠️`と報告する。
+
+## Delegation and review protocol
+
+- 共有ファイルの競合を避け、実装サブエージェントはTask 1→5を一つずつ順番に担当する。各委譲には対象ファイル、非対象、TDD手順、期待するfocused test、出力形式を明記する。
+- 各Task後に同じ実装エージェントへ仕様適合レビューの指摘を返し、別サブエージェントでコード品質レビューを行う。重大/重要指摘は次Taskへ進む前に修正・再レビューする。
+- 私は各差分を`git diff`/テスト出力/仕様§IDで独立検証し、サブエージェントの報告だけを根拠に完了扱いにしない。
+- 変更はユーザー指定どおり `src/` と `tests/` を中心に実装するが、§E1の`docs/USAGE.md`と計画の`PLAN.md`以外の文書は編集しない。

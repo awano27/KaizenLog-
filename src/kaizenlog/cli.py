@@ -125,8 +125,8 @@ from .experiments import (
     weekday_baseline,
 )
 from .patterns import render_patterns_markdown
-from .report import render_markdown, summarize
-from .stats import activity_fingerprint, load_stats, missing_days, write_stats
+from .report import render_change_table, render_markdown, summarize
+from .stats import activity_fingerprint, build_stats, load_stats, missing_days, write_stats
 from .vault import (
     ACTIONS_MARKER,
     ACTIVITY_MARKER,
@@ -247,6 +247,7 @@ def cmd_generate(
             usd_jpy=getattr(cfg.aiwork, "usd_jpy", None),
             loop_tax_summary=loop_tax,
             breaker_fires=breaker_n,
+            screen_tool_minutes=summary.ai_tool_minutes,
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
@@ -267,6 +268,31 @@ def cmd_generate(
             )
     else:
         loop_tax = None
+
+    today_stats = build_stats(
+        day,
+        summary,
+        ai_sessions,
+        input_stats,
+        activity_md=None,
+        retry_chains=day_retry_chains if cfg.aiwork.enabled else None,
+        pricing=pricing,
+        title_redactor=title_redactor if cfg.aiwork.enabled else None,
+        internal_ai_sessions=internal_ai_n,
+        loop_tax_summary=loop_tax,
+    )
+    previous_day = (day - timedelta(days=1)).isoformat()
+    previous_stats = next(
+        (
+            item
+            for item in load_stats(cfg.stats_path, days=2, end_day=day)
+            if item.get("day") == previous_day
+        ),
+        None,
+    )
+    change_table = render_change_table(today_stats, previous_stats)
+    if change_table:
+        section = section.rstrip() + "\n\n" + change_table
 
     store = DailyNoteStore(cfg.daily_notes_path)
     path = store.write_section(day, ACTIVITY_MARKER, section)
@@ -989,6 +1015,10 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         else:
             # 後方互換（モックが str を返すテスト）
             advice_md = str(result)
+        # 日次契約プロンプトだけ reader 向け再構成。weekly / 自作プロンプトは素通し
+        # （render_reader_advice は「明日の最小アクション」前提で全文を組み直すため）
+        if requires_daily_contract(cfg.llm):
+            advice_md = render_reader_advice(advice_md, evidence_ctx)
     except AdviceContractError as e:
         # 契約違反でも確定事実サマリーだけは残す（静かな失敗を防ぐ）。例外は再送出。
         store.write_section(day, ADVICE_MARKER, _degraded_advice_section(evidence_ctx))
@@ -1010,10 +1040,6 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
             violations=["exception"],
         )
         raise
-    # 日次契約プロンプトだけ reader 向け再構成。weekly / 自作プロンプトは素通し
-    # （render_reader_advice は「明日の最小アクション」前提で全文を組み直すため）
-    if requires_daily_contract(cfg.llm):
-        advice_md = render_reader_advice(advice_md, evidence_ctx)
     # 安定ID（KZN-YYYYMMDD-NNN）を付与して記録する
     advice_md, new_entries = assign_action_ids(advice_md, day, effective_entries)
     path = store.write_section(day, ADVICE_MARKER, advice_md)

@@ -20,6 +20,7 @@ from .aiwork import (
     RetryChain,
     estimate_sessions_cost,
     loop_tax_to_stats_dict,
+    _normalize_screen_tool_minutes,
     prompt_length_observation,
     session_digests_for_stats,
 )
@@ -30,6 +31,10 @@ from .vault import atomic_write_text
 
 def _round_minutes(d: dict[str, float]) -> dict[str, float]:
     return {k: round(v, 1) for k, v in d.items()}
+
+
+def _source_name(value: object) -> str:
+    return value.strip() if isinstance(value, str) and value.strip() else "unknown"
 
 
 def activity_fingerprint(activity_md: str) -> str:
@@ -90,7 +95,7 @@ def build_stats(
     # ソース別内訳（合算値は互換のため ai 直下に維持）
     sources: dict[str, dict] = {}
     for s in cc_sessions:
-        src = s.source or "claude-code"
+        src = _source_name(s.source)
         bucket = sources.setdefault(
             src,
             {
@@ -122,9 +127,7 @@ def build_stats(
     # リトライ連鎖はプロンプト側の source が無い場合があるため、
     # チェーン先頭プロンプトの source があれば割当、無ければ合算のみ
     for chain in chains:
-        src = "claude-code"
-        if chain.prompts and getattr(chain.prompts[0], "source", None):
-            src = chain.prompts[0].source or src
+        src = _source_name(chain.prompts[0].source) if chain.prompts else "unknown"
         bucket = sources.setdefault(
             src,
             {
@@ -159,12 +162,16 @@ def build_stats(
         "day": day.isoformat(),
         "total_minutes": round(summary.total_minutes, 1),
         "context_switches": summary.context_switches,
-        # 旧名 ai_sessions は画面イベントをまとめたブロック数であり、会話数ではない。
-        # 新しい機械可読キーで意味を明示し、既存API/実験指標は互換のため維持する。
+        # ai_sessions / ai_activity_blocks はともに画面イベントをまとめたブロック数であり、
+        # 会話セッション数ではない。旧名は互換のため維持する。
+        "ai_sessions": summary.ai_sessions,
         "ai_activity_blocks": summary.ai_activity_blocks,
         "by_category": _round_minutes(summary.by_category),
         "by_app": _round_minutes(summary.by_app),
         "by_site": _round_minutes(summary.by_site),
+        "ai_screen_tool_minutes": _round_minutes(
+            _normalize_screen_tool_minutes(summary.ai_tool_minutes)
+        ),
         "blocks": [
             {
                 "start": b.start.isoformat(),
