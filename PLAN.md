@@ -701,3 +701,171 @@
 - 各Task後に同じ実装エージェントへ仕様適合レビューの指摘を返し、別サブエージェントでコード品質レビューを行う。重大/重要指摘は次Taskへ進む前に修正・再レビューする。
 - 私は各差分を`git diff`/テスト出力/仕様§IDで独立検証し、サブエージェントの報告だけを根拠に完了扱いにしない。
 - 変更はユーザー指定どおり `src/` と `tests/` を中心に実装するが、§E1の`docs/USAGE.md`と計画の`PLAN.md`以外の文書は編集しない。
+
+# 第36弾「判定の2段階確定」実装計画（2026-08-01）
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:test-driven-development` for every behavior change and perform the Phase gate verification before starting the next Phase. Do not edit the named prompt document.
+
+**Goal:** `docs/codex-prompts/0731_Codex_判定の2段階確定指示プロンプト_第36弾.md` の §Z1〜§Z6、§A1〜§A4、§B1〜§B3、§C1〜§C3、§D1〜§D2 を、既存の JSONL 追記契約・日誌マーカー保護・後方互換を維持して実装する。
+
+**Architecture:** `MemoryEntry.verdict_stage` を `provisional|confirmed` の2値として Memory の読み書き・再構築点・判定生成・消費側に一貫して運ぶ。判定生成は「当日=暫定、翌日以降の generate 内 backfill=確定」とし、判定 suffix、📌 ACTIONS 転記、測定日ノートを同じ更新集合から再描画する。旧JSONLの stage 欠落は `confirmed`、明示的不正値は行を残したまま `provisional` とする。
+
+**Tech Stack:** Python 3、dataclass、既存の JSONL Memory、Markdown marker renderer、`pytest`、リポジトリ内の `.venv`。外部DB・実LLM・実ボールト・リモートは使わない。
+
+## 開始時の証拠と変更境界
+
+- 実リポジトリは `C:\develop\KaizenLog\KaizenLog-`。開始ブランチは `main`、HEAD は `fea56091cdade0fe61c695e32dc4a18e121ca03d`、基準線は `778 tests collected`。
+- 第35弾適用ゲートは `src/kaizenlog/report.py::render_change_table` と `tests/test_round35_journal_information_design.py` の存在で確認済み。これらが失われた場合は実装を止めて報告する。
+- 開始時の既存変更（第35弾実装、`PLAN.md`、`docs/USAGE.md`、既存テスト、未追跡のプロンプト等）は保全する。今回の追加変更は `src/`、`tests/`、§D2で指定された `docs/USAGE.md`/`docs/HANDOFF.md`、本 `PLAN.md` に限定する。
+- `docs/codex-prompts/0731_Codex_判定の2段階確定指示プロンプト_第36弾.md` 自体は編集しない。`git commit`、`git push`、SSH/scp、外部DB変更、実LLM、実ボールト一括migration、既存 `suggestions.jsonl` 行の書換え・並替え・削除は行わない。
+- 各Phaseの実装前に、そのPhaseのテストを先に追加して RED を観測する。各Phase完了時に `./.venv/Scripts/python.exe -m pytest -q` を実行し、前Phaseの失敗を混入させない。
+
+## ファイル責務マップ
+
+- `src/kaizenlog/memory.py`: `MemoryEntry` の stage、JSONL後方互換、手列挙再構築点、統計・一覧・📌行・LLMプロンプト行。
+- `src/kaizenlog/verdict.py`: 当日/バックフィルの stage 遷移、stage込み差分抑止、⏳ suffix、ADVICE/ACTIONS の marker 内更新。
+- `src/kaizenlog/cli.py`: 実時刻 `today` の判定注入、判定・backfill変更集合の測定日再同期、朝通知の confirmed-only 集計。
+- `src/kaizenlog/weekly_context.py` / `src/kaizenlog/decay.py`: confirmed-only の週次集計と風化候補。
+- `src/kaizenlog/advisor.py` / `src/kaizenlog/report.py` / `src/kaizenlog/aiwork.py` / `src/kaizenlog/advice_evidence.py`: Phase 0 の第35弾レビュー残件。
+- `tests/test_round35_journal_information_design.py`、`tests/test_round16_journal_value.py`、`tests/test_round25_internal_filter.py`: Phase 0 の回帰と不変条件の廃止記録。
+- `tests/test_aiwork_adapters.py`: ユーザーの Downloads 配下を拾わないための既存 adapter test fixture 隔離。
+- `tests/test_round36_verdict_stage.py`: §A〜§Dの新規 fixture・unit/integration 回帰。
+- `docs/USAGE.md` / `docs/HANDOFF.md`: 夜間暫定・翌日以降の generate 内 backfill と当日未確定、§Z6の廃止記録。
+
+## Phase 0 — §Z1〜§Z6（第35弾残件）
+
+### Task Z1: reader advice の interpretation/proposal 分離
+
+**Files:** `src/kaizenlog/advisor.py`、`tests/test_round35_journal_information_design.py`。
+
+- [x] `interpretation。proposal。翌日見る指標` 形式で、読者向け `- なぜ:` が interpretation だけになり、proposal と完全一致しない RED テストを追加する。interpretation 内の句点を含む素材は、既存素材書式に対する実装の決定結果をテストへ固定する。
+- [x] 正規表現を `(?P<why>.+?)。(?P<proposal>[^。]+)。翌日見る指標:` 相当の非貪欲分割へ変更し、proposal を context に入れない。
+- [x] `pytest tests/test_round35_journal_information_design.py -q -k reader` で RED→GREEN を確認する。
+
+### Task Z2: F-ID除去後の連続空白除去
+
+**Files:** `src/kaizenlog/advisor.py`、`tests/test_round35_journal_information_design.py`。
+
+- [x] F-ID を語間に挿入した `why`、`metric`、`AI作業の改善` 行の出力に `  ` が残らない RED テストを追加する。
+- [x] F-ID除去後に `re.sub(r"\\s{2,}", " ", ...)` と trim をサブ行・AI見立て行にも適用し、既存の単一空白出力を保つ。
+- [x] Z1/Z2 focused test を再実行する。
+
+### Task Z3: eligible 行が0件のタイムライン説明
+
+**Files:** `src/kaizenlog/report.py`、`tests/test_round35_journal_information_design.py`。
+
+- [x] 全ブロックが `min_block_minutes` 未満の fixture で、説明行は出るが「時刻順に表示。」と表ヘッダが出ない RED テストを追加する。
+- [x] `f"{min_label}以上の画面ブロックを時刻順に表示。"` と表ヘッダを `if rows:` に入れる。`under_lines` と overflow の説明は維持する。
+- [x] Z3 focused test を再実行する。
+
+### Task Z4: loop tax の最悪例を別行化・重複除去
+
+**Files:** `src/kaizenlog/aiwork.py`、`tests/test_round35_journal_information_design.py`。
+
+- [x] `format_loop_tax_line(..., day_output_tokens=...)` の最悪例が改行された1行になり、連鎖起点と同一 excerpt を二重出力せず、引数省略時は既存の1行文字列と `==` になる RED テストを追加する。
+- [x] `return line + "\\n" + f"   — 最悪例: ..."` の形へ変更し、最悪例用 excerpt の候補から直上の retry-chain excerpt を除外する。省略経路の既存文字列は触らない。
+- [x] Z4 focused test と `tests/test_round27_loop_tax.py` を実行する。
+
+### Task Z5: トレンドの増加回数とゲート
+
+**Files:** `src/kaizenlog/advice_evidence.py`、`tests/test_round35_journal_information_design.py`。
+
+- [x] 5点・増加4回、4点・増加3回、3点・増加2回、非単調履歴、暦日欠落の fixture を先に追加し、4/3/フォールバックの期待を RED で固定する。
+- [x] `N = sum(later > earlier)` 相当の連続増加回数を使い、第1文は `N >= 3`、最長文の既存ゲートは履歴2日以上のままにする。非単調履歴では単調増加文を出さない。
+- [x] Z5 focused test を実行する。
+
+### Task Z6: 虚偽テスト名と廃止不変条件の記録
+
+**Files:** `tests/test_round25_internal_filter.py`、`tests/test_round16_journal_value.py`、`docs/HANDOFF.md`。
+
+- [x] `test_s3_token_number_appears_once_on_cost_fallback` を `test_s3_cost_fallback_shows_three_line_guidance` に改名し、3回表示が第35弾 §B2で意図的に採用されたコメントを置く。`tests/test_round16_journal_value.py` の `210,000` 回数アサート削除箇所にも同じ廃止理由コメントを置く。
+- [x] `docs/HANDOFF.md` の既知の限界へ「第25弾 §S3 のトークン数値1回表示は第35弾 §B2で廃止」を1行追加する。
+- [x] `rg -n "appears_once" tests/` が0件で、Z1〜Z6の focused test が全PASSになることを確認する。
+
+### Phase 0 ゲート
+
+- [x] `./.venv/Scripts/python.exe -m pytest -q` を実行し、全PASS件数を実測記録する。Phase 0の修正・期待値更新による失敗がないことを確認するまで Phase 1 に進まない。実測結果は `786 passed in 78.52s`。
+- [x] `git diff --check` と `git status --short` で、プロンプト自体・実データ・DB・リモートに変更がないことを確認する。既存 Downloads を拾う `test_aiwork_adapters.py` は browser export path を tmp_path へ隔離した。
+
+## Phase 1 — §A1〜§A4（MemoryEntry と後方互換）
+
+### Task A: stage の読み書きと再構築保持
+
+**Files:** `src/kaizenlog/memory.py`、`tests/test_round36_verdict_stage.py`。
+
+- [x] 新規テストへ、stage キー無し JSONL が `confirmed`、明示 `provisional` が保持され、明示未知文字列・数値・null は行を破棄せず `provisional` になるケースを追加して RED を観測する。
+- [x] `MemoryEntry` に `verdict_stage: str = "confirmed"` を追加し、`_normalize_verdict_stage(raw, key_present)` を `key_present=False -> "confirmed"`、明示値が2値以外 -> `"provisional"` として `load_entries` に接続する。`append_entries` は既存の `asdict` のみで JSONL key を出す。
+- [x] provisional entry に対し、`update_statuses_from_note` の x/-、`mark_entry_done`、`mark_entry_skipped` の4再構築経路をそれぞれ通し、4個すべてで stage が `provisional` のままになる個別アサートを追加する。
+- [x] A focused test を実行して GREEN にし、旧行の `verdict`/`skip_reason`/値互換が崩れていないことを確認する。
+
+### Phase 1 ゲート
+
+- [x] `./.venv/Scripts/python.exe -m pytest -q` を実行し、Phase 0の実測件数以上が全PASSであることを確認する。実測結果は `792 passed in 69.38s`。
+
+## Phase 2 — §B1〜§B3（暫定生成・確定昇格・差分抑止）
+
+### Task B:判定関数とbackfillのstage遷移
+
+**Files:** `src/kaizenlog/verdict.py`、`src/kaizenlog/cli.py`、`tests/test_round36_verdict_stage.py`。
+
+- [x] `judge_entries` の `today` 未指定=confirmed、`judged_day == today`=provisional、`judged_day < today`=confirmed、confirmed entry の再実行で provisional へ降格しないケースを先に追加する。
+- [x] `judge_entries(..., *, today: date | None = None)` とし、既存呼び出しの既定を confirmed にする。CLIの `cmd_generate` では `datetime.now(ZoneInfo(cfg.timezone)).date()` を `today=` として渡す。stageを差分一致条件に加え、生成 MemoryEntry に `verdict_stage=stage` を設定する。現在 confirmed の同ID・同測定日を再判定する場合は stage を confirmed に維持する。
+- [x] `backfill_verdicts` は `pass/fail and verdict_stage == "confirmed"` のみ skip し、provisional は同じ値でも `measure_day < as_of` なら confirmed 行を1本追記する。`measure_day == as_of` は provisional、`measure_day > as_of` は従来どおり skip とする。生成行へ stage を設定する。
+- [x] 79→181→210 の同一 `judged_day` 3回を再現し、3行が provisional、翌日以降の backfill で confirmed が1行だけ増え、再度の backfill が0行になるテストを追加する。confirmed 後の judge/backfill で provisional へ降格しないことも固定する。
+- [x] B focused test、既存 `tests/test_verdict.py`、`tests/test_round10.py` を実行する。
+
+### Phase 2 ゲート
+
+- [x] `./.venv/Scripts/python.exe -m pytest -q` を実行し、全PASSを確認する。夜間21:30相当は provisional、翌日以降の `generate` 内 backfill で confirmed という導線をテスト結果とともに記録する（朝通知だけで昇格するとは記録しない）。実測結果は `797 passed in 68.37s`。
+
+## Phase 3 — §C1〜§C3（表示と測定日同期）
+
+### Task C1/C2: ⏳表示の統一
+
+**Files:** `src/kaizenlog/verdict.py`、`src/kaizenlog/memory.py`、`tests/test_round36_verdict_stage.py`。
+
+- [x] provisional PASS/FAIL の suffix、confirmed PASS/FAIL の既存文字列完全一致、`format_today_action_line` の `⏳暫定`、`_verdict_block_line` の `[⏳暫定PASS/FAIL]`、confirmed の従来表示、`_action_line` の暫定タグを先に文字列固定する。
+- [x] `format_verdict_suffix` の provisional 分岐を confirmed 分岐より先に追加し、`parse_pass_condition` の演算子から `目標N以下/以上` を決定論で作る。判定日は `entry.verdict_date` の `M/Dの日締め後に確定` とする。confirmed 文言・`_VERDICT_SUFFIX_RE` は変更しない。
+- [x] `memory.py` の `format_today_action_line`、`_verdict_block_line`、`render_actions_section` の `_action_line` へ stage表示を接続する。暫定PASSは `pass_achieved` に入れず、`still_open` の厳密な補集合へ残すため両条件を同時に confirmed-only へ変更する。
+- [x] C1/C2 focused test と既存 `tests/test_round10.py`、`tests/test_round12_learning_loop.py`、`tests/test_ux_round8.py` を実行する。新規16件と既存回帰は全PASS。
+
+### Task C3: 測定日 ACTIONS の再同期
+
+**Files:** `src/kaizenlog/verdict.py`、`src/kaizenlog/cli.py`、`tests/test_round36_verdict_stage.py`。
+
+- [x] 一時日誌fixtureで、ACTIONS marker 内に候補上限外・`[x]`済み・📌✅79 の対象ID、Activity相当の210を用意する。判定更新後に同じIDの suffix だけが❌210へ変わり、checkbox・他行・marker外bytesが同一になる RED テストを追加する。marker無しノート、対象IDがmarker内に無いノート、古い日付は書かれないことも固定する。
+- [x] `apply_verdicts_to_actions_note(content, updates)` を `verdict.py` に追加する。`ACTIONS_MARKER` の start/end が存在する本文だけを対象に、既存行の KZN ID と既存 checkbox を保持し、行末の既存 handoff tag だけを `format_action_verdict_tag` で置換する。`splitlines(keepends=True)` と文字列sliceで marker外・改行コード・末尾空白を保つ。
+- [x] CLI側に `verdict_date` ごとの変更集合を処理する `_resync_measurement_day_actions` を追加する。`judged` と `bf.judged` をID後勝ちで統合し、測定日が `today - ACTIONS_HANDOFF_DAYS` 以上かつ `today` 以下、ノート存在、ACTIONS marker存在、対象ID出現の全ガードを満たす場合のみ `atomic_write_text` する。`backfill` の `as_of` を測定日として使わない。
+- [x] `cmd_generate` で judge/backfill のノート更新後、翌日 `target=day+1` の handoff 前に測定日再同期を呼ぶ。D日に暫定判定、D+1日にbackfill確定を行ったfixtureでDだけが更新され、D+1へ誤追記されないことを確認する。
+
+### Phase 3 ゲート
+
+- [x] `./.venv/Scripts/python.exe -m pytest -q` を実行し、全PASSを確認する。実測結果は `802 passed in 67.73s`。
+- [x] C3 fixtureの前後bytesを比較し、marker外が完全一致、ACTIONS内の非対象行と checkbox が一致することをテストで固定した（`tests/test_round36_verdict_stage.py` の C3 3テスト）。
+
+## Phase 4 — §D1〜§D2（confirmed-only 消費と文書）
+
+### Task D1: 学習・週次・通知・風化の消費境界
+
+**Files:** `src/kaizenlog/memory.py`、`src/kaizenlog/weekly_context.py`、`src/kaizenlog/decay.py`、`src/kaizenlog/cli.py`、`tests/test_round36_verdict_stage.py`。
+
+- [x] provisional のみの台帳 fixtureで `compute_action_stats().judged == 0`、`metric_pass_rates() == []`、`consecutive_fail_actions() == []`、`detect_kzn_decay() == []`、weeklyの判定/PASS数=0、朝通知の確定数=0、CLI一覧は `⏳` 表示になる RED テストを作る。confirmedへ置換した同じfixtureでは既存の計上が戻ることも追加する。
+- [x] `compute_action_stats`、`metric_pass_rates`、`_consecutive_metric_fails`、`consecutive_fail_actions` の verdict判定へ `e.verdict_stage == "confirmed"` を追加する。provisionalは提案/未完了表示から消さず、判定系カウントだけ除外する。
+- [x] `decay.detect_kzn_decay` の候補条件、`weekly_context.render_weekly_context` の judged/passed、`cli.build_morning_notification` の done/undone PASS 条件へ confirmed-only を追加する。`summarize_for_prompt` の provisional表示を残す場合は `_verdict_block_line` の `⏳` を使い、PASS/FAIL確定数へ入れない。
+- [x] D1 focused test、`tests/test_action_stats.py`、`tests/test_round15_learning_loop_tweaks.py`、`tests/test_round29_decay.py`、`tests/test_ux_round8.py` を実行する（57 passed）。
+
+### Task D2: 新規回帰テストとドキュメント
+
+**Files:** `tests/test_round36_verdict_stage.py`、`docs/USAGE.md`、`docs/HANDOFF.md`。
+
+- [x] 新規テストへ §A1/A3、§B1/B2/B3、§C1/C2/C3、§D1 の各契約を少なくとも1件ずつ含め、confirmed suffix の文字列はスナップショットで固定する。存在しない機構を受け入れ条件へ置かない。
+- [x] `docs/USAGE.md` に「夜間21:30の判定は⏳暫定、翌日以降の generate 内 backfill（`as_of` が測定日より後になる実行）で確定に昇格する」を追記する。朝の実行で昇格すると書かない。
+- [x] `docs/HANDOFF.md` に「当日中の判定は確定しない」を追記し、Phase 0 §Z6の廃止記録と重複しない短い既知の限界として保つ。
+
+## 最終検証と報告
+
+- [x] `./.venv/Scripts/python.exe -m pytest --collect-only -q -p no:cacheprovider` で最終収集数を取得し、固定値705ではなく実測値を使う。実測は `803 tests collected`。
+- [x] `./.venv/Scripts/python.exe -m pytest -q`、`./.venv/Scripts/python.exe -m compileall -q src`、`git diff --check` を実行し、出力と終了コードを読む。全テストは `803 passed in 68.28s`。
+- [x] `git diff --name-only` と `git status --short` を開始時のdirty baselineと比較し、プロンプト自体、外部データ、DB、リモート、コミットに変更がないことを確認する。既存dirty変更は保全し、今回の src/tests/docs/PLAN 変更を追加した。
+- [x] 実台帳・実ボールト・ActivityWatchを使う実挙動確認は未承認のため行わない。合成fixtureで確認できた範囲だけを✅、実データ確認は⚠️/Unknownとして報告する。
+- [x] 最終報告は §Z1〜§Z6、§A1〜§A4、§B1〜§B3、§C1〜§C3、§D1〜§D2 ごとに `✅/⚠️/❌`、`file:line`、追加テスト名を列挙し、Phaseごとの全PASS件数、実データ未実施、commit/push未実施を明記する。

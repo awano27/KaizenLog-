@@ -26,7 +26,7 @@ from .focus import InputStats
 from .memory import ACTIONS_HANDOFF_DAYS, ID_PATTERN, MemoryEntry
 from .report import DailySummary
 from .stats import load_stats
-from .vault import ADVICE_MARKER
+from .vault import ACTIONS_MARKER, ADVICE_MARKER
 
 # プレースホルダキー自体は指標名として採用しない
 _PLACEHOLDER_METRICS = {
@@ -39,6 +39,13 @@ _MACHINE_PASS_RE = re.compile(r"^\S+\s*(<=|>=|<|>|==?)\s*[\d.]+$")
 
 # 判定 suffix（行末）の置換用
 _VERDICT_SUFFIX_RE = re.compile(r"｜判定:.*$")
+
+# ACTIONS の既存転記タグ（行末の括弧内）だけを置換する。
+# 行末の空白と改行はキャプチャして、ノートの改行・末尾空白を保持する。
+_ACTIONS_VERDICT_TAG_RE = re.compile(
+    r"（\d{1,2}/\d{1,2}提案(?:・判定 [^\r\n]*?)?）"
+    r"(?P<trailing>[ \t]*)(?P<newline>\r\n|\n|\r|$)"
+)
 
 
 def is_known_metric(metric: str) -> bool:
@@ -146,11 +153,16 @@ def judge_entries(
     judged_day: date,
     retry_chains: int | None = None,
     known_categories: set[str] | frozenset[str] | None = None,
+    *,
+    today: date | None = None,
 ) -> list[MemoryEntry]:
     """提案日のエントリを判定し、差分 MemoryEntry だけを返す。
 
-    再実行で同じ verdict なら空（JSONL 増殖防止）。status/done_date は保持。
+    再実行で同じ verdict/stage なら空（JSONL 増殖防止）。status/done_date は保持。
     compute_metric が None の行はスキップ（watcher 未導入など）。
+
+    today を渡した場合、測定日当日は provisional、翌日以降は confirmed。
+    省略時は既存呼び出しの後方互換として confirmed。
     """
     proposal = proposal_day.isoformat()
     judged = judged_day.isoformat()
@@ -177,12 +189,24 @@ def judge_entries(
             continue
         met = target_met(value, op, target_value)
         verdict = "pass" if met else "fail"
+        calculated_stage = (
+            "confirmed"
+            if today is None or judged_day < today
+            else "provisional"
+        )
+        # 既に確定した同じID・測定日の行は、途中値の再判定で降格させない。
+        stage = (
+            "confirmed"
+            if entry.verdict and entry.verdict_stage == "confirmed"
+            else calculated_stage
+        )
         # 同一なら差分なし（浮動小数は isclose）
         if (
             entry.verdict == verdict
             and entry.verdict_date == judged
             and entry.verdict_value is not None
             and math.isclose(entry.verdict_value, value, rel_tol=1e-9, abs_tol=1e-9)
+            and entry.verdict_stage == stage
         ):
             continue
         out.append(
@@ -195,6 +219,8 @@ def judge_entries(
                 verdict=verdict,
                 verdict_value=value,
                 verdict_date=judged,
+                skip_reason=entry.skip_reason,
+                verdict_stage=stage,
             )
         )
     return out
@@ -268,7 +294,10 @@ def backfill_verdicts(
         return stats_cache[key]
 
     for entry in entries:
-        if entry.verdict in ("pass", "fail"):
+        if (
+            entry.verdict in ("pass", "fail")
+            and entry.verdict_stage == "confirmed"
+        ):
             continue
         if entry.status not in ("proposed", "done"):
             continue
@@ -308,11 +337,13 @@ def backfill_verdicts(
         met = target_met(value, op, target_value)
         verdict = "pass" if met else "fail"
         judged_day = measure_day.isoformat()
+        stage = "confirmed" if measure_day < as_of else "provisional"
         if (
             entry.verdict == verdict
             and entry.verdict_date == judged_day
             and entry.verdict_value is not None
             and math.isclose(entry.verdict_value, value, rel_tol=1e-9, abs_tol=1e-9)
+            and entry.verdict_stage == stage
         ):
             continue
         result.judged.append(
@@ -325,6 +356,8 @@ def backfill_verdicts(
                 verdict=verdict,
                 verdict_value=value,
                 verdict_date=judged_day,
+                skip_reason=entry.skip_reason,
+                verdict_stage=stage,
             )
         )
         result.judged_count += 1
@@ -336,6 +369,26 @@ def format_verdict_suffix(entry: MemoryEntry) -> str:
     icon = "✅" if entry.verdict == "pass" else "❌"
     val = f"{entry.verdict_value:g}" if entry.verdict_value is not None else "?"
     parsed = parse_pass_condition(entry.action)
+    if entry.verdict_stage == "provisional" and entry.verdict in ("pass", "fail"):
+        if parsed is None or entry.verdict_value is None:
+            return f"｜判定: ⏳ 集計中（途中値{val}）"
+        _metric, op, target = parsed
+        target_value = float(target)
+        if op in ("<=", "<"):
+            target_text = f"{target_value:g}以下"
+        elif op in (">=", ">"):
+            target_text = f"{target_value:g}以上"
+        else:
+            target_text = f"{target_value:g}"
+        try:
+            judged_day = date.fromisoformat(entry.verdict_date or "")
+            judged_label = f"{judged_day.month}/{judged_day.day}"
+        except ValueError:
+            judged_label = "判定日不明"
+        return (
+            f"｜判定: ⏳ 集計中（途中値{val}・目標{target_text}・"
+            f"{judged_label}の日締め後に確定）"
+        )
     if (
         parsed is None
         or entry.verdict_value is None
@@ -360,6 +413,30 @@ def format_verdict_suffix(entry: MemoryEntry) -> str:
     if dist <= near_thr:
         return f"｜判定: ❌ あと一歩（実測{measured:g}/目標{t:g}）"
     return f"｜判定: ❌ 実測{measured:g}（目標{t:g}・あと{dist:g}）"
+
+
+def format_action_verdict_tag(entry: MemoryEntry) -> str:
+    """📌 ACTIONS 行の括弧内タグを、stageを含めて決定論で返す。"""
+    try:
+        proposal_day = date.fromisoformat(entry.date)
+        proposal_label = f"{proposal_day.month}/{proposal_day.day}"
+    except ValueError:
+        proposal_label = entry.date
+    if entry.verdict not in ("pass", "fail"):
+        return f"{proposal_label}提案"
+    val = f"{entry.verdict_value:g}" if entry.verdict_value is not None else "?"
+    if entry.verdict_stage == "provisional":
+        try:
+            judged_day = date.fromisoformat(entry.verdict_date or "")
+            judged_label = f"{judged_day.month}/{judged_day.day}"
+        except ValueError:
+            judged_label = "判定日不明"
+        return (
+            f"{proposal_label}提案・判定 ⏳ 集計中・途中値{val}・"
+            f"{judged_label}の日締め後に確定"
+        )
+    icon = "✅" if entry.verdict == "pass" else "❌"
+    return f"{proposal_label}提案・判定 {icon} 実測{val}"
 
 
 def apply_verdicts_to_advice_note(
@@ -408,3 +485,56 @@ def apply_verdicts_to_advice_note(
     if not new_body.endswith("\n"):
         new_body = new_body + "\n"
     return content[:body_start] + new_body + content[end_idx:]
+
+
+def apply_verdicts_to_actions_note(
+    content: str, judged: list[MemoryEntry]
+) -> str | None:
+    """既存 ACTIONS 区間の判定タグだけを、判定結果に合わせて更新する。
+
+    候補上限や現在の status では再抽出せず、既存区間に実在する同一IDの
+    行だけを対象にする。マーカー外と、チェック状態・アクション本文・
+    改行コードはそのまま保持し、対象行に既存の転記タグが無い場合は
+    fail-closed で変更しない。
+    """
+    by_id = {
+        entry.id: entry
+        for entry in judged
+        if entry.verdict in ("pass", "fail")
+    }
+    if not by_id:
+        return None
+
+    start_tag = f"<!-- {ACTIONS_MARKER}:start -->"
+    end_tag = f"<!-- {ACTIONS_MARKER}:end -->"
+    start_idx = content.find(start_tag)
+    end_idx = content.find(end_tag, start_idx + len(start_tag)) if start_idx >= 0 else -1
+    if start_idx < 0 or end_idx < 0:
+        return None
+
+    body_start = start_idx + len(start_tag)
+    body = content[body_start:end_idx]
+    changed = False
+    new_lines: list[str] = []
+    for line in body.splitlines(keepends=True):
+        id_match = ID_PATTERN.search(line)
+        if not id_match or id_match.group(0) not in by_id:
+            new_lines.append(line)
+            continue
+        tag_match = _ACTIONS_VERDICT_TAG_RE.search(line)
+        if tag_match is None:
+            new_lines.append(line)
+            continue
+        entry = by_id[id_match.group(0)]
+        replacement = (
+            f"（{format_action_verdict_tag(entry)}）"
+            f"{tag_match.group('trailing')}{tag_match.group('newline')}"
+        )
+        new_line = line[:tag_match.start()] + replacement + line[tag_match.end():]
+        if new_line != line:
+            changed = True
+        new_lines.append(new_line)
+
+    if not changed:
+        return None
+    return content[:body_start] + "".join(new_lines) + content[end_idx:]

@@ -197,6 +197,7 @@ def detect_kzn_decay(
         for e in entries
         if e.status == "done"
         and e.verdict == "pass"
+        and e.verdict_stage == "confirmed"
         and e.verdict_date
         and e.verdict_date >= pass_start
         and e.verdict_date <= as_of.isoformat()

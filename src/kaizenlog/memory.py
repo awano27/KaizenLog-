@@ -49,10 +49,20 @@ class MemoryEntry:
     verdict_value: float | None = None
     verdict_date: str | None = None  # 判定日 YYYY-MM-DD
     skip_reason: str | None = None  # status=skipped の理由（旧 JSONL は欠落 → None）
+    verdict_stage: str = "confirmed"  # provisional | confirmed（旧 JSONL の既定は confirmed）
 
 
 def _memory_file(memory_dir: Path) -> Path:
     return Path(memory_dir) / MEMORY_FILE
+
+
+def _normalize_verdict_stage(raw: object, *, key_present: bool) -> str:
+    """判定 stage を後方互換かつ fail-closed に正規化する。"""
+    if not key_present:
+        return "confirmed"
+    if raw in ("provisional", "confirmed"):
+        return raw
+    return "provisional"
 
 
 def load_entries(memory_dir: Path) -> list[MemoryEntry]:
@@ -84,6 +94,9 @@ def load_entries(memory_dir: Path) -> list[MemoryEntry]:
         skip_reason = d.get("skip_reason")
         if skip_reason is not None:
             skip_reason = str(skip_reason) or None
+        verdict_stage = _normalize_verdict_stage(
+            d.get("verdict_stage"), key_present="verdict_stage" in d
+        )
         entries[d["id"]] = MemoryEntry(
             id=d["id"],
             date=d.get("date", ""),
@@ -94,6 +107,7 @@ def load_entries(memory_dir: Path) -> list[MemoryEntry]:
             verdict_value=verdict_value,
             verdict_date=d.get("verdict_date"),
             skip_reason=skip_reason,
+            verdict_stage=verdict_stage,
         )
     return sorted(entries.values(), key=lambda e: e.id)
 
@@ -243,6 +257,7 @@ def update_statuses_from_note(
                     verdict_value=entry.verdict_value,
                     verdict_date=entry.verdict_date,
                     skip_reason=None,
+                    verdict_stage=entry.verdict_stage,
                 )
             )
         elif mark == "-":
@@ -263,6 +278,7 @@ def update_statuses_from_note(
                     verdict_value=entry.verdict_value,
                     verdict_date=entry.verdict_date,
                     skip_reason=reason,
+                    verdict_stage=entry.verdict_stage,
                 )
             )
     return updated
@@ -349,7 +365,7 @@ def compute_action_stats(
         proposed += 1
         if e.status == "done":
             done += 1
-        if e.verdict in ("pass", "fail"):
+        if e.verdict in ("pass", "fail") and e.verdict_stage == "confirmed":
             judged += 1
             if e.verdict == "pass":
                 passed += 1
@@ -497,7 +513,10 @@ def metric_pass_rates(
     for e in entries:
         if e.status != "done":
             continue
-        if e.verdict not in ("pass", "fail"):
+        if (
+            e.verdict not in ("pass", "fail")
+            or e.verdict_stage != "confirmed"
+        ):
             continue
         # 実行前判定は実行済みPASS率に混ぜない（§L1 と同層別）
         if not _execution_aligned_verdict(e):
@@ -547,6 +566,7 @@ def _consecutive_metric_fails(
         for e in entries
         if e.status == "done"
         and e.verdict in ("pass", "fail")
+        and e.verdict_stage == "confirmed"
         and window_start <= sort_key(e) <= today_iso
     ]
 
@@ -586,6 +606,7 @@ def consecutive_fail_actions(
         for e in entries
         if e.status == "done"
         and e.verdict in ("pass", "fail")
+        and e.verdict_stage == "confirmed"
         and window_start <= sort_key(e) <= today_iso
     ]
     judged.sort(key=sort_key, reverse=True)
@@ -740,7 +761,9 @@ def format_today_action_line(entry: MemoryEntry) -> str:
         md = f"{d.month}/{d.day}"
     except ValueError:
         md = entry.date
-    if entry.verdict == "pass":
+    if entry.verdict_stage == "provisional" and entry.verdict in ("pass", "fail"):
+        v = "⏳暫定"
+    elif entry.verdict == "pass":
         v = "✅PASS"
     elif entry.verdict == "fail":
         v = "❌FAIL"
@@ -789,6 +812,7 @@ def mark_entry_done(entry: MemoryEntry, done_date: date) -> MemoryEntry:
         verdict_value=entry.verdict_value,
         verdict_date=entry.verdict_date,
         skip_reason=None,
+        verdict_stage=entry.verdict_stage,
     )
 
 
@@ -806,6 +830,7 @@ def mark_entry_skipped(
         verdict_value=entry.verdict_value,
         verdict_date=entry.verdict_date,
         skip_reason=(reason or "").strip() or None,
+        verdict_stage=entry.verdict_stage,
     )
 
 
@@ -820,7 +845,10 @@ def _execution_label(entry: MemoryEntry) -> str:
 def _verdict_block_line(entry: MemoryEntry) -> str:
     from .verdict import parse_pass_condition
 
-    icon = "✅PASS" if entry.verdict == "pass" else "❌FAIL"
+    if entry.verdict_stage == "provisional" and entry.verdict in ("pass", "fail"):
+        icon = f"⏳暫定{'PASS' if entry.verdict == 'pass' else 'FAIL'}"
+    else:
+        icon = "✅PASS" if entry.verdict == "pass" else "❌FAIL"
     label = _execution_label(entry)
     action = " ".join(entry.action.split())[:60]
     cond = ""
@@ -1039,29 +1067,29 @@ def render_actions_section(
             )
 
     def _action_line(e: MemoryEntry, mark: str) -> str:
-        try:
-            d = date.fromisoformat(e.date)
-            md = f"{d.month}/{d.day}"
-        except ValueError:
-            md = e.date
-        if e.verdict:
-            icon = "✅" if e.verdict == "pass" else "❌"
-            val = f"{e.verdict_value:g}" if e.verdict_value is not None else "?"
-            tag = f"{md}提案・判定 {icon} 実測{val}"
-        else:
-            tag = f"{md}提案"
+        from .verdict import format_action_verdict_tag
+
+        tag = format_action_verdict_tag(e)
         return f"- [{mark}] {e.id}: {e.action}（{tag}）"
 
     # 判定✅かつ未チェックは未完了リストから分離
     pass_achieved = [
         e
         for e in buckets.recent
-        if e.verdict == "pass" and e.id not in checked_ids
+        if (
+            e.verdict == "pass"
+            and e.verdict_stage == "confirmed"
+            and e.id not in checked_ids
+        )
     ]
     still_open = [
         e
         for e in buckets.recent
-        if not (e.verdict == "pass" and e.id not in checked_ids)
+        if not (
+            e.verdict == "pass"
+            and e.verdict_stage == "confirmed"
+            and e.id not in checked_ids
+        )
     ]
     # 新しい提案から最大3件（決定論。優先度推定ではない）
     shown = still_open[:TODAY_CANDIDATE_CAP]

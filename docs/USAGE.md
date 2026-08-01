@@ -282,6 +282,8 @@ kaizenlog done KZN-…001      # ターミナルから消化（末尾でも可�
 
 内部のF-IDは保存前に除去されます。PASS/FAILは翌日の判定条件です。実行したら `[x]` にするか `kaizenlog done` するだけ。**完了として記録され（Kaizen Memory）、LLMは同じ提案を繰り返さなくなります**。
 
+判定のタイミング: 夜間21:30の判定は⏳暫定、翌日以降の `generate` 内 `backfill`（`as_of` が測定日より後になる実行）で確定に昇格します。
+
 Kaizen Memoryの実体は `Kaizen/Memory/suggestions.jsonl`（1行1提案、ID・状態・日付）です。設定の`[general] memory_dir`で保存先を変更できます。
 
 ### 提案に納得したら実験にする（1コマンド）

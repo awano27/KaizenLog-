@@ -398,7 +398,7 @@ def test_generate_verdict_and_actions_handoff(tmp_path, monkeypatch):
     prev_text = (daily / f"{proposal.isoformat()}.md").read_text(encoding="utf-8")
     assert "handwritten" in prev_text
     advice = extract_section(prev_text, ADVICE_MARKER)
-    assert "｜判定:" in advice and "実測30" in advice
+    assert "｜判定:" in advice and "⏳ 集計中" in advice and "途中値30" in advice
     assert prev_text.count("｜判定:") == 1
     assert "- [ ] KZN-20260724-001: outside" in prev_text
 

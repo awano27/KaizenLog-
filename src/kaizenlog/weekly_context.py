@@ -232,8 +232,16 @@ def render_weekly_context(
     ]
     proposed = len(week_entries)
     done = sum(1 for e in week_entries if e.status == "done")
-    judged = sum(1 for e in week_entries if e.verdict in ("pass", "fail"))
-    passed = sum(1 for e in week_entries if e.verdict == "pass")
+    judged = sum(
+        1
+        for e in week_entries
+        if e.verdict in ("pass", "fail") and e.verdict_stage == "confirmed"
+    )
+    passed = sum(
+        1
+        for e in week_entries
+        if e.verdict == "pass" and e.verdict_stage == "confirmed"
+    )
     open_list = [e for e in week_entries if e.status == "proposed"]
     done_rate = f"{round(100 * done / proposed)}%" if proposed else "-"
     pass_rate = f"{round(100 * passed / judged)}%" if judged else "-"

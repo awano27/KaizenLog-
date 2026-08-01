@@ -137,6 +137,7 @@ from .vault import (
     extract_section,
 )
 from .verdict import (
+    apply_verdicts_to_actions_note,
     apply_verdicts_to_advice_note,
     backfill_verdicts,
     judge_entries,
@@ -471,6 +472,7 @@ def cmd_generate(
         memory_entries, proposal_day, summary, ai_sessions, input_stats, day,
         retry_chains=retry_chain_count,
         known_categories=known_cats,
+        today=datetime.now(ZoneInfo(cfg.timezone)).date(),
     )
     if skip_verdict_ids:
         judged = [e for e in judged if e.id not in skip_verdict_ids]
@@ -481,10 +483,12 @@ def cmd_generate(
             if not parsed:
                 continue
             metric, op, target_value = parsed
-            mark = "✅" if entry.verdict == "pass" else "❌"
+            provisional = entry.verdict_stage == "provisional"
+            mark = "⏳" if provisional else ("✅" if entry.verdict == "pass" else "❌")
+            label = "途中値" if provisional else "実測"
             print(
                 f"🧪 アクション判定: {entry.id} {mark}"
-                f"（実測 {entry.verdict_value:g} / 目標 {metric} {op} {target_value:g}）"
+                f"（{label} {entry.verdict_value:g} / 目標 {metric} {op} {target_value:g}）"
             )
         prev_note = store.read(proposal_day)
         if prev_note is not None:
@@ -519,10 +523,12 @@ def cmd_generate(
         append_entries(cfg.memory_path, bf.judged)
         for entry in bf.judged:
             by_id[entry.id] = entry
-            mark = "✅" if entry.verdict == "pass" else "❌"
+            provisional = entry.verdict_stage == "provisional"
+            mark = "⏳" if provisional else ("✅" if entry.verdict == "pass" else "❌")
+            label = "途中値" if provisional else "実測"
             print(
                 f"🧪 バックフィル判定: {entry.id} {mark}"
-                f"（実測 {entry.verdict_value:g} / 判定日 {entry.verdict_date}）"
+                f"（{label} {entry.verdict_value:g} / 判定日 {entry.verdict_date}）"
             )
             # 提案日ノートへ注記（冪等）
             try:
@@ -535,9 +541,65 @@ def cmd_generate(
                 if updated is not None:
                     atomic_write_text(store.path_for(prop_day), updated)
 
+    # C3: 判定結果が更新された測定日自身の ACTIONS を再同期する。
+    # backfill の as_of（実行日）ではなく各 entry.verdict_date をキーにする。
+    _resync_measurement_day_actions(
+        cfg,
+        store,
+        [*judged, *bf.judged],
+        today=datetime.now(ZoneInfo(cfg.timezone)).date(),
+    )
+
     # A2: 翌日ノートへ未完了アクションを転記（backfill で過去日を汚さない）
     _write_actions_handoff(cfg, store, day, list(by_id.values()))
     return path
+
+
+def _resync_measurement_day_actions(
+    cfg: Config,
+    store: DailyNoteStore,
+    updates: list,
+    *,
+    today: date,
+) -> None:
+    """判定が更新された測定日ノートの既存 ACTIONS だけを再同期する。
+
+    過去ノートへ新しい区間を作らず、直近の handoff 窓内にある既存区間の
+    対象 IDだけを更新する。複数経路の同一IDは後勝ちにして、JSONLの表示
+    契約（同一ID後勝ち）と揃える。
+    """
+    latest_by_id = {entry.id: entry for entry in updates if entry.id}
+    if not latest_by_id:
+        return
+    start_tag = f"<!-- {ACTIONS_MARKER}:start -->"
+    end_tag = f"<!-- {ACTIONS_MARKER}:end -->"
+    window_start = today - timedelta(days=ACTIONS_HANDOFF_DAYS)
+    by_measurement_day: dict[date, list] = {}
+    for entry in latest_by_id.values():
+        if entry.verdict not in ("pass", "fail") or not entry.verdict_date:
+            continue
+        try:
+            measurement_day = date.fromisoformat(entry.verdict_date)
+        except ValueError:
+            continue
+        if measurement_day < window_start or measurement_day > today:
+            continue
+        by_measurement_day.setdefault(measurement_day, []).append(entry)
+
+    for measurement_day, day_updates in sorted(by_measurement_day.items()):
+        note = store.read(measurement_day)
+        if note is None:
+            continue
+        start_idx = note.find(start_tag)
+        end_idx = note.find(end_tag, start_idx + len(start_tag)) if start_idx >= 0 else -1
+        if start_idx < 0 or end_idx < 0:
+            continue
+        updated = apply_verdicts_to_actions_note(note, day_updates)
+        if updated is None:
+            continue
+        path = store.path_for(measurement_day)
+        atomic_write_text(path, updated)
+        print(f"📌 判定日 ACTIONS を再同期しました: {path}")
 
 
 def _write_actions_handoff(
@@ -686,6 +748,7 @@ def build_morning_notification(
         if e.status == "done"
         and e.verdict_date == yday
         and e.verdict == "pass"
+        and e.verdict_stage == "confirmed"
     )
     done_fail = sum(
         1
@@ -693,6 +756,7 @@ def build_morning_notification(
         if e.status == "done"
         and e.verdict_date == yday
         and e.verdict == "fail"
+        and e.verdict_stage == "confirmed"
     )
     undone_pass = sum(
         1
@@ -700,6 +764,7 @@ def build_morning_notification(
         if e.status == "proposed"
         and e.verdict_date == yday
         and e.verdict == "pass"
+        and e.verdict_stage == "confirmed"
     )
     parts: list[str] = []
     streaks = compute_streaks(entries, today)
