@@ -124,9 +124,8 @@ def build_digest(
     if open_entries and redactor is not None:
         latest = sorted(open_entries, key=lambda e: e.id, reverse=True)[0]
         body = " ".join((latest.action or "").split())
-        snippet = body[:40]
-        if len(body) > 40:
-            snippet = snippet + "…"
+        # §G3: 上限40字（40字ちょうどは無変換、超は39字+…）
+        snippet = body if len(body) <= 40 else body[:39] + "…"
         snippet = redactor(snippet)
         if snippet:
             lines.append(f"- 今日の1手: {latest.id} {snippet}")

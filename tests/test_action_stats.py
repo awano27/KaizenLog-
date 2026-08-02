@@ -244,13 +244,19 @@ def test_render_action_stats_line_with_and_without_proposals():
     )
     line = render_action_stats_line(filled)
     assert "提案 12件" in line
-    assert "消化 5件（42%）" in line
+    # 第43弾 §R2: 内部用語を廃し平文
+    assert "チェック完了 5件（42%）" in line
     assert "スキップ 1件" in line
-    assert "実行済みPASS" in line
-    assert "未実行のままPASS到達 2件" in line
+    assert "チェック済みで指標達成 3件" in line
+    assert "チェックなしで指標達成 2件" in line
+    assert "消化" not in line
+    assert "実行済みPASS" not in line
+    assert "未実行のままPASS到達" not in line
 
     no_judge = ActionStats(window_days=14, proposed=3, done=0, judged=0, passed=0)
     line2 = render_action_stats_line(no_judge)
-    assert "消化 0件（0%）" in line2
-    assert "実行済みPASS 0件" in line2
-    assert "実行済みPASS 0件（-）" not in line2
+    assert "チェック完了 0件（0%）" in line2
+    assert "チェック済みで指標達成 0件" in line2
+    assert "実行済みPASS" not in line2
+    # 判定ゼロ時は達成率を出さない（pass_rate=None に「（-）」を付けない保証）
+    assert "チェック済みで指標達成 0件（-）" not in line2

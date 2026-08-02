@@ -51,9 +51,16 @@ Windows のPC作業を ActivityWatch + AI CLIセッションログから自動�
 | 40 | **第38弾レビュー残件**: digest redactor ガード撤去・git root 正規化・known_categories 伝搬・卒業日境界・変異テスト強化 |
 | 41 | **日誌可読性の抜本改善**(実日誌2026-08-02レビュー起点): アクション2行平文化(描画のみ・台帳契約不変・演算子和訳)・サマリ行平文化・タイムライン×AIセッション時間突合(ツール適合・（ログなし）フォールバック)・未計測分数の表記正規化・outcome_git subjects取得+stats永続化・日報ドラフトのプロジェクト事実化(業務=digests集約/成果=コミットsubjects/明日=未チェックKZN) |
 
-テスト基準線: **pytest 902 passed**（2026-08-02 第41弾適用後・実行結果を正とする。`./.venv/Scripts/python.exe -m pytest -q`）。
-**HEAD**: `99df32e`(第37弾までコミット)。第38〜41弾はワーキングツリー適用済み・未コミット。
-既知の残存(第41弾レビュー): 「🤖 AIコーチ」節の「明日の最小アクション」には台帳の機械構文(`｜PASS:…`)がそのまま残る(§A1の平文化は📌区間のみ)。memory.py の humanize_action_body を advise 側描画にも適用するのが次弾候補。タイムラインのツール適合は source→tool_class 写像方式(仕様の project 判定と現行 source 語彙では等価・不一致時は（ログなし）側に倒れる fail-safe)。
+| 43 | **第41弾レビュー残件**: Kaizen節アクションの平文化(`humanize_advice_markdown_actions`・ID付与後/書込前・台帳は機械構文のまま・冪等)・status文言の平文化・日報の40字切詰めを39字+「…」へ |
+
+| 44 | **過去ノートの遡及平文化**(実装: Grok): `kaizenlog rehumanize`(既定dry-run・`--write`/`--days`/`--date`・冪等・タイムスタンプ付きバックアップ・変換/書込の失敗は当該ファイルのみスキップして続行)・ADVICE/ACTIONS 両区間対応(判定タグ保持・変換不能行は無変換)・digest/aiwork の切詰めを「結果が上限字数」規約へ統一 |
+
+テスト基準線: **pytest 923 passed**（2026-08-02 第44弾適用後・実行結果を正とする。`./.venv/Scripts/python.exe -m pytest -q`）。
+**HEAD**: `08587bb`(第38〜41弾までコミット)。第43〜44弾はワーキングツリー適用済み・未コミット。
+第42弾(screenpipe画面内容連携)は指示書のみで**未実装** — ユーザーのscreenpipe導入待ち(read-only 3エンドポイント・既定OFF・fail-closed設計)。
+**未実施の運用作業**: 過去ノートの遡及平文化は第44弾で実装済みだが、**実ボールトへの `rehumanize --write` はまだ実行していない**(dry-run で 7/26〜8/2 の8件が変更対象と確認済み・ユーザー実行待ち)。実行前に dry-run で差分を確認すること。バックアップは `<vault>/.kaizenlog/backup/rehumanize/<timestamp>/` に残る。
+設計メモ(第44弾): rehumanize の書込は `write_section` ではなく `upsert_section`+`atomic_write_text` の直呼び(ADVICE/ACTIONS の2区間を1回の atomic 書込にまとめるため)。区間APIを通すので区間外不可侵は保たれる(区間外バイト完全一致をテストと実挙動の両方で確認済み)。
+既知の残存: 平文化は `requires_daily_contract` 判定の外にあるため weekly/自作プロンプト経路のノートにも適用される(ノート側にPASS構文の消費者はゼロと第43弾§P0で確認済みのため無害)。タイムラインのツール適合は source→tool_class 写像方式(仕様の project 判定と現行 source 語彙では等価・不一致時は（ログなし）側に倒れる fail-safe)。不正な `--date` は全コマンド共通で `ValueError` の生トレースになる(既存仕様・rehumanize も踏襲)。
 既知の限界(第33弾): retry系レッスンの効果指標は AISession に retry_chains 属性が無いため `is_fragmented`(細切れセッション)をプロキシに使用(handoffledger.py:278-294 にコメント明示)。UserPrompt.project でのプロンプトフィルタ+detect_retry_chains による真のリポジトリ別リトライ計測が次弾候補。
 既知のグレーゾーン: guard の `_has_successful_tool_result` は content 文字列ヒューリスティック併用のため「"no errors found" のような成功文」を成功と判定せず streak がリセットされない(発火過剰側の偏り・実害小。既知課題「Codexツールエラー判定の文字列ヒューリスティック」と同系)。
 既知の潜在バグ(第29弾レビューで発見・別タスク起票済み): `retry_chain_excerpts`/`session_title_from_text` が40字切詰め後にredactするため、秘匿パターンが境界をまたぐと一部漏れる余地(既存コード由来・顕在化例なし)。

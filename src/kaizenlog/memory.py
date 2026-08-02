@@ -697,27 +697,27 @@ def _pct_label(rate: float | None) -> str:
 def render_action_stats_line(
     stats: ActionStats, *, streaks: Streaks | None = None
 ) -> str:
-    """status コマンド用の1行サマリ。主指標は実行済みPASS率。"""
+    """status コマンド用の1行サマリ。数値は compute_action_stats と同じ。文言のみ平文。"""
     label = f"📈 Kaizen実績（直近{stats.window_days}日）"
     if stats.proposed == 0 and stats.skipped == 0:
         return f"{label}: まだ提案がありません"
     skip_part = f" / スキップ {stats.skipped}件" if stats.skipped else ""
+    # §R2: 内部用語（消化 / 実行済みPASS / 未実行のままPASS到達）を出さない
     undone_part = (
-        f"（未実行のままPASS到達 {stats.undone_passed}件："
-        f"チェックなしで指標が目標値に達した提案）"
+        f" / うちチェックなしで指標達成 {stats.undone_passed}件"
         if stats.undone_passed > 0
         else ""
     )
     streak_part = ""
     if streaks is not None and (streaks.current > 0 or streaks.best > 0):
         streak_part = f" / 🔥{streaks.current}日（最長{streaks.best}）"
-    pass_part = f"実行済みPASS {stats.done_passed}件"
+    achieved_part = f"チェック済みで指標達成 {stats.done_passed}件"
     if stats.pass_rate is not None:
-        pass_part += f"（{_pct_label(stats.pass_rate)}）"
+        achieved_part += f"（{_pct_label(stats.pass_rate)}）"
     return (
-        f"{label}: 提案 {stats.proposed}件 / 消化 {stats.done}件"
+        f"{label}: 提案 {stats.proposed}件 / チェック完了 {stats.done}件"
         f"（{_pct_label(stats.done_rate)}）{skip_part}"
-        f" / {pass_part}{undone_part}{streak_part}"
+        f" / {achieved_part}{undone_part}{streak_part}"
     )
 
 
@@ -1421,6 +1421,189 @@ def format_action_display_lines(
         f"- [{mark}] {entry_id}: {body}",
         f"    - 効果指標: {effect}（{tag}）",
     ]
+
+
+def humanize_advice_markdown_actions(advice_md: str) -> str:
+    """ADVICE 読者向け本文のチェックボックス行を平文化する。
+
+    assign_action_ids の**後**・ノート書き込みの**前**に呼ぶこと。
+    台帳へ渡す action 文字列（機械構文）は触らない。
+    mechanism / falsifier / なぜ / 明日見る数字 のサブ行はそのまま保持。
+    ｜PASS: を含まない自由文行は無変換。
+    """
+    lines = advice_md.splitlines()
+    out: list[str] = []
+    in_action_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            in_action_section = (
+                ACTION_SECTION.removeprefix("### ") in stripped
+                or LEGACY_ACTION_SECTION.removeprefix("### ") in stripped
+            )
+            out.append(line)
+            continue
+        if not in_action_section:
+            out.append(line)
+            continue
+        m = _CHECKBOX_RE.match(line)
+        if not m:
+            # サブ行（効果指標以外の既存注記）はそのまま
+            out.append(line)
+            continue
+        mark = m.group(2)
+        rest = m.group(4).strip()
+        if not _PASS_SPLIT_RE.search(rest):
+            out.append(line)
+            continue
+        entry_id: str | None = None
+        action = rest
+        id_m = ID_PATTERN.match(rest)
+        if id_m is not None:
+            entry_id = id_m.group(0)
+            action = rest[id_m.end() :].lstrip(": ").strip()
+        else:
+            # "KZN-…: …" 以外の位置に ID がある場合は本文全体を action 扱い
+            id_any = ID_PATTERN.search(rest)
+            if id_any is not None and rest[id_any.end() :].lstrip().startswith(":"):
+                entry_id = id_any.group(0)
+                action = rest[id_any.end() :].lstrip(": ").strip()
+        effect = format_effect_metric_clause(action)
+        body = humanize_action_body(action)
+        if entry_id:
+            out.append(f"- [{mark}] {entry_id}: {body}")
+        else:
+            out.append(f"- [{mark}] {body}")
+        if effect is not None:
+            out.append(f"    - 効果指標: {effect}")
+    return "\n".join(out)
+
+
+# ACTIONS 区間の旧サマリ行（第41弾 §A2 以前）
+_SUMMARY_LOW_RE = re.compile(
+    r"^今週の消化\s*(\d+)件（提案\s*(\d+)件）"
+    r"(?:\s*/\s*スキップ\s*(\d+)件)?"
+    r"(?:\s*/\s*実行済みPASS\s*(\d+)件(?:（[^）]*）)?)?"
+    r"(?:（未実行のままPASS到達\s*(\d+)件[：:][^）]*）)?"
+    r"\s*$"
+)
+_SUMMARY_RATE_RE = re.compile(
+    r"^直近(\d+)日:\s*消化率\s*([0-9.]+%|-)\s*（(\d+)件中(\d+)件）"
+    r"(?:\s*/\s*スキップ\s*(\d+)件)?"
+    r"(?:\s*/\s*実行済みPASS\s*(\d+)件(?:（[^）]*）)?)?"
+    r"(?:（未実行のままPASS到達\s*(\d+)件[：:][^）]*）)?"
+    r"\s*$"
+)
+# 判定タグ: 行末の「（…提案…）」
+_TRAILING_PROPOSAL_TAG_RE = re.compile(r"（([^）]*提案[^）]*)）\s*$")
+
+
+_UNDONE_PASS_RE = re.compile(r"未実行のままPASS到達\s*(\d+)件")
+_SKIP_IN_LINE_RE = re.compile(r"スキップ\s*(\d+)件")
+
+
+def _humanize_actions_summary_line(line: str) -> str | None:
+    """旧サマリ行を §A2 平文へ。失敗時 None（無変換）。"""
+    text = line.strip()
+    undone_m = _UNDONE_PASS_RE.search(text)
+    undone = int(undone_m.group(1)) if undone_m else 0
+    skip_m = _SKIP_IN_LINE_RE.search(text)
+    skipped = int(skip_m.group(1)) if skip_m else 0
+
+    m = _SUMMARY_LOW_RE.match(text)
+    if m:
+        done, proposed = int(m.group(1)), int(m.group(2))
+        out = f"今週は{proposed}件提案し、チェック完了は{done}件。"
+        if skipped:
+            out += f"スキップは{skipped}件。"
+        if undone:
+            out += (
+                f"うち{undone}件はチェックなしで指標が目標に達しています"
+                f"（習慣化するなら下の「達成済み」からチェック）。"
+            )
+        return out
+    m = _SUMMARY_RATE_RE.match(text)
+    if m:
+        window = int(m.group(1))
+        rate = m.group(2)
+        proposed, done = int(m.group(3)), int(m.group(4))
+        out = (
+            f"直近{window}日は{proposed}件提案し、"
+            f"チェック完了は{done}件（完了率 {rate}）。"
+        )
+        if skipped:
+            out += f"スキップは{skipped}件。"
+        if undone:
+            out += (
+                f"うち{undone}件はチェックなしで指標が目標に達しています"
+                f"（習慣化するなら下の「達成済み」からチェック）。"
+            )
+        return out
+    return None
+
+
+def _humanize_actions_checkbox_line(line: str) -> list[str] | None:
+    """ACTIONS の機械構文チェック行を2行平文へ。失敗時 None。
+
+    判定タグ（行末の「（…提案…）」）は効果指標行末尾に保持する。
+    """
+    m = _CHECKBOX_RE.match(line)
+    if not m:
+        return None
+    mark = m.group(2)
+    rest = m.group(4).strip()
+    if not _PASS_SPLIT_RE.search(rest):
+        return None
+    id_m = ID_PATTERN.match(rest)
+    if id_m is None:
+        return None
+    entry_id = id_m.group(0)
+    action = rest[id_m.end() :].lstrip(": ").strip()
+    tag = ""
+    tag_m = _TRAILING_PROPOSAL_TAG_RE.search(action)
+    if tag_m is not None:
+        # FAIL 以降に付くタグのみ採用（PASS 注記の括弧と混同しない）
+        fail_m = _FAIL_SPLIT_RE.search(action)
+        if fail_m is not None and tag_m.start() >= fail_m.end():
+            tag = tag_m.group(1)
+            action = action[: tag_m.start()].rstrip()
+        else:
+            # タグ位置が想定外 → 無変換
+            return None
+    effect = format_effect_metric_clause(action)
+    if effect is None:
+        return None
+    body = humanize_action_body(action)
+    if tag:
+        return [
+            f"- [{mark}] {entry_id}: {body}",
+            f"    - 効果指標: {effect}（{tag}）",
+        ]
+    return [
+        f"- [{mark}] {entry_id}: {body}",
+        f"    - 効果指標: {effect}",
+    ]
+
+
+def humanize_actions_section_markdown(actions_md: str) -> str:
+    """📌 ACTIONS 区間本文の旧形式行を平文化する（冪等・不明行は無変換）。"""
+    lines = actions_md.splitlines()
+    out: list[str] = []
+    for line in lines:
+        # サマリ行
+        if "消化" in line or "実行済みPASS" in line or "未実行のままPASS到達" in line:
+            repl = _humanize_actions_summary_line(line)
+            if repl is not None:
+                out.append(repl)
+                continue
+        # チェックボックス機械構文
+        if _CHECKBOX_RE.match(line) and _PASS_SPLIT_RE.search(line):
+            repl_lines = _humanize_actions_checkbox_line(line)
+            if repl_lines is not None:
+                out.extend(repl_lines)
+                continue
+        out.append(line)
+    return "\n".join(out)
 
 
 def render_actions_section(

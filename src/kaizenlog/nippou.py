@@ -337,8 +337,9 @@ def generate_nippou_deterministic(
         tomorrow.append(f"- {t}")
     for kid, body in list(open_kzn_actions or [])[:2]:
         snippet = " ".join(str(body).split())
+        # §R3: 40字超は 39字 +「…」（無印切詰めをやめる）
         if len(snippet) > 40:
-            snippet = snippet[:40]
+            snippet = snippet[:39] + "…"
         tomorrow.append(f"- {kid}: {snippet}")
     if not tomorrow:
         tomorrow.append("- 引き続き上記対応")

@@ -85,6 +85,11 @@ def test_success_commits_status_and_new_actions_together(monkeypatch, tmp_path):
     assert "KZN-20260721-003: 調査リンク" in note
     assert "[F3]" not in note
     assert "[F9]" not in note
+    # 第43弾 §R1: ノート本文に機械構文を出さない（cli の平文化呼び出し位置の回帰ガード）
+    assert "｜PASS:" not in note
+    assert "｜FAIL:" not in note
+    # 台帳側は機械判定に使うため機械構文のまま
+    assert "｜PASS:" in entries["KZN-20260721-002"].action
 
 
 def test_note_write_failure_persists_completion_but_not_new_actions(monkeypatch, tmp_path):

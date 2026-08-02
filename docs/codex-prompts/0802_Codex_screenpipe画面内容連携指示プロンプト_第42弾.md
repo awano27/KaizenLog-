@@ -30,6 +30,34 @@ screenpipe（https://github.com/screenpipe/screenpipe）は画面を常時ロー
 
 **使用禁止エンドポイント/型（恒久）**: `content_type=input`（キー入力由来）・`content_type=memory`・`/raw_sql`・`/add`・削除/設定系すべて・`include_cloud=true`。使用可能は `GET /health` `GET /search` `GET /activity-summary` の3つのみ（read-only）。
 
+**API 認証は必須（2026-08-02 実機で検証・v0.4.35）**: `--api-auth` が既定で有効。**localhost からでも `/search` は 403 になる**（公式FAQ の "non-localhost only" という記述は現行版の挙動と一致しない）。実測結果:
+
+| 方式 | 結果 |
+|---|---|
+| ヘッダなし | 403 Forbidden |
+| `Authorization: Bearer <token>` | **200 OK** |
+| `X-API-Key: <token>` | 403 |
+| `?api_key=` クエリ | 403 |
+
+- `GET /health` だけは認証なしで 200 が返る（疎通確認には使える）。
+- トークンは `screenpipe auth token` で取得できる短い文字列。**トークンをコード・テスト・指示書・ログに直書きすることを禁止**する。設定 `[screenpipe] api_key_env = "SCREENPIPE_API_KEY"`（既定）で環境変数名だけを持ち、値は実行時に `os.environ` から読む。未設定なら「未設定」として disabled 扱い（doctor に表示）。
+- 403 は再試行せず fail-closed（空リスト＋警告1行）。doctor に `screenpipe: 認証エラー（SCREENPIPE_API_KEY を確認）` と出す。
+
+**応答形状は入れ子で確定**: `data[i]` は `{"type": "OCR"|"UI", "content": {...}}`。`content` のキーは `app_name, browser_url, file_path, frame_name, id, offset_index, text, timestamp, window_name`（UI は加えて `initial_traversal_at`）。フラット形は現行版では返らないが、防御的に両対応にしておくこと。
+
+**実機のデータ特性（2026-08-02・約2時間の実測。設計の前提を訂正する）**:
+- 件数（14:00以降）: **OCR 872件 / accessibility 864件 / audio 175件**。
+- **本文が読めるのは OCR の方**。accessibility（`elements` 14万件）は平均19〜25字の UI 部品が大半で、Electron アプリ（ChatGPT / Claude デスクトップ）では会話本文が取れず、ウィンドウ枠・メニュー・ツールチップばかりが上位に来る（実測で確認）。
+- → **§S2 の照会順を「OCR 優先・accessibility 併用」に変更する**（当初の「accessibility 優先・OCR フォールバック」は誤り）。両方取得して長い方を採る実装でもよい。
+- OCR の実際の出力例（claude.exe）: 「SHORT_RECORD_MIN_MINUTES = 120.0 の単一定数、120 リテラルの重複ゼロ。判定は呼び出し側（cli）…」— **画面に表示されていた本文がそのまま読める**。
+- OCR のノイズ: ①ウィンドウ枠の定型語（`最小化 復元 閉じる` `ファイル 編集 表示` `ターミナルで実行` `コードをコピー`）が毎フレーム先頭に付く ②日本語が全角スペースで分かち書きされる誤認識（`バ ッ ク グ ラ ウ ン ド`）③`エ`→`工` のような字形誤認 ④PII 除去による `[URL_WITH_CREDENTIALS]` プレースホルダ。§S3 の正規化でこの4種を必ず落とすこと（ひらがな/カタカナ/漢字の間の単独スペースは詰める）。
+- 日本語の全文検索（`q=`）は不安定（`q=KaizenLog` は503件ヒットするが `q=日誌` は0件）。**`q` による絞り込みに依存せず、時間範囲＋app_name で取得してからローカルで処理すること**。
+
+**自己参照の除外（重要・第25弾と同種の問題）**: KaizenLog の開発は Claude Code / ターミナル上で行われるため、**KaizenLog 自身の画面・この指示書・生成された日誌の文面が OCR に載る**（実測で「第42弾を実装するか…」という assistant の発言がそのまま OCR 化されていた）。第25弾の自己計測除外と同じ思想で、次を必ず実装する:
+- 画面テキストの要約結果に `kaizenlog` `KZN-` `効果指標:` `📌 今日のアクション` 等、**自プロダクトの生成物と判別できる語が含まれる行は捨てる**（モジュール定数 `SELF_REFERENCE_PATTERNS` として持ち、テストで固定）。
+- vault のパス（`daily_notes_path`）や本リポジトリのパスが含まれる行も捨てる。
+- これを怠ると「日誌に書いた内容を翌日また日誌が読む」自己参照ループになる。
+
 ## 設計原則（遵守）
 
 - 画面テキストは**参考層**であり指標ではない。**KZN 提案の PASS/FAIL 指標に screenpipe 由来の値を使うことを禁止**する（第39弾レート契約を汚染しない）
@@ -48,6 +76,7 @@ screenpipe（https://github.com/screenpipe/screenpipe）は画面を常時ロー
 [screenpipe]
 enabled = false          # 既定 OFF
 base_url = "http://localhost:3030"
+api_key_env = "SCREENPIPE_API_KEY"  # 環境変数名だけを持つ（キー値は書かない）
 timeout_seconds = 3.0
 max_lines = 3            # 1ブロックあたり採用する画面テキスト行数
 max_excerpt_chars = 120  # 1行あたりの上限
@@ -55,28 +84,34 @@ max_excerpt_chars = 120  # 1行あたりの上限
 
 - `enabled=false` 時は import 副作用含め一切のネットワークアクセスが発生しないこと。
 - base_url は `http://localhost` / `http://127.0.0.1` 始まりのみ許可（それ以外は起動時に警告して disabled 扱い）。
+- `api_key_env` の環境変数が未設定なら disabled 扱い（`/health` だけは認証不要なので doctor の疎通表示には使ってよい）。**キー値を config.toml に書かせる設計にしないこと**（toml はリポジトリに入るため）。
 
 ## §S2 クライアントモジュール
 
 新規: `src/kaizenlog/screenpipe_source.py`（stdlib `urllib` のみ・新規依存禁止）
 
 - `ScreenText(ts_local, app_name, window_name, text, browser_url)` dataclass。
-- `class ScreenpipeClient`: `health() -> dict | None`、`search_text(app_name, start_local, end_local, min_length=8, limit=50) -> list[ScreenText]`。
-  - `content_type=accessibility` を先に照会し、0件なら `ocr` にフォールバック。
+- `class ScreenpipeClient`: `health() -> dict | None`、`search_text(app_name, start_local, end_local, min_length=25, limit=60) -> list[ScreenText]`。
+  - 全リクエストに `Authorization: Bearer <api_key_env の値>` を付ける（`/health` を除く）。
+  - **`content_type=ocr` を先に照会し、0件のときだけ `accessibility` を併用する**（実測で本文が読めるのは OCR 側。当初の逆順は誤り）。
   - `start_time`/`end_time` はローカル時刻→UTC ISO8601 に変換して送る。応答 timestamp は UTC→ローカルへ変換。
-  - タイムアウト・接続拒否・HTTP エラー・不正 JSON はすべて空リストを返し、**1回の generate 実行につき警告ログは最大1行**（ブロックごとに繰り返さない）。リトライなし。
+  - タイムアウト・接続拒否・HTTP エラー（403 含む）・不正 JSON はすべて空リストを返し、**1回の generate 実行につき警告ログは最大1行**（ブロックごとに繰り返さない）。リトライなし。
   - `max_content_length` を指定して応答サイズを抑制する。
 
 ## §S3 画面テキスト要約（決定論）
 
 同モジュール内 `summarize_screen_texts(items, max_lines, max_chars) -> list[str]`:
 
-1. `text` を行分割し正規化（連続空白圧縮・前後trim）
-2. 6文字未満の行・数字/記号のみの行を除外
-3. UI 定型句の除外リスト（例: "New chat", "Copy", "送信", "設定", "ファイル 編集 表示" 等。モジュール定数 `UI_CHROME_STOPLIST` として保持し、テストで固定）
-4. 残行を出現頻度×長さでランク付けし、重複（完全一致・包含）を除去して上位 `max_lines` 行
-5. 各行 `max_chars` で切詰め
+1. `text` を行分割（`\n` と連続2space以上の両方で分割。OCR は1要素に画面全体が入るため）し、前後 trim・連続空白圧縮
+2. **日本語の分かち書き誤認識を修復**: ひらがな/カタカナ/漢字に挟まれた単独スペースを詰める（`バ ッ ク グ ラ ウ ン ド` → `バックグラウンド`）
+3. 12文字未満の行・数字/記号のみの行を除外（実測に基づき当初の6文字から引き上げ）
+4. UI 定型句の除外（`UI_CHROME_STOPLIST` として定数化・テストで固定）。**実測で必ず出る語**: `最小化` `復元` `閉じる` `ファイル` `編集` `表示` `ヘルプ` `検索` `送信` `新しいチャット` `前へ` `進む` `ターミナルで実行` `コードをコピー` `サイドバーを非表示にする` `優先度でフィルター`
+5. PII プレースホルダ（`[URL_WITH_CREDENTIALS]` `[REDACTED]`）と `(truncated N chars)` マーカーを除去
+6. §「自己参照の除外」の `SELF_REFERENCE_PATTERNS` に当たる行を除外
+7. 残行を出現頻度×長さでランク付けし、重複（完全一致・包含）を除去して上位 `max_lines` 行
+8. 各行 `max_chars` で切詰め
 - 純関数・決定論・ネットワーク非依存で単体テスト可能にする。
+- テスト用 fixture には**実測で得た上記4種のノイズを必ず含める**こと（きれいな入力だけで通るテストは不可）。
 
 ## §S4 タイムライン「（ログなし）」補完
 

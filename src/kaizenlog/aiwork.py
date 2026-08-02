@@ -849,7 +849,8 @@ def retry_chain_excerpts(
         if not raw:
             excerpt = "（依頼本文が無いため省略）"
         else:
-            excerpt = raw[:30] + "…" if len(raw) > 30 else raw
+            # 切詰めは結果が上限字数になる規約（digest / nippou と統一）
+            excerpt = raw if len(raw) <= 30 else raw[:29] + "…"
             excerpt = _md_cell(excerpt)
         if count > 1:
             excerpt += f" ×{count}件"

@@ -65,6 +65,8 @@ from .memory import (
     compute_action_stats,
     compute_streaks,
     format_today_action_line,
+    humanize_actions_section_markdown,
+    humanize_advice_markdown_actions,
     load_entries,
     mark_entry_done,
     mark_entry_skipped,
@@ -1316,6 +1318,8 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         raise
     # 安定ID（KZN-YYYYMMDD-NNN）を付与して記録する
     advice_md, new_entries = assign_action_ids(advice_md, day, effective_entries)
+    # §R1: ノート向け平文化は ID 付与の後（台帳 new_entries.action は機械構文のまま）
+    advice_md = humanize_advice_markdown_actions(advice_md)
     path = store.write_section(day, ADVICE_MARKER, advice_md)
     append_entries(cfg.memory_path, new_entries)
     print(f"✅ 改善提案を書き込みました: {path}")
@@ -1735,6 +1739,203 @@ def _open_kzn_for_nippou(cfg: Config, day: date, content: str) -> list[tuple[str
     for e in open_list[:2]:
         out.append((e.id, humanize_action_body(e.action)))
     return out
+
+
+def cmd_rehumanize(
+    cfg: Config,
+    *,
+    days: int = 30,
+    only_date: date | None = None,
+    write: bool = False,
+    as_of: date | None = None,
+) -> int:
+    """過去ノートの ADVICE / ACTIONS 区間を決定論で平文化する。
+
+    既定は dry-run（書き込みなし）。--write 時のみバックアップ後に区間置換。
+    台帳・stats は触らない。
+    """
+    import shutil
+    from dataclasses import dataclass, field
+
+    from .vault import (
+        ADVICE_MARKER,
+        ACTIONS_MARKER,
+        DailyNoteStore,
+        atomic_write_text,
+        extract_section,
+        upsert_section,
+    )
+
+    tz = ZoneInfo(cfg.timezone)
+    today = as_of or datetime.now(tz).date()
+    if only_date is not None:
+        targets = [only_date]
+    else:
+        n = max(1, int(days))
+        targets = [today - timedelta(days=i) for i in range(n)]
+
+    store = DailyNoteStore(cfg.daily_notes_path)
+    backup_root: Path | None = None
+    if write:
+        stamp = datetime.now(tz).strftime("%Y%m%d-%H%M%S")
+        backup_root = Path(cfg.vault_dir) / ".kaizenlog" / "backup" / "rehumanize" / stamp
+
+    @dataclass
+    class _Counts:
+        target: int = 0
+        changed: int = 0
+        unchanged: int = 0
+        skipped: int = 0
+        skip_reasons: dict[str, int] = field(default_factory=dict)
+        examples: list[tuple[str, str, str]] = field(default_factory=list)
+
+        def skip(self, reason: str) -> None:
+            self.skipped += 1
+            self.skip_reasons[reason] = self.skip_reasons.get(reason, 0) + 1
+
+    counts = _Counts()
+    mode = "write" if write else "dry-run"
+    print(f"📝 rehumanize ({mode}) 対象日数={len(targets)}")
+
+    def _diff_lines(before: str, after: str) -> int:
+        bset = set(before.splitlines())
+        aset = set(after.splitlines())
+        return len(bset.symmetric_difference(aset))
+
+    for day in targets:
+        counts.target += 1
+        path = store.path_for(day)
+        if not path.is_file():
+            counts.skip("ファイルなし")
+            continue
+        try:
+            content = store.read(day)
+        except OSError as e:
+            counts.skip(f"読込失敗:{e}")
+            continue
+        if content is None:
+            counts.skip("ファイルなし")
+            continue
+
+        try:
+            advice = extract_section(content, ADVICE_MARKER)
+            actions = extract_section(content, ACTIONS_MARKER)
+            new_advice = (
+                humanize_advice_markdown_actions(advice) if advice is not None else None
+            )
+            new_actions = (
+                humanize_actions_section_markdown(actions)
+                if actions is not None
+                else None
+            )
+        except Exception as e:  # 想定外の形は当該日だけ飛ばし、残りの日は処理を続ける
+            counts.skip(f"変換失敗:{e}")
+            continue
+
+        advice_changed = (
+            advice is not None
+            and new_advice is not None
+            and new_advice.replace("\r\n", "\n") != advice.replace("\r\n", "\n")
+        )
+        actions_changed = (
+            actions is not None
+            and new_actions is not None
+            and new_actions.replace("\r\n", "\n") != actions.replace("\r\n", "\n")
+        )
+        if not advice_changed and not actions_changed:
+            counts.unchanged += 1
+            continue
+
+        counts.changed += 1
+        parts = []
+        if advice_changed:
+            parts.append(f"ADVICE Δ{_diff_lines(advice or '', new_advice or '')}行")
+        if actions_changed:
+            parts.append(f"ACTIONS Δ{_diff_lines(actions or '', new_actions or '')}行")
+        print(f"  · {day.isoformat()}: {', '.join(parts)}")
+
+        if len(counts.examples) < 3:
+            if advice_changed and advice and new_advice:
+                # 代表: PASS が消えた行
+                old_line = next(
+                    (ln for ln in advice.splitlines() if "PASS:" in ln),
+                    advice.splitlines()[0] if advice.splitlines() else "",
+                )
+                new_line = next(
+                    (ln for ln in new_advice.splitlines() if "効果指標" in ln),
+                    new_advice.splitlines()[0] if new_advice.splitlines() else "",
+                )
+                counts.examples.append(
+                    (day.isoformat(), old_line[:120], new_line[:120])
+                )
+            elif actions_changed and actions and new_actions:
+                old_line = next(
+                    (
+                        ln
+                        for ln in actions.splitlines()
+                        if "PASS:" in ln or "消化" in ln
+                    ),
+                    "",
+                )
+                new_line = next(
+                    (
+                        ln
+                        for ln in new_actions.splitlines()
+                        if "効果指標" in ln or "提案し" in ln
+                    ),
+                    "",
+                )
+                counts.examples.append(
+                    (day.isoformat(), old_line[:120], new_line[:120])
+                )
+
+        if not write:
+            continue
+
+        # バックアップ（失敗したらそのファイルは書かない）
+        try:
+            assert backup_root is not None
+            backup_root.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, backup_root / path.name)
+        except OSError as e:
+            print(f"  ⚠️  バックアップ失敗 {day.isoformat()}: {e} → スキップ")
+            counts.skip("バックアップ失敗")
+            counts.changed -= 1
+            continue
+
+        # 両区間をメモリ上で置換してから1回 atomic 書き込み（部分書き込み防止）
+        try:
+            updated = content
+            if advice_changed and new_advice is not None:
+                updated = upsert_section(updated, ADVICE_MARKER, new_advice)
+            if actions_changed and new_actions is not None:
+                updated = upsert_section(updated, ACTIONS_MARKER, new_actions)
+            atomic_write_text(path, updated)
+        except OSError as e:
+            print(f"  ⚠️  書き込み失敗 {day.isoformat()}: {e} → スキップ")
+            counts.skip("書き込み失敗")
+            counts.changed -= 1
+            continue
+
+    reason_bits = ""
+    if counts.skip_reasons:
+        reason_bits = "（" + " / ".join(
+            f"{k} {v}" for k, v in sorted(counts.skip_reasons.items())
+        ) + "）"
+    print(
+        f"対象 {counts.target}件 / 変更あり {counts.changed}件 / "
+        f"変更なし {counts.unchanged}件 / スキップ {counts.skipped}件"
+        f"{reason_bits}"
+    )
+    if counts.examples:
+        print("代表例:")
+        for day_s, old, new in counts.examples:
+            print(f"  [{day_s}]")
+            print(f"    - before: {old}")
+            print(f"    + after:  {new}")
+    if write and backup_root is not None and backup_root.is_dir():
+        print(f"バックアップ: {backup_root}")
+    return 0
 
 
 def cmd_report(cfg: Config, day: date, use_llm: bool, write: bool) -> None:
@@ -2801,6 +3002,17 @@ def main(argv: list[str] | None = None) -> int:
     bf = sub.add_parser("backfill", help="欠損日の日誌・統計をまとめて補完")
     bf.add_argument("--days", type=int, default=7, help="遡る日数（デフォルト7）")
     bf.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
+    rh = sub.add_parser(
+        "rehumanize",
+        help="過去ノートの ADVICE/ACTIONS 区間を決定論で平文化（既定 dry-run）",
+    )
+    rh.add_argument("--days", type=int, default=30, help="今日から遡る日数（既定30）")
+    rh.add_argument("--date", help="単一日のみ YYYY-MM-DD（指定時は --days より優先）")
+    rh.add_argument(
+        "--write",
+        action="store_true",
+        help="実際に書き込む（未指定時は差分表示のみ）",
+    )
     sub.add_parser("status", help="実行履歴の確認")
     sub.add_parser("doctor", help="セットアップ診断")
     sk = sub.add_parser("skill", help="Claude Codeスキルの管理")
@@ -3220,6 +3432,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "skip":
         return cmd_skip(cfg, args.id, reason=getattr(args, "reason", None) or None)
+
+    if args.command == "rehumanize":
+        tz = ZoneInfo(cfg.timezone)
+        only = None
+        if getattr(args, "date", None):
+            only = _parse_date(args.date, tz)
+        return cmd_rehumanize(
+            cfg,
+            days=int(getattr(args, "days", 30) or 30),
+            only_date=only,
+            write=bool(getattr(args, "write", False)),
+        )
 
     if args.command == "status":
         print(render_status(load_runs(cfg.logs_path)))
