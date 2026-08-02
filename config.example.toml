@@ -29,6 +29,7 @@ on_failure = true   # 夜間実行が失敗したときWindows通知を出す
 # 例: redact_patterns = ["(株)〇〇商事", "案件[A-Z]-\d+", "\S+@\S+\.co\.jp"]
 redact_patterns = []
 replacement = "[REDACTED]"
+# hide_private_titles = true   # タイムラインで私的タイトルを伏せる
 
 [activitywatch]
 base_url = "http://localhost:5600"
@@ -53,6 +54,7 @@ base_url = "http://localhost:5600"
 # 往復数・細切れセッション・ツールエラー・中断を検出し、改善提案の材料にする
 enabled = true
 claude_projects_dir = "~/.claude/projects"
+# session_details = true   # 往復上位セッションの依頼・ファイル・コマンド詳細
 
 # 空転ブレーカー（Claude Code UserPromptSubmit / Stop フック）
 # [guard]

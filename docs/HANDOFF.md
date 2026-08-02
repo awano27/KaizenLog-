@@ -60,11 +60,12 @@ Windows のPC作業を ActivityWatch + AI CLIセッションログから自動�
 | 45 | **工数のつけ先と月次資料**: `effort.py`(カテゴリ別帰属・AI作業は**重なる区間のうち最短のセッション**を採用・パス抽出でファイル名を除外・つけ先名も redact)・日誌「⏱ 工数のつけ先」区間・stats["effort"]・`monthly.py` と `kaizenlog monthly`(既定 dry-run・`04 Monthly/YYYY-MM.md`・工数記録なしの日は件数を注記) |
 
 | 46 | **AI入出力の記録と振り返り強化**: 私的タイトルを`（私的・非表示）`へ(判定は `privacy_filter.py` に共通化・行と集計は不変)・連続重複3行以上を`計Nm (K回)`に圧縮・`AISession` に prompts_digest/files_touched/commands_run(basename・先頭語のみ・redact 済み)と日誌「主なセッションの中身」・日報の業務行を effort ベース(プロンプト断片を使わない) |
+| 47 | **第46弾レビュー残件**: Codex/browser の I/O digest 充填・タイムライン圧縮を frag/gap 境界付きに・私的判定を切詰め前へ・F2/G2 関連テスト |
 | 48 | **日誌の読む価値の再設計**: 30秒サマリを generate でも書く(`digest_skipped` を runs.jsonl へ)・中身を稼働基準線/目標/摩擦数値/1手へ刷新・`SECTION_ORDER`+`reorder_sections` で区間順固定・朝ノートに昨日 digest 転記・日報の subject 切詰め/`→`分割/テーマ行/所感・`baseline.py` で7日中央値・タイムライン細切れを表外サマリへ・免責注釈を footnotes 集約・AI内訳を Activity から AI作業の質へ統合・私的を`（私的）`1行に畳む・工数%合計100固定 |
 
-テスト基準線: **pytest 996 passed**（2026-08-02 第48弾適用後・実行結果を正とする。**CI と同じ `pytest -q`（`python -m` なし）で確認すること**）。
-**HEAD**: `124d9a9` 相当（第46弾までコミット済みの前提）。第46〜48弾はワーキングツリー適用・未コミット。
-既知の機能欠落(第46弾レビュー・未解消): **Codex / ブラウザ由来セッションでは prompts_digest / files_touched / commands_run が常に空**（`aiwork_codex.py` の一時 session 問題）。
+テスト基準線: **pytest 998 passed**（2026-08-02 第48弾コミット後 + Phase0 衛生: `config.example` コメント同期・`test_f2_collapse_split_by_different_content_row`。**CI と同じ `pytest -q`（`python -m` なし）で確認すること**。適用後の実測を正とする）。
+**HEAD**: 第48弾 `7dd0bf5` のうえに Phase0 衛生コミット（example コメント・F2 分割回帰・本 HANDOFF）。第46〜48弾 + Phase0 はコミット済み。
+**第47弾で解消済み**: Codex/browser 由来の prompts_digest/files_touched/commands_run 空問題、細切れ/省略を境界にしない旧圧縮、60字切詰め後の私的判定。通常の別内容 eligible 行による分割は `test_f2_collapse_split_by_different_content_row` で固定。
 **第48弾で次弾へ回したもの（§E）**: 提案の質 — 目標値を実測パーセンタイルから算出・同時アクティブ最大3・自動退役理由行・「チェックなしで達成」を失敗として週次抑制。現状の提案は桁違い目標と因果なし達成が残る。
 既知の限界(第48弾): 細切れを表から外したため、細切れを境界にした連続圧縮は効かない（eligible 同士は間の細切れを無視して融合しうる）。私的タイムラインは時刻を失い集計1行になる。既存 stats に保存済みの subject は旧ハード切詰めのまま（新規 generate から `…` 付き）。`reorder_sections` は区間の間の手書きを ordered ブロック直後へ寄せる（内容は保持・位置は正準順ブロックの後ろ）。
 

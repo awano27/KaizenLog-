@@ -139,6 +139,38 @@ def test_f2_coverage_unchanged_after_collapse():
     assert md.count("dup content xxx") == 1
 
 
+def test_f2_collapse_split_by_different_content_row():
+    """§F5#3: eligible な別内容行が挟まれば同一 content の連続を切る（融合しない）。
+
+    G2 の細切れ/省略境界とは別。すべて min_block_minutes 以上の表行。
+    並び: A, A, B(別title), A → A は前2行+後1行（いずれも <3 連続なので非圧縮）。
+    """
+    a1 = _block(11, 5, "AI作業", "claude.exe", "split-same-content-aaa", ai=True)
+    a2 = _block(11, 5, "AI作業", "claude.exe", "split-same-content-aaa", ai=True)
+    b = _block(11, 5, "AI作業", "claude.exe", "split-other-content-bbb", ai=True)
+    a3 = _block(11, 5, "AI作業", "claude.exe", "split-same-content-aaa", ai=True)
+    for i, blk in enumerate((a1, a2, b, a3)):
+        blk.start = datetime(2026, 8, 2, 11, i * 10, tzinfo=TZ)
+        blk.end = blk.start + timedelta(minutes=5)
+    s = _summary([a1, a2, b, a3], total=20.0)
+    md = render_markdown(s, TZ, min_block_minutes=3.0)
+    assert "(3回)" not in md
+    assert "(4回)" not in md
+    same_rows = [
+        ln for ln in md.splitlines()
+        if "split-same-content-aaa" in ln and ln.startswith("|")
+    ]
+    assert len(same_rows) == 3, same_rows
+    other_rows = [
+        ln for ln in md.splitlines()
+        if "split-other-content-bbb" in ln and ln.startswith("|")
+    ]
+    assert len(other_rows) == 1, other_rows
+    cov = re.search(r"この表は合計 ([^ ]+) の (\d+)% を説明", md)
+    assert cov, "被覆率フッタが出ていない"
+    assert cov.group(2) == "100", f"分割で時間が失われた: {cov.group(0)}"
+
+
 def test_f3_prompts_digest_max_three():
     s = AISession(
         session_id="s1",
