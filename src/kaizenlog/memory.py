@@ -415,6 +415,60 @@ def dosing_max_actions(stats: ActionStats) -> int:
     return 3
 
 
+# 📌 主面の表示上限ハードキャップ（generation_cap / TODAY_CANDIDATE_CAP とは別）
+_DISPLAY_CAP_HARD_MAX = 3
+
+
+def resolve_display_cap(
+    stats: ActionStats,
+    *,
+    max_candidates: int | None = None,
+) -> int:
+    """📌 チェックボックス本文の表示上限（display_cap）。
+
+    generation_cap（evidence.max_actions / dosing_max_actions）とは独立。
+    - max_candidates > 0 ならそれを上限3で clamp（morning の1件指定など）
+    - それ以外の既定は 1
+    - 低消化時は強制1（dosing の proposed≥6 より早く絞る）:
+      proposed≥1 かつ done==0、または done_rate<0.4 かつ proposed≥3
+    """
+    if max_candidates is not None and max_candidates > 0:
+        base = min(_DISPLAY_CAP_HARD_MAX, int(max_candidates))
+    else:
+        base = 1
+    # 未チェック続き・低消化: 主面は常に1件（「今日の1手」）
+    if stats.proposed >= 1 and stats.done == 0:
+        return 1
+    if (
+        stats.done_rate is not None
+        and stats.done_rate < _DOSING_DONE_RATE
+        and stats.proposed >= 3
+    ):
+        return 1
+    return min(_DISPLAY_CAP_HARD_MAX, max(1, base))
+
+
+def order_still_open_for_display(entries: Sequence[MemoryEntry]) -> list[MemoryEntry]:
+    """still_open の表示順（台帳非破壊）。
+
+    1. 実行可能優先（provisional でも confirmed-fail でもない）
+    2. confirmed-fail
+    3. provisional（集計中が1件枠を独占しない）
+    同一帯内は入力順を維持（呼び出し側が ID 降順）。
+    """
+    preferred: list[MemoryEntry] = []
+    confirmed_fail: list[MemoryEntry] = []
+    provisional: list[MemoryEntry] = []
+    for e in entries:
+        if e.verdict_stage == "provisional":
+            provisional.append(e)
+        elif e.verdict == "fail" and e.verdict_stage == "confirmed":
+            confirmed_fail.append(e)
+        else:
+            preferred.append(e)
+    return preferred + confirmed_fail + provisional
+
+
 @dataclass(frozen=True)
 class Streaks:
     """消化ストリーク。
@@ -1638,9 +1692,8 @@ def render_actions_section(
     """翌日ノート用「今日のアクション」転記 Markdown。
 
     対象は proposed かつ提案日が target_day-ACTIONS_HANDOFF_DAYS 〜 target_day-1。
-    チェックボックスは新しい提案から最大 TODAY_CANDIDATE_CAP 件
-    （優先度推定ではなく、現在の文脈に近い候補を表示する決定論ルール）。
-    max_candidates で件数上限を上書き可能（朝ノートは1件）。
+    チェックボックス本文は display_cap 件（既定1。低消化時は強制1。
+    max_candidates で上書き可だが低消化強制が優先。generation_cap とは別）。
     0件なら None（既存セクションは消さない。ただし stale/older のみある場合は
     件数案内セクションを返す）。
     note_content に同じ KZN の [x] があればチェック状態を保持する。
@@ -1652,12 +1705,6 @@ def render_actions_section(
     )
     if buckets.total == 0:
         return None
-    # 表示上限の既定は1件（§D1）。max_candidates で上書き可。
-    candidate_cap = (
-        int(max_candidates)
-        if max_candidates is not None and max_candidates > 0
-        else 1
-    )
 
     checked_ids: set[str] = set()
     if note_content:
@@ -1675,6 +1722,8 @@ def render_actions_section(
     ]
     # 北極星指標をノート上でも見えるようにする（CLI status と揃える）
     stats = compute_action_stats(entries, target_day)
+    # display_cap（表示）— generation_cap（advise 件数）とは独立
+    candidate_cap = resolve_display_cap(stats, max_candidates=max_candidates)
     streaks = compute_streaks(entries, target_day)
     if streaks.current >= 2:
         lines.append(f"🔥 連続{streaks.current}日")
@@ -1742,7 +1791,9 @@ def render_actions_section(
             and e.id not in checked_ids
         )
     ]
-    # §D1: 未完了は最新 N 件（既定1。朝ノートも同じ。件数算出は変えず表示上限だけ）
+    # 表示順: 実行可能 → confirmed-fail → provisional（台帳非破壊）
+    still_open = order_still_open_for_display(still_open)
+    # display_cap 件だけ本文に出す（既定1・低消化強制1）
     shown = still_open[:candidate_cap]
 
     # 読者UX: スコアボードより先に「今日の実験」を置く
