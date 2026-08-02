@@ -3,7 +3,7 @@
   "graph_id": "kaizenlog-practical-journal-advice-2026-08-02",
   "goal": "日誌を30秒で判断でき、アドバイスを1〜3件の証拠に紐づく5〜15分のPASS/FAILマイクロアクションにする",
   "created_at": "2026-08-02T23:01:07+09:00",
-  "updated_at": "2026-08-03T00:13:06+09:00",
+  "updated_at": "2026-08-03T00:21:10+09:00",
   "loop": {
     "pattern": "generate-critique-revise",
     "critique_revise_limit": 2,
@@ -1381,8 +1381,8 @@
     {
       "id": "T-REMOTE-PUSH-001",
       "type": "TestResult",
-      "status": "passed-ci-in-progress",
-      "claim": "commit cf8c5d0はローカル全1061件とclean worktree advice契約74件を通過し、HEAD、origin/main、GitHub commit APIが同一SHAを返した。GitHub Actions Tests run 30753830384は確認時in_progressである。",
+      "status": "pushed-ci-failed",
+      "claim": "commit cf8c5d0はローカル全1061件とclean worktree advice契約74件を通過し、HEAD、origin/main、GitHub commit APIが同一SHAを返した。一方、GitHub Actions Tests run 30753830384はintervention時刻帯テスト2件が全4マトリクスで同じ9時間差を示してfailureとなった。",
       "data": {
         "commit": "cf8c5d0ad664f6da726ad7d5d73819ab3a222b2d",
         "full_tests": "1061 passed in 101.96s",
@@ -1393,7 +1393,8 @@
         "github_actions": {
           "run_id": 30753830384,
           "name": "Tests",
-          "status": "in_progress",
+          "status": "completed",
+          "conclusion": "failure",
           "url": "https://github.com/awano27/KaizenLog-/actions/runs/30753830384"
         }
       },
@@ -1407,7 +1408,110 @@
           "gh run list --commit cf8c5d0"
         ],
         "step": "phase5-release-verification",
-        "timestamp": "2026-08-03T00:13:06+09:00"
+        "timestamp": "2026-08-03T00:15:57+09:00"
+      }
+    },
+    {
+      "id": "T-CI-RELEASE-001",
+      "type": "TestResult",
+      "status": "failed",
+      "claim": "GitHub Actions run 30753830384ではUbuntu/WindowsかつPython 3.11/3.12の全4ジョブが同じinterventionテスト2件で失敗し、各ジョブの他1058件は通過、1件はskipした。",
+      "data": {
+        "run_id": 30753830384,
+        "commit": "cf8c5d0ad664f6da726ad7d5d73819ab3a222b2d",
+        "matrix_failures": 4,
+        "failed_tests": [
+          "tests/test_intervention.py::test_detect_falls_back_to_block_titles",
+          "tests/test_intervention.py::test_window_rule_uses_hourly_limit"
+        ],
+        "observed": "hour 8 / window 0800-0900",
+        "expected": "hour 17 / window 1700-1800",
+        "per_job_summary": "2 failed, 1058 passed, 1 skipped"
+      },
+      "provenance": {
+        "sources": [
+          "gh run view 30753830384 --log-failed",
+          "gh run view 30753830384 --json status,conclusion,url,headSha,jobs"
+        ],
+        "step": "phase5-ci-failure-audit",
+        "timestamp": "2026-08-03T00:15:57+09:00"
+      }
+    },
+    {
+      "id": "F-CI-TIMEZONE-001",
+      "type": "Failure",
+      "status": "confirmed-pre-existing",
+      "claim": "intervention._block_hoursが明示オフセット付きISO日時を引数なしastimezone()で実行ホストのタイムゾーンへ変換するため、+09:00の17時がUTCのCIでは8時として集計される。ブロックの現地時刻をホスト依存にした実装起点の不具合である。",
+      "provenance": {
+        "sources": [
+          "T-CI-RELEASE-001",
+          "src/kaizenlog/intervention.py:_block_hours lines 107-120",
+          "tests/test_intervention.py:_block lines 18-23",
+          "2026-07-19T17:00:00+09:00 converts to 08:00 UTC",
+          "GitHub Actions observed hour 8 versus expected 17"
+        ],
+        "step": "phase5-ci-root-cause",
+        "timestamp": "2026-08-03T00:18:05+09:00"
+      }
+    },
+    {
+      "id": "E-CI-BASELINE-001",
+      "type": "Evidence",
+      "status": "confirmed",
+      "claim": "直前main 8f9ff5のTests run 30752601748も同じ2テストで17時対8時の失敗を示し、8f9ff5..cf8c5d0間でintervention実装・テスト・workflowに差分はないため、今回のGraph Engineering変更が導入した回帰ではない。",
+      "data": {
+        "baseline_commit": "8f9ff5a03fa6fccc3428863bec10c6c8d4e6eefd",
+        "baseline_run_id": 30752601748,
+        "failing_paths_diff": "none",
+        "introduced_in": "1e076335"
+      },
+      "provenance": {
+        "sources": [
+          "gh run view 30752601748 --log-failed",
+          "git diff 8f9ff5 cf8c5d0 -- tests/test_intervention.py src/kaizenlog/intervention.py .github/workflows/tests.yml",
+          "git blame src/kaizenlog/intervention.py lines 107-120"
+        ],
+        "step": "phase5-ci-root-cause",
+        "timestamp": "2026-08-03T00:18:05+09:00"
+      }
+    },
+    {
+      "id": "D-CI-TIMEZONE-REMEDIATION-001",
+      "type": "DesignDecision",
+      "status": "proposed-awaiting-authorization",
+      "claim": "最小かつ実運用に正しい修正候補はdetect_time_sinksへ任意の明示timezoneを渡し、CLIはcfg.timezoneを渡すこと。timezone未指定のライブラリ呼出しは入力ISOの明示オフセットを保持し、CIのホストtimezoneに依存させない。UTC実データをAsia/Tokyoへ変換するテストと、+09:00を未指定で保持するテストを固定期待値で回帰させる。",
+      "risk": "単にastimezone()を削除するとActivityWatch由来のUTC statsをUTC時刻のままLeechBlockへ出すため不正確。異なるオフセット同士のstart/endやnaive日時の契約は別課題として範囲を広げない。",
+      "provenance": {
+        "sources": [
+          "F-CI-TIMEZONE-001",
+          "E-CI-TIMEZONE-CONTRACT-001",
+          "github:gh-fix-ci approval-gated remediation workflow",
+          "superpowers:systematic-debugging root-cause evidence"
+        ],
+        "step": "phase5-ci-remediation-proposal",
+        "timestamp": "2026-08-03T00:21:10+09:00"
+      }
+    },
+    {
+      "id": "E-CI-TIMEZONE-CONTRACT-001",
+      "type": "Evidence",
+      "status": "confirmed",
+      "claim": "実statsのblock日時はActivityWatchイベントのISOオフセットを保持して保存され得る一方、利用者の現地時間はConfig.timezoneが定義する。cmd_blockは現在timezoneをdetect_time_sinksへ渡していないため、正しい境界はホストtimezoneではなくcfg.timezoneである。",
+      "data": {
+        "config_default": "Asia/Tokyo",
+        "stats_serialization": "Block.start.isoformat()",
+        "activitywatch_parse": "timestamp Z is parsed as +00:00",
+        "current_cli_forwarding": false
+      },
+      "provenance": {
+        "sources": [
+          "src/kaizenlog/config.py:Config.timezone",
+          "src/kaizenlog/collector.py:_parse_events",
+          "src/kaizenlog/stats.py:write_stats blocks serialization",
+          "src/kaizenlog/cli.py:cmd_block"
+        ],
+        "step": "phase5-ci-timezone-contract",
+        "timestamp": "2026-08-03T00:21:10+09:00"
       }
     }
   ],
@@ -2488,6 +2592,90 @@
         ],
         "step": "phase5-release-verification",
         "timestamp": "2026-08-03T00:13:06+09:00"
+      }
+    },
+    {
+      "id": "EDGE-078",
+      "source": "T-CI-RELEASE-001",
+      "type": "supports",
+      "target": "T-REMOTE-PUSH-001",
+      "provenance": {
+        "sources": [
+          "T-CI-RELEASE-001",
+          "T-REMOTE-PUSH-001"
+        ],
+        "step": "phase5-ci-failure-audit",
+        "timestamp": "2026-08-03T00:15:57+09:00"
+      }
+    },
+    {
+      "id": "EDGE-079",
+      "source": "T-CI-RELEASE-001",
+      "type": "supports",
+      "target": "F-CI-TIMEZONE-001",
+      "provenance": {
+        "sources": [
+          "T-CI-RELEASE-001",
+          "F-CI-TIMEZONE-001"
+        ],
+        "step": "phase5-ci-failure-audit",
+        "timestamp": "2026-08-03T00:15:57+09:00"
+      }
+    },
+    {
+      "id": "EDGE-080",
+      "source": "E-CI-BASELINE-001",
+      "type": "supports",
+      "target": "F-CI-TIMEZONE-001",
+      "provenance": {
+        "sources": [
+          "E-CI-BASELINE-001",
+          "F-CI-TIMEZONE-001"
+        ],
+        "step": "phase5-ci-root-cause",
+        "timestamp": "2026-08-03T00:18:05+09:00"
+      }
+    },
+    {
+      "id": "EDGE-081",
+      "source": "F-CI-TIMEZONE-001",
+      "type": "causes",
+      "target": "T-CI-RELEASE-001",
+      "provenance": {
+        "sources": [
+          "F-CI-TIMEZONE-001",
+          "T-CI-RELEASE-001"
+        ],
+        "step": "phase5-ci-root-cause",
+        "timestamp": "2026-08-03T00:18:05+09:00"
+      }
+    },
+    {
+      "id": "EDGE-082",
+      "source": "D-CI-TIMEZONE-REMEDIATION-001",
+      "type": "derived-from",
+      "target": "F-CI-TIMEZONE-001",
+      "provenance": {
+        "sources": [
+          "D-CI-TIMEZONE-REMEDIATION-001",
+          "F-CI-TIMEZONE-001"
+        ],
+        "step": "phase5-ci-remediation-proposal",
+        "timestamp": "2026-08-03T00:18:05+09:00"
+      }
+    },
+    {
+      "id": "EDGE-083",
+      "source": "E-CI-TIMEZONE-CONTRACT-001",
+      "type": "supports",
+      "target": "D-CI-TIMEZONE-REMEDIATION-001",
+      "provenance": {
+        "sources": [
+          "E-CI-TIMEZONE-CONTRACT-001",
+          "D-CI-TIMEZONE-REMEDIATION-001"
+        ],
+        "step": "phase5-ci-timezone-contract",
+        "timestamp": "2026-08-03T00:21:10+09:00"
       }
     }
   ]

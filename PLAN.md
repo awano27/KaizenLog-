@@ -990,4 +990,14 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 - [x] 所有13パスだけを `cf8c5d0`（`feat: make journal insights and advice actions practical`）としてcommitし、`origin/main` へpushした。
 - [x] commit済みrevisionで全pytest `1061 passed in 101.96s`、clean detached worktreeでadvice契約 `74 passed in 1.20s`、`compileall` 成功。
 - [x] `HEAD`・`origin/main`・GitHub commit APIは `cf8c5d0ad664f6da726ad7d5d73819ab3a222b2d` で一致。
-- [ ] GitHub Actions `Tests` run `30753830384` は確認時 `in_progress`。完了結果はpush後監視で確定する。
+- [x] release evidence追記を `16312ee`（`docs: record Graph Engineering release evidence`）としてpushし、`HEAD=origin/main=16312ee` を確認した。
+- [ ] GitHub Actions `Tests` runs `30753830384` / `30753884812` は、既存の `tests/test_intervention.py` 2件でfailure。直前main `8f9ff5a` のrun `30752601748`も同一失敗で、今回13パスに失敗経路の差分はない。
+
+### CI timezone remediation（承認待ち）
+
+- 根本原因: `intervention._block_hours` が明示offset付き日時をホストtimezoneへ `astimezone()` し、UTC runnerでは `17:00+09:00` を8時として集計する。
+- 実運用契約: ActivityWatch由来statsはUTC offsetを保持し得る一方、利用者の現地時間は `cfg.timezone` が正本。単純な `astimezone()` 削除ではUTC時刻のLeechBlockルールになり得る。
+- 最小案: `detect_time_sinks` に任意timezoneを注入し、`cmd_block` は `ZoneInfo(cfg.timezone)` を渡す。未指定時は入力offsetを保持してライブラリテストをホスト非依存にする。
+- 対象候補: `src/kaizenlog/intervention.py`、`src/kaizenlog/cli.py`、`tests/test_intervention.py`。Graph Engineeringの日誌・助言契約や非所有artifactは変更しない。
+- 検証候補: +09:00保持、UTC→Asia/Tokyo変換、intervention focused、全pytest、GitHub Actions 4 matrix。
+- `github:gh-fix-ci` の承認ゲートに従い、修正実装・追加pushはユーザー承認後に行う。
