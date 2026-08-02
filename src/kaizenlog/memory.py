@@ -489,6 +489,22 @@ def order_still_open_for_display(entries: Sequence[MemoryEntry]) -> list[MemoryE
     return preferred + confirmed_fail + provisional
 
 
+def split_action_candidates(
+    entries: Sequence[MemoryEntry],
+    checked_ids: set[str],
+) -> tuple[list[MemoryEntry], list[MemoryEntry]]:
+    """実行候補と、判定済みPASSの観測候補を分離する。"""
+    confirmed_pass = [
+        e
+        for e in entries
+        if e.verdict == "pass"
+        and e.verdict_stage == "confirmed"
+    ]
+    monitoring = [e for e in confirmed_pass if e.id not in checked_ids]
+    actionable = [e for e in entries if e not in confirmed_pass]
+    return order_still_open_for_display(actionable), monitoring
+
+
 @dataclass(frozen=True)
 class Streaks:
     """消化ストリーク。
@@ -1471,55 +1487,87 @@ def _denominator_shortfall_note(
     )
 
 
-def _post_verdict_trajectory_lines(
+@dataclass(frozen=True)
+class MetricObservation:
+    day: date
+    value: float
+    met: bool
+
+
+@dataclass(frozen=True)
+class PostVerdictTrajectory:
+    metric: str
+    op: str
+    target: float
+    observations: tuple[MetricObservation, ...]
+
+
+def _post_verdict_trajectory(
     entry: MemoryEntry,
     target_day: date,
     stats_by_day: dict[str, Mapping[str, Any]],
-) -> list[str]:
-    """confirmed 判定後の実測推移（最新側最大5日）。全日測定不能なら空。"""
+) -> PostVerdictTrajectory | None:
     if entry.verdict not in ("pass", "fail"):
-        return []
-    if entry.verdict_stage != "confirmed":
-        return []
-    if not entry.verdict_date:
-        return []
+        return None
+    if entry.verdict_stage != "confirmed" or not entry.verdict_date:
+        return None
     from .experiments import metric_from_stats, target_met
     from .verdict import parse_pass_condition
 
     parsed = parse_pass_condition(entry.action)
     if parsed is None:
-        return []
+        return None
     metric, op, target = parsed
     try:
         start = date.fromisoformat(entry.verdict_date) + timedelta(days=1)
     except ValueError:
-        return []
+        return None
     end = target_day - timedelta(days=1)
-    if start > end:
-        return []
-    points: list[tuple[date, float, bool]] = []
-    d = start
-    while d <= end:
-        s = stats_by_day.get(d.isoformat())
-        if s is not None:
-            v = metric_from_stats(metric, dict(s))
-            if v is not None:
-                met = target_met(float(v), op, float(target))
-                points.append((d, float(v), met))
-        d += timedelta(days=1)
-    if not points:
-        return []
-    # 最新側5日（古い5日で凍結しない）
-    points = points[-5:]
-    chain = " → ".join(
-        f"{p.month}/{p.day} {v:g} {'✅' if met else '❌'}"
-        for p, v, met in points
+    observations: list[MetricObservation] = []
+    current = start
+    while current <= end:
+        day_stats = stats_by_day.get(current.isoformat())
+        if day_stats is not None:
+            value = metric_from_stats(metric, dict(day_stats))
+            if value is not None:
+                observations.append(
+                    MetricObservation(
+                        day=current,
+                        value=float(value),
+                        met=target_met(float(value), op, float(target)),
+                    )
+                )
+        current += timedelta(days=1)
+    if not observations:
+        return None
+    return PostVerdictTrajectory(
+        metric=metric,
+        op=op,
+        target=float(target),
+        observations=tuple(observations[-5:]),
     )
-    over = sum(1 for _p, _v, met in points if not met)
+
+
+def _post_verdict_trajectory_lines(
+    entry: MemoryEntry,
+    target_day: date,
+    stats_by_day: dict[str, Mapping[str, Any]],
+) -> list[str]:
+    trajectory = _post_verdict_trajectory(entry, target_day, stats_by_day)
+    if trajectory is None:
+        return []
+    observations = trajectory.observations
+    chain = " → ".join(
+        f"{point.day.month}/{point.day.day} {point.value:g} "
+        f"{'✅' if point.met else '❌'}"
+        for point in observations
+    )
+    met_count = sum(point.met for point in observations)
     return [
         f"  └ 判定後の実測: {chain}",
-        f"     (測定できた{len(points)}日のうち{over}日が閾値超過。"
-        f"実行の有無は問わない指標の挙動です)",
+        f"     (測定できた{len(observations)}日のうち"
+        f"{met_count}日達成・{len(observations)-met_count}日未達。"
+        "実行の有無は問わない指標の挙動です)",
     ]
 
 
