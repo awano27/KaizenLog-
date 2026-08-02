@@ -171,6 +171,14 @@ class AISession:
     repo_path: str | None = None
     # KaizenLog 自身の LLM 呼び出し（advise 等）— 全指標から除外
     is_internal: bool = False
+    # §F3: 入出力ダイジェスト（stats/日誌用。フルパス・引数は載せない）
+    prompts_digest: list[str] = field(default_factory=list)
+    files_touched: list[str] = field(default_factory=list)
+    commands_run: list[str] = field(default_factory=list)
+    # 走査中の収集バッファ（表示用に finalize する）
+    _user_prompts_raw: list[str] = field(default_factory=list, repr=False)
+    _files_order: list[str] = field(default_factory=list, repr=False)
+    _cmd_counts: Counter = field(default_factory=Counter, repr=False)
 
     @property
     def minutes(self) -> float:
@@ -366,10 +374,52 @@ def _count_edit_tool(name: str) -> bool:
     return low in {x.lower() for x in _EDIT_TOOLS} or "apply_patch" in low
 
 
+def _basename_from_tool_input(tool_input: object) -> str | None:
+    """Edit/Write 入力からファイル basename を1つ取り出す。"""
+    path = None
+    if isinstance(tool_input, dict):
+        for key in ("file_path", "path", "filePath", "target_file", "file"):
+            v = tool_input.get(key)
+            if isinstance(v, str) and v.strip():
+                path = v.strip()
+                break
+    elif isinstance(tool_input, str) and tool_input.strip():
+        path = tool_input.strip()
+    if not path:
+        return None
+    # フルパスを落とす
+    name = Path(path.replace("\\", "/")).name
+    return name or None
+
+
+def _cmd_head(cmd: str) -> str | None:
+    """コマンド文字列の先頭語のみ（引数は捨てる）。"""
+    s = (cmd or "").strip()
+    if not s:
+        return None
+    # パイプ・&& の先頭コマンドだけ
+    first = re.split(r"[|;&\n]", s, maxsplit=1)[0].strip()
+    if not first:
+        return None
+    # env VAR=x cmd → スキップして次へはしない（単純化）
+    parts = first.split()
+    if not parts:
+        return None
+    # `"C:/path/to/prog.exe" args` のように引用符で囲まれた実行パスがある。
+    # 引用符を残すと Path.name が `prog.exe"` のような壊れた値になる。
+    head = parts[0].strip("\"'")
+    # path/to/pytest → pytest
+    head = Path(head.replace("\\", "/")).name.strip("\"'")
+    return head or None
+
+
 def _note_tool_use(session: AISession, name: str, tool_input: object = None) -> None:
     session.tool_counts[str(name or "unknown")] += 1
     if _count_edit_tool(str(name or "")):
         session.edits += 1
+        base = _basename_from_tool_input(tool_input)
+        if base and base not in session._files_order:
+            session._files_order.append(base)
     # Bash 等のコマンドからテスト実行を検出
     if str(name) in ("Bash", "bash", "Shell", "shell", "local_shell"):
         cmd = ""
@@ -384,6 +434,9 @@ def _note_tool_use(session: AISession, name: str, tool_input: object = None) -> 
             cmd = tool_input
         if _looks_like_test_command(cmd):
             session.tests_run = True
+        head = _cmd_head(cmd)
+        if head:
+            session._cmd_counts[head] += 1
     # Codex の test 系ツール名
     if "test" in str(name).lower() and str(name).lower() not in ("get_test",):
         if any(m in str(name).lower() for m in ("pytest", "jest", "vitest")):
@@ -435,6 +488,10 @@ def _update_session(session: AISession, record: dict, ts: datetime) -> None:
                 # システム注入・コマンドラッパーはユーザー往復に数えない
                 session.user_turns += 1
                 _maybe_set_title(session, joined)
+                # §F3: 依頼文バッファ（後で先頭・中間・末尾を digest 化）
+                cleaned = normalize_prompt_text(joined)
+                if cleaned:
+                    session._user_prompts_raw.append(cleaned)
 
     elif rtype == "assistant":
         msg = record.get("message")
@@ -1203,6 +1260,24 @@ def _retry_touch_for_session(
     return touch
 
 
+def finalize_session_io_digest(session: AISession) -> None:
+    """走査バッファから prompts_digest / files / commands を確定する。"""
+    raw = list(session._user_prompts_raw or [])
+    if not raw:
+        session.prompts_digest = []
+    elif len(raw) == 1:
+        session.prompts_digest = [raw[0][:60]]
+    elif len(raw) == 2:
+        session.prompts_digest = [raw[0][:60], raw[-1][:60]]
+    else:
+        mid = raw[len(raw) // 2]
+        session.prompts_digest = [raw[0][:60], mid[:60], raw[-1][:60]]
+    session.files_touched = list(session._files_order or [])[:5]
+    session.commands_run = [
+        name for name, _n in session._cmd_counts.most_common(5)
+    ]
+
+
 def session_digests_for_stats(
     sessions: Sequence[AISession],
     day: str,
@@ -1214,9 +1289,17 @@ def session_digests_for_stats(
     chains = list(retry_chains or [])
     digests: list[dict] = []
     for s in sessions:
+        finalize_session_io_digest(s)
         title = s.title or ""
         if redactor is not None and title:
             title = redactor(title)
+        prompts = list(s.prompts_digest or [])
+        files = list(s.files_touched or [])
+        cmds = list(s.commands_run or [])
+        if redactor is not None:
+            prompts = [redactor(p) for p in prompts if p]
+            files = [redactor(f) for f in files if f]
+            cmds = [redactor(c) for c in cmds if c]
         retry_touch = _retry_touch_for_session(s, chains)
         tools_total = (
             sum(s.tool_counts.values()) if s.tools_measurable else None
@@ -1240,6 +1323,11 @@ def session_digests_for_stats(
                 "tools_total": (
                     int(tools_total) if tools_total is not None else None
                 ),
+                "prompts_digest": prompts[:3],
+                "files_touched": files[:5],
+                "commands_run": cmds[:5],
+                "start": s.start.isoformat() if s.start else None,
+                "end": s.end.isoformat() if s.end else None,
             }
         )
     return digests
@@ -1287,6 +1375,7 @@ def render_aiwork_markdown(
     measurement_gap: bool | None = None,
     structured_cli_sessions: int | None = None,
     screen_samples: Sequence[Mapping[str, Any]] | None = None,
+    session_details: bool = True,
 ) -> str:
     """「AI作業の質」セクションのMarkdownを生成する。セッションが無ければ空文字。
 
@@ -1656,6 +1745,53 @@ def render_aiwork_markdown(
         if tiny_n:
             bits.append(f"ほか短小セッション {tiny_n}件")
         lines.append(f"（{' / '.join(bits)}）")
+
+    # §F3: 往復上位セッションの入出力詳細（表の下）
+    if session_details:
+        detail_src = sorted(
+            table_sessions,
+            key=lambda s: (-int(s.user_turns or 0), s.session_id),
+        )[:3]
+        detail_blocks: list[str] = []
+        for s in detail_src:
+            finalize_session_io_digest(s)
+            prompts = list(s.prompts_digest or [])
+            files = list(s.files_touched or [])
+            cmds = list(s.commands_run or [])
+            if redactor is not None:
+                prompts = [redactor(p) for p in prompts if p]
+                files = [redactor(f) for f in files if f]
+                cmds = [redactor(c) for c in cmds if c]
+            if not prompts and not files and not cmds:
+                continue
+            start = s.start.astimezone(tz).strftime("%H:%M")
+            end = s.end.astimezone(tz).strftime("%H:%M")
+            proj = s.project or "—"
+            if redactor is not None:
+                proj = redactor(proj)
+            head = (
+                f"**{proj}（{start}-{end}・往復{int(s.user_turns)}"
+                f"・編集{int(s.edits)}）**"
+            )
+            body_lines = [head]
+            if prompts:
+                body_lines.append(
+                    "- 依頼: " + " → ".join(f"「{p}」" for p in prompts)
+                )
+            if files:
+                more = " ほか" if len(s._files_order or []) > len(files) else ""
+                body_lines.append(
+                    "- 触ったファイル: " + ", ".join(files) + more
+                )
+            if cmds:
+                body_lines.append("- 実行: " + ", ".join(cmds))
+            detail_blocks.append("\n".join(body_lines))
+        if detail_blocks:
+            lines.append("")
+            lines.append("#### 主なセッションの中身")
+            lines.append("")
+            lines.append("\n\n".join(detail_blocks))
+
     # §C3: コミット突合（空なら行ごと省略。「0件」とも書かない）
     if commit_stats:
         parts = [

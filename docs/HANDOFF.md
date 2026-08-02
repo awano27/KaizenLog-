@@ -59,8 +59,12 @@ Windows のPC作業を ActivityWatch + AI CLIセッションログから自動�
 
 | 45 | **工数のつけ先と月次資料**: `effort.py`(カテゴリ別帰属・AI作業は**重なる区間のうち最短のセッション**を採用・パス抽出でファイル名を除外・つけ先名も redact)・日誌「⏱ 工数のつけ先」区間・stats["effort"]・`monthly.py` と `kaizenlog monthly`(既定 dry-run・`04 Monthly/YYYY-MM.md`・工数記録なしの日は件数を注記) |
 
-テスト基準線: **pytest 964 passed**（2026-08-02 第45弾適用後・実行結果を正とする。**CI と同じ `pytest -q`（`python -m` なし）で確認すること**）。
-**HEAD**: `3dc99b3`(第38〜44弾 + README 刷新までコミット)。第45弾はワーキングツリー適用済み・未コミット。
+| 46 | **AI入出力の記録と振り返り強化**: 私的タイトルを`（私的・非表示）`へ(判定は `privacy_filter.py` に共通化・行と集計は不変)・連続重複3行以上を`計Nm (K回)`に圧縮・`AISession` に prompts_digest/files_touched/commands_run(basename・先頭語のみ・redact 済み)と日誌「主なセッションの中身」・日報の業務行を effort ベース(プロンプト断片を使わない) |
+
+テスト基準線: **pytest 978 passed**（2026-08-02 第46弾適用後・実行結果を正とする。**CI と同じ `pytest -q`（`python -m` なし）で確認すること**）。
+**HEAD**: `ee92d82`(第45弾までコミット)。第46弾はワーキングツリー適用済み・未コミット。
+既知の機能欠落(第46弾レビュー): **Codex / ブラウザ由来セッションでは prompts_digest / files_touched / commands_run が常に空**。`aiwork_codex.py:163-176` が `_note_tool_use` を使い捨ての一時 session に対して呼び、`_files_order`/`_cmd_counts` を親へ戻していないため(`note_user_message` も `_user_prompts_raw` に積まない)。当該セッションが往復上位3に入ると「主なセッションの中身」から丸ごと消える。次弾候補。
+既知の限界(第46弾): タイムラインの重複圧縮は細切れバケット行・`max_timeline_rows` 超過で省略された行を「間に挟まる別行」として扱わないため、非連続な区間を1行に融合しうる(`(K回)` 併記で緩和)。私的判定は60字に切詰めた後のタイトルを見るため、61字目以降にのみ私的キーワードがある場合は取りこぼす。
 
 ## 工数配分の設計メモ(第45弾)
 

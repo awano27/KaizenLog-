@@ -134,6 +134,8 @@ class AIWorkConfig:
     pricing: dict[str, float] = field(default_factory=dict)
     # セッション表の「内容」列（初回依頼抜粋）。日誌への依頼逐語は redact 対象。
     session_titles: bool = True
+    # 往復上位セッションの依頼・ファイル・コマンド詳細
+    session_details: bool = True
     # ループ税の円換算レート（未設定なら USD のみ表示）
     usd_jpy: float | None = None
     # 当日ループ税がこの USD を超えたら notify（未設定なら無効）
@@ -148,6 +150,8 @@ class AIWorkConfig:
 class PrivacyConfig:
     redact_patterns: list[str] = field(default_factory=list)
     replacement: str = "[REDACTED]"
+    # タイムラインで私的タイトルを（私的・非表示）にする
+    hide_private_titles: bool = True
 
 
 @dataclass
@@ -354,6 +358,7 @@ on_failure = true   # 夜間実行が失敗したときWindows通知を出す
 # 例: redact_patterns = ["(株)〇〇商事", "案件[A-Z]-\\d+", "\\S+@\\S+\\.co\\.jp"]
 redact_patterns = []
 replacement = "[REDACTED]"
+# hide_private_titles = true   # タイムラインで私的タイトルを伏せる
 
 [activitywatch]
 base_url = "http://localhost:5600"
@@ -369,6 +374,7 @@ browser_export_dir = "~/Downloads/kaizenlog-browser-ai"
 # セッション表の「内容」列（初回依頼の先頭40字）。false で非表示。
 # 依頼逐語は privacy.redact_patterns でマスクしてから日誌へ書く。
 session_titles = true
+# session_details = true   # 往復上位セッションの依頼・ファイル・コマンド詳細
 # 推定コスト用単価（USD / 100万 output tokens）。既定表は目安で変動する。
 # 例: [aiwork.pricing] "claude-sonnet" = 3.0
 # ループ税の円換算（未設定なら USD のみ）
@@ -518,6 +524,8 @@ def load_config(path: str | None = None) -> Config:
     privacy = data.get("privacy", {})
     cfg.privacy.redact_patterns = _as_str_list(privacy.get("redact_patterns", []), "privacy.redact_patterns")
     cfg.privacy.replacement = privacy.get("replacement", cfg.privacy.replacement)
+    if "hide_private_titles" in privacy:
+        cfg.privacy.hide_private_titles = bool(privacy.get("hide_private_titles"))
     cfg.min_block_minutes = _coerce(float, general.get("min_block_minutes", cfg.min_block_minutes), "general.min_block_minutes")
     cfg.session_gap_minutes = _coerce(float, general.get("session_gap_minutes", cfg.session_gap_minutes), "general.session_gap_minutes")
     if "actions_position" in general:
@@ -545,6 +553,8 @@ def load_config(path: str | None = None) -> Config:
     )
     if "session_titles" in aiwork:
         cfg.aiwork.session_titles = bool(aiwork.get("session_titles"))
+    if "session_details" in aiwork:
+        cfg.aiwork.session_details = bool(aiwork.get("session_details"))
     if "usd_jpy" in aiwork and aiwork.get("usd_jpy") is not None:
         cfg.aiwork.usd_jpy = _coerce(float, aiwork.get("usd_jpy"), "aiwork.usd_jpy")
     if "loop_tax_alert_usd" in aiwork and aiwork.get("loop_tax_alert_usd") is not None:

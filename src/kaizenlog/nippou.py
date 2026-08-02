@@ -95,18 +95,8 @@ def generate_nippou_llm(
 
 # ---- 決定的モード（LLM不要） ----
 
-_PRIVATE_CATEGORIES = ("エンタメ",)
-# ブラウザ経由の私的コンテンツ（分類上「ブラウジング」になるもの）も日報から除外する
-_PRIVATE_TITLE_RE = re.compile(
-    r"youtube|netflix|spotify|twitter|reddit|tiktok|niconico|ニコニコ|prime video",
-    re.IGNORECASE,
-)
-
-
-def _is_private(block: dict) -> bool:
-    if block.get("category") in _PRIVATE_CATEGORIES:
-        return True
-    return bool(_PRIVATE_TITLE_RE.search(f"{block.get('title', '')} {block.get('app', '')}"))
+from .privacy_filter import PRIVATE_CATEGORIES as _PRIVATE_CATEGORIES
+from .privacy_filter import is_private_block as _is_private
 
 
 def _fmt_minutes(minutes: float) -> str:
@@ -165,7 +155,110 @@ def _display_work_title(title: str, *, max_chars: int = 48) -> str | None:
 
 
 def _project_work_lines(stats: Mapping[str, Any], *, limit: int = 5) -> list[str]:
-    """session digests を project 別に集約した業務行。"""
+    """業務行: effort がある日は成果ベース、無い日は旧セッション集約へフォールバック。"""
+    effort = stats.get("effort") if isinstance(stats.get("effort"), Mapping) else None
+    mins_map = (
+        effort.get("minutes")
+        if isinstance(effort, Mapping) and isinstance(effort.get("minutes"), Mapping)
+        else None
+    )
+    if mins_map:
+        return _project_work_lines_from_effort(stats, mins_map, limit=limit)
+    return _project_work_lines_legacy(stats, limit=limit)
+
+
+def _project_work_lines_from_effort(
+    stats: Mapping[str, Any],
+    mins_map: Mapping[str, Any],
+    *,
+    limit: int = 5,
+) -> list[str]:
+    """§F4: effort 時間 + files_touched + outcome_git subjects（プロンプト断片は使わない）。"""
+    from .effort import (
+        BUCKET_AI_GENERAL,
+        BUCKET_PRIVATE,
+        BUCKET_RESEARCH,
+        BUCKET_UNCLASSIFIED,
+    )
+
+    # digests から project 別 files/edits/tests
+    by_proj: dict[str, dict[str, Any]] = {}
+    for d in _session_digests(stats):
+        project = str(d.get("project") or "").strip()
+        if not project or project in (BUCKET_AI_GENERAL,):
+            continue
+        bucket = by_proj.setdefault(
+            project,
+            {"edits": 0, "files": [], "tests": 0},
+        )
+        source = str(d.get("source") or "")
+        tools_ok = d.get("tools_total") is not None and not source.endswith("-web")
+        if tools_ok:
+            bucket["edits"] += int(d.get("edits") or 0)
+        for f in d.get("files_touched") or []:
+            fs = str(f).strip()
+            if fs and fs not in bucket["files"]:
+                bucket["files"].append(fs)
+        if d.get("tests_run"):
+            bucket["tests"] += 1
+
+    # commits by repo_label
+    commits: dict[str, int] = {}
+    og = stats.get("outcome_git")
+    if isinstance(og, list):
+        for item in og:
+            if not isinstance(item, Mapping):
+                continue
+            label = str(item.get("repo_label") or "")
+            if label:
+                commits[label] = commits.get(label, 0) + int(item.get("commits") or 0)
+
+    skip_buckets = {
+        BUCKET_PRIVATE,
+        BUCKET_AI_GENERAL,
+        BUCKET_UNCLASSIFIED,
+        BUCKET_RESEARCH,
+        "（ほか）",
+    }
+    # 業務プロジェクト: effort で私的等を除き時間降順
+    work_items = [
+        (str(k), float(v or 0))
+        for k, v in mins_map.items()
+        if str(k) not in skip_buckets and float(v or 0) > 0
+    ]
+    work_items.sort(key=lambda x: (-x[1], x[0]))
+
+    lines: list[str] = []
+    for project, mins in work_items[:limit]:
+        bits: list[str] = []
+        meta = by_proj.get(project) or {}
+        files = list(meta.get("files") or [])[:3]
+        edits = int(meta.get("edits") or 0)
+        if files:
+            more = " ほか" if len(meta.get("files") or []) > 3 else ""
+            bits.append("・".join(files) + more)
+        if edits:
+            bits.append(f"{edits}編集")
+        c_n = commits.get(project, 0)
+        if c_n:
+            bits.append(f"コミット{c_n}件")
+        t_n = int(meta.get("tests") or 0)
+        if t_n:
+            bits.append(f"テスト{t_n}回")
+        body = "、".join(bits) if bits else "作業"
+        lines.append(f"- {project}（{_fmt_minutes(mins)}）: {body}")
+
+    # 調査・未分類・AI汎用はまとめて1行
+    other_mins = 0.0
+    for key in (BUCKET_RESEARCH, BUCKET_UNCLASSIFIED, BUCKET_AI_GENERAL):
+        other_mins += float(mins_map.get(key) or 0)
+    if other_mins > 0:
+        lines.append(f"- ほか 調査・未分類 {_fmt_minutes(other_mins)}")
+    return lines
+
+
+def _project_work_lines_legacy(stats: Mapping[str, Any], *, limit: int = 5) -> list[str]:
+    """effort 欠如日: セッション数・往復数形式（プロンプト断片は出さない）。"""
     by_proj: dict[str, dict[str, Any]] = {}
     for d in _session_digests(stats):
         project = str(d.get("project") or "—").strip() or "—"
@@ -176,21 +269,21 @@ def _project_work_lines(stats: Mapping[str, Any], *, limit: int = 5) -> list[str
                 "turns": 0,
                 "edits": 0,
                 "edits_known": False,
-                "titles": [],
+                "files": [],
             },
         )
         bucket["sessions"] += 1
         bucket["turns"] += int(d.get("user_turns") or 0)
-        # tools 計測不能（web 等）は edits を省略
         tools_total = d.get("tools_total")
         source = str(d.get("source") or "")
         tools_ok = tools_total is not None and not source.endswith("-web")
         if tools_ok:
             bucket["edits"] += int(d.get("edits") or 0)
             bucket["edits_known"] = True
-        title = str(d.get("title") or "").strip()
-        if title:
-            bucket["titles"].append(title)
+        for f in d.get("files_touched") or []:
+            fs = str(f).strip()
+            if fs and fs not in bucket["files"]:
+                bucket["files"].append(fs)
 
     ranked = sorted(
         by_proj.items(),
@@ -198,13 +291,6 @@ def _project_work_lines(stats: Mapping[str, Any], *, limit: int = 5) -> list[str
     )
     lines: list[str] = []
     for project, data in ranked[:limit]:
-        # 表示可能なタイトルだけ。短文（「A」等）は捨てる。
-        displayable = [
-            dt
-            for t in data["titles"]
-            if (dt := _display_work_title(t)) is not None
-        ]
-        rep = max(displayable, key=len) if displayable else ""
         if data["edits_known"]:
             meta = (
                 f"セッション{data['sessions']}回・往復{data['turns']}"
@@ -212,8 +298,12 @@ def _project_work_lines(stats: Mapping[str, Any], *, limit: int = 5) -> list[str
             )
         else:
             meta = f"セッション{data['sessions']}回・往復{data['turns']}"
-        if rep:
-            lines.append(f"- {project}: 「{rep}」（{meta}）")
+        files = data["files"][:3]
+        if files:
+            lines.append(
+                f"- {project}: {', '.join(files)}"
+                f"{' ほか' if len(data['files']) > 3 else ''}（{meta}）"
+            )
         else:
             lines.append(f"- {project}: （{meta}）")
     extra = len(ranked) - limit

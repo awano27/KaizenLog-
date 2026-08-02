@@ -385,10 +385,13 @@ def render_markdown(
     input_stats: InputStats | None = None,
     session_spans: Sequence[SessionSpan] | None = None,
     screen_fills: Mapping[str, str] | None = None,
+    *,
+    hide_private_titles: bool = True,
 ) -> str:
     """デイリーノートに埋め込むアクティビティログのMarkdownを生成する。
 
     screen_fills: block_key → redact 済み画面テキスト要約（未突合 AI のみ）。
+    hide_private_titles: 私的タイトルを（私的・非表示）にする。
     """
     lines: list[str] = []
     lines.append("## 📊 Activity Log")
@@ -491,12 +494,22 @@ def render_markdown(
     table_entries: list[tuple[datetime, str, float]] = []
     # (sort_key, markdown_row, minutes)
     spans = list(session_spans or ())
+    # (sort_key, category, app, content, minutes, start, end) for collapse
+    raw_rows: list[tuple[datetime, str, str, str, float, datetime, datetime]] = []
     for b in rows:
         title = b.titles[0] if b.titles else ""
         if len(title) > 60:
             title = title[:57] + "..."
+        # §F1: 私的タイトルを伏せる（行は残し被覆率を壊さない）
+        if hide_private_titles:
+            from .privacy_filter import is_private_block
+
+            if is_private_block(
+                category=b.category, title=title, app=b.app
+            ):
+                title = "（私的・非表示）"
         # §B1: AI ブロックのみセッション突合（非AI・細切れは不変）
-        if b.ai:
+        if b.ai and title != "（私的・非表示）":
             matched = _best_session_label(b, spans)
             if matched is not None:
                 title = matched
@@ -512,15 +525,24 @@ def render_markdown(
                     title = f"（画面テキスト: {fill}）"
                 else:
                     title = f"{title}（ログなし）" if title else "（ログなし）"
-        md = (
-            f"| {_fmt_time(b.start, tz)}-{_fmt_time(b.end, tz)} "
-            f"| {_fmt_minutes(b.minutes)} "
-            f"| {_markdown_table_cell(b.category)} "
-            f"| {_markdown_table_cell(b.app)} "
-            f"| {_markdown_table_cell(title)} |"
+        raw_rows.append(
+            (
+                b.start.astimezone(tz),
+                b.category,
+                b.app,
+                title,
+                float(b.minutes),
+                b.start,
+                b.end,
+            )
         )
-        table_entries.append((b.start.astimezone(tz), md, float(b.minutes)))
     for sort_key, md, mins in frag_rows:
+        # 細切れ行は既に md 文字列 — 圧縮対象外として後でマージ
+        table_entries.append((sort_key, md, mins))
+
+    # §F2: 同一 app/category/content が3行以上連続なら圧縮
+    collapsed = _collapse_consecutive_timeline_rows(raw_rows, tz)
+    for sort_key, md, mins in collapsed:
         table_entries.append((sort_key, md, mins))
     table_entries.sort(key=lambda x: x[0])
 
@@ -560,6 +582,55 @@ def render_markdown(
                     )
 
     return "\n".join(lines)
+
+
+def _collapse_consecutive_timeline_rows(
+    rows: list[tuple[datetime, str, str, str, float, datetime, datetime]],
+    tz: tzinfo,
+) -> list[tuple[datetime, str, float]]:
+    """同一 category/app/content が3行以上連続するとき1行に圧縮する。"""
+    if not rows:
+        return []
+    out: list[tuple[datetime, str, float]] = []
+    i = 0
+    n = len(rows)
+    while i < n:
+        sk, cat, app, content, mins, start, end = rows[i]
+        j = i + 1
+        total = mins
+        last_end = end
+        while (
+            j < n
+            and rows[j][1] == cat
+            and rows[j][2] == app
+            and rows[j][3] == content
+        ):
+            total += rows[j][4]
+            last_end = rows[j][6]
+            j += 1
+        count = j - i
+        if count >= 3:
+            md = (
+                f"| {_fmt_time(start, tz)}-{_fmt_time(last_end, tz)} "
+                f"| 計{_fmt_minutes(total)} ({count}回) "
+                f"| {_markdown_table_cell(cat)} "
+                f"| {_markdown_table_cell(app)} "
+                f"| {_markdown_table_cell(content)} |"
+            )
+            out.append((sk, md, total))
+        else:
+            for k in range(i, j):
+                sk_k, cat_k, app_k, content_k, mins_k, st_k, en_k = rows[k]
+                md = (
+                    f"| {_fmt_time(st_k, tz)}-{_fmt_time(en_k, tz)} "
+                    f"| {_fmt_minutes(mins_k)} "
+                    f"| {_markdown_table_cell(cat_k)} "
+                    f"| {_markdown_table_cell(app_k)} "
+                    f"| {_markdown_table_cell(content_k)} |"
+                )
+                out.append((sk_k, md, mins_k))
+        i = j
+    return out
 
 
 def _fragment_bucket_rows(

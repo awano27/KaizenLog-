@@ -404,6 +404,9 @@ def cmd_generate(
         input_stats=input_stats,
         session_spans=session_spans,
         screen_fills=screen_fills or None,
+        hide_private_titles=bool(
+            getattr(cfg.privacy, "hide_private_titles", True)
+        ),
     )
 
     effort_payload: dict | None = None
@@ -474,6 +477,9 @@ def cmd_generate(
             measurement_gap=gap,
             structured_cli_sessions=structured_cli_n,
             screen_samples=screen_samples or None,
+            session_details=bool(
+                getattr(cfg.aiwork, "session_details", True)
+            ),
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
