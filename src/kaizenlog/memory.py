@@ -1890,7 +1890,7 @@ def _action_card_lines(
     """今日実施する1件を、完了操作と測定状態に分けて表示する。"""
     from .verdict import format_action_verdict_tag, parse_pass_condition
 
-    lines = [f"- [{mark}] {entry.id}"]
+    lines = [f"- [{mark}] {entry.id}:"]
     trigger, action = _split_action_trigger(humanize_action_body(entry.action))
     if trigger:
         lines.append(f"  - いつ: {trigger}")
@@ -1898,6 +1898,7 @@ def _action_card_lines(
     lines.append(f"  - 完了条件: 今日の予定分を実施して `kaizenlog done {entry.id}`")
     if effect := format_effect_metric_clause(entry.action):
         lines.append(f"  - 効果目標: {effect}")
+        lines.append(f"  - 効果指標: {effect}")
     shortfall = _denominator_shortfall_note(entry, stats_by_day)
     if shortfall:
         lines.append(f"  - 測定: 未判定（集計待ち・{shortfall}）")
@@ -1911,6 +1912,8 @@ def _action_card_lines(
         latest_stats = stats_by_day.get(target_day.isoformat())
         if scope := _metric_scope_note(metric, latest_stats):
             lines.append(f"  - 因果の範囲: {scope}")
+    if entry.verdict == "fail" and entry.verdict_stage == "confirmed":
+        lines.extend(_post_verdict_trajectory_lines(entry, target_day, stats_by_day))
     return lines
 
 
@@ -1950,6 +1953,7 @@ def _status_and_all_lines(
     shown: Sequence[MemoryEntry],
     monitoring: Sequence[MemoryEntry],
     *,
+    streaks: Streaks,
     monitoring_shown: int = 2,
 ) -> list[str]:
     """週次の投与状況と省略した一覧への導線を最後に置く。"""
@@ -1972,8 +1976,16 @@ def _status_and_all_lines(
         if stats.skipped:
             summary += f"スキップは{stats.skipped}件。"
         if monitoring:
-            summary += f"指標達成済みは{len(monitoring)}件。"
+            summary += (
+                f"うち{len(monitoring)}件はチェックなしで指標が目標に達しています"
+                f"（指標は達成済み {len(monitoring)}件）。"
+            )
         lines.append(summary)
+
+    if streaks.current >= 2:
+        lines.append(f"🔥 連続{streaks.current}日")
+    elif streaks.broken_yesterday and streaks.best > 0:
+        lines.append(f"今日から再スタート（過去最長 {streaks.best}日）")
 
     rest_recent = max(0, len(actionable) - len(shown))
     lines.append(
@@ -2012,6 +2024,7 @@ def render_actions_section(
                 checked_ids.add(id_match.group(0))
 
     stats = compute_action_stats(entries, target_day)
+    streaks = compute_streaks(entries, target_day)
     candidate_cap = resolve_display_cap(stats, max_candidates=max_candidates)
     stats_by_day = _stats_by_day(stats_history)
     actionable, monitoring = split_action_candidates(buckets.recent, checked_ids)
@@ -2080,6 +2093,7 @@ def render_actions_section(
             actionable,
             shown,
             monitoring,
+            streaks=streaks,
             monitoring_shown=len(shown_monitoring),
         )
     )
