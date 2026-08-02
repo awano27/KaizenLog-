@@ -28,6 +28,19 @@ from kaizenlog.guard import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_guard_state(tmp_path_factory, monkeypatch):
+    """state_dir() を OS を問わず一時ディレクトリへ隔離する。
+
+    guard.state_dir は Windows で %LOCALAPPDATA%、POSIX で $XDG_DATA_HOME を見る。
+    片方だけ差し替えると、もう一方の OS で実ユーザーのホームを読み書きしてしまう
+    （CI(ubuntu) で ~/.local/share/kaizenlog/guard を壊す）。両方を必ず差し替える。
+    """
+    base = tmp_path_factory.mktemp("guard_home")
+    monkeypatch.setenv("LOCALAPPDATA", str(base))
+    monkeypatch.setenv("XDG_DATA_HOME", str(base))
+
+
 def test_c1_import_lightness():
     """subprocess で import kaizenlog.guard 後の sys.modules を検査。"""
     import subprocess
@@ -54,6 +67,7 @@ sys.exit(1 if leaked else 0)
 
 def test_c1_debounce_skips_transcript_read(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     sid = "sess-debounce"
     st = load_state(sid)
     st["last_parse_ts"] = time.time()
@@ -127,6 +141,7 @@ def test_c1_incomplete_line_deferred(tmp_path: Path):
 
 def test_c1_all_errors_exit_zero(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     assert run_hook("not-json{{{") == 0
     assert run_hook(json.dumps({"session_id": "s", "transcript_path": "/no/such"})) == 0
     # 破損 state
@@ -169,6 +184,7 @@ def test_c1_all_errors_exit_zero(tmp_path: Path, monkeypatch, capsys):
 
 def test_c1_detection_boundaries(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     settings = {
         "enabled": True,
         "debounce_seconds": 0,
@@ -230,6 +246,7 @@ def test_c1_settings_injection_suppresses_host_notification_by_default(
 ):
     """設定注入（テスト経路）はOS通知を出さず、フックJSONだけ返す。"""
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     sid = "notify-default-off"
     st = load_state(sid)
     st["effective_debounce"] = 0
@@ -261,6 +278,7 @@ def test_c1_settings_injection_can_explicitly_enable_host_notification(
 ):
     """設定注入で notify=True を明示したときだけOS通知を許可する。"""
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     sid = "notify-explicit-on"
     st = load_state(sid)
     st["effective_debounce"] = 0
@@ -292,6 +310,7 @@ def test_c1_config_notify_false_keeps_hook_context_without_host_notification(
 ):
     """TOMLのnotify=falseは検知を残し、Windows通知だけを抑止する。"""
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     cfg_path = tmp_path / "config.toml"
     cfg_path.write_text(
         f'[general]\nvault_dir = "{tmp_path.as_posix()}"\n'
@@ -320,6 +339,7 @@ def test_c1_config_notify_false_keeps_hook_context_without_host_notification(
 
 def test_c1_tool_error_streak(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     settings = {
         "enabled": True,
         "debounce_seconds": 0,
@@ -383,6 +403,7 @@ def test_c1_tool_error_streak(tmp_path: Path, monkeypatch, capsys):
 
 def test_c1_redact_and_price_fail_closed_both_sides(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
 
     def redactor(t: str) -> str:
         return t.replace("SECRET", "[R]")
@@ -532,6 +553,7 @@ def test_c1_install_write_backup_and_idempotent(tmp_path: Path):
 
 def test_c1_perf_smoke_1000_lines(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     tr = tmp_path / "big.jsonl"
 
     def to_letters(n: int, width: int = 10) -> str:
@@ -626,8 +648,9 @@ def test_b1_breaker_line_and_cleanup(tmp_path: Path, monkeypatch):
 
     # cleanup: 10日超は削除、ちょうど7日は残す（mtime < cutoff のみ削除）
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     d = state_dir()
-    d.mkdir(parents=True)
+    d.mkdir(parents=True, exist_ok=True)
     import os
 
     old = d / "old.json"
@@ -650,6 +673,7 @@ def test_b1_doctor_guard_no_mkdir(tmp_path: Path, monkeypatch):
     from kaizenlog.doctor import run_doctor
 
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la_absent"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la_absent"))
     monkeypatch.chdir(tmp_path)
     cfg = Config(vault_dir=tmp_path)
     (tmp_path / "01 Daily Notes").mkdir()
@@ -663,6 +687,7 @@ def test_b1_doctor_guard_no_mkdir(tmp_path: Path, monkeypatch):
 def test_r1_effective_debounce_zero_allows_chain(tmp_path: Path, monkeypatch):
     """effective_debounce=0 なら連続3回で chain_len=3。"""
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     sid = "deb0"
     st = load_state(sid)
     st["effective_debounce"] = 0
@@ -694,6 +719,7 @@ def test_r1_effective_debounce_zero_allows_chain(tmp_path: Path, monkeypatch):
 def test_a1_task_notification_does_not_fire_retry(tmp_path: Path, monkeypatch, capsys):
     """§A1: task-notification 連投はリトライ連鎖に数えない。"""
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     sid = "xml-spam"
     st = load_state(sid)
     st["effective_debounce"] = 0
@@ -725,6 +751,7 @@ def test_a1_task_notification_does_not_fire_retry(tmp_path: Path, monkeypatch, c
 
 def test_r1_effective_debounce_60_blocks_early(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     sid = "deb60"
     st = load_state(sid)
     st["last_parse_ts"] = time.time() - 31  # 31秒前
@@ -819,6 +846,7 @@ def test_r3_timezone_jst_boundary():
 
 def test_r4_tool_error_reset_on_success(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "la"))
     settings = {
         "enabled": True,
         "debounce_seconds": 0,

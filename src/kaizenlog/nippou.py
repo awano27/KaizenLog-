@@ -148,6 +148,22 @@ def _session_digests(stats: Mapping[str, Any]) -> list[dict]:
     return out
 
 
+_LEADING_ELLIPSIS_RE = re.compile(r"^(?:\.{2,3}|…)+")
+_MIN_WORK_TITLE_LEN = 8
+
+
+def _display_work_title(title: str, *, max_chars: int = 48) -> str | None:
+    """日報用の依頼タイトル。先頭 `...` を落とし、短文は捨て、長い文は末尾優先。"""
+    t = " ".join((title or "").split()).strip()
+    t = _LEADING_ELLIPSIS_RE.sub("", t).strip()
+    if len(t) < _MIN_WORK_TITLE_LEN:
+        return None
+    if len(t) <= max_chars:
+        return t
+    # 先頭切りは「何をしたか」が消えるので末尾を残す
+    return "…" + t[-(max_chars - 1) :]
+
+
 def _project_work_lines(stats: Mapping[str, Any], *, limit: int = 5) -> list[str]:
     """session digests を project 別に集約した業務行。"""
     by_proj: dict[str, dict[str, Any]] = {}
@@ -182,13 +198,13 @@ def _project_work_lines(stats: Mapping[str, Any], *, limit: int = 5) -> list[str
     )
     lines: list[str] = []
     for project, data in ranked[:limit]:
-        rep = ""
-        candidates = [t for t in data["titles"] if len(t) >= 8]
-        if candidates:
-            rep = max(candidates, key=len)
-        elif data["titles"]:
-            rep = max(data["titles"], key=len)
-        title_part = f"「{rep}」" if rep else "「—」"
+        # 表示可能なタイトルだけ。短文（「A」等）は捨てる。
+        displayable = [
+            dt
+            for t in data["titles"]
+            if (dt := _display_work_title(t)) is not None
+        ]
+        rep = max(displayable, key=len) if displayable else ""
         if data["edits_known"]:
             meta = (
                 f"セッション{data['sessions']}回・往復{data['turns']}"
@@ -196,7 +212,10 @@ def _project_work_lines(stats: Mapping[str, Any], *, limit: int = 5) -> list[str
             )
         else:
             meta = f"セッション{data['sessions']}回・往復{data['turns']}"
-        lines.append(f"- {project}: {title_part}（{meta}）")
+        if rep:
+            lines.append(f"- {project}: 「{rep}」（{meta}）")
+        else:
+            lines.append(f"- {project}: （{meta}）")
     extra = len(ranked) - limit
     if extra > 0:
         lines.append(f"- ほか {extra}プロジェクト")
@@ -311,6 +330,8 @@ def _screenpipe_work_lines(
     """
     if not activity_md or "画面テキスト" not in activity_md:
         return []
+    from .screenpipe_source import extract_screen_text_excerpt, normalize_app_name
+
     # 画面テキストで補完された行だけを集計する（AI作業全体ではない）
     by_app: dict[str, dict[str, Any]] = {}
     for ln in activity_md.splitlines():
@@ -322,13 +343,13 @@ def _screenpipe_work_lines(
             continue
         if parts[2] != "AI作業":
             continue
-        m = re.search(r"（画面テキスト:\s*(.+?)）\s*$", parts[4])
-        if not m:
+        excerpt = extract_screen_text_excerpt(parts[4])
+        if not excerpt:
             continue
         bucket = by_app.setdefault(parts[3], {"minutes": 0.0, "excerpt": None})
         bucket["minutes"] += _parse_block_minutes(parts[1])
         if not bucket["excerpt"]:
-            bucket["excerpt"] = m.group(1).strip()
+            bucket["excerpt"] = excerpt
     if not by_app:
         return []
     app_label, data = max(
@@ -337,7 +358,6 @@ def _screenpipe_work_lines(
     minutes = float(data["minutes"])
     if minutes < 10.0 or not data["excerpt"]:
         return []
-    from .screenpipe_source import normalize_app_name
 
     app = normalize_app_name(app_label) or app_label or "AI"
     return [f"- {app}: 「{data['excerpt']}」（画面テキストより・約{_fmt_minutes(minutes)}）"]
@@ -384,17 +404,19 @@ def generate_nippou_deterministic(
     lines.append("")
 
     # ---- 【明日の予定】----
+    # アクション節と役割分担: 日報は平文1行（KZN-ID なし）。詳細は 📌 側。
     lines.append("【明日の予定】")
     tomorrow: list[str] = []
     unchecked = _unchecked_tasks(intent)
-    for t in unchecked[:3]:
+    for t in unchecked[:2]:
         tomorrow.append(f"- {t}")
-    for kid, body in list(open_kzn_actions or [])[:2]:
-        snippet = " ".join(str(body).split())
-        # §R3: 40字超は 39字 +「…」（無印切詰めをやめる）
-        if len(snippet) > 40:
-            snippet = snippet[:39] + "…"
-        tomorrow.append(f"- {kid}: {snippet}")
+    if not tomorrow and open_kzn_actions:
+        body = " ".join(str(open_kzn_actions[0][1]).split())
+        # 60字超は末尾優先（先頭切りで行動が消えない）
+        if len(body) > 60:
+            body = "…" + body[-59:]
+        if body:
+            tomorrow.append(f"- {body}")
     if not tomorrow:
         tomorrow.append("- 引き続き上記対応")
     lines.extend(tomorrow)

@@ -807,6 +807,27 @@ def partition_open_actions(
     return OpenActionBuckets(recent=recent, stale=stale, older=older)
 
 
+_ACTION_MINUTES_HINT_RE = re.compile(
+    r"(?:上限|目安|以内|約)?\s*(\d+)\s*分|(?:（|\()(\d+)\s*秒(?:）|\))"
+)
+
+
+def _estimate_action_minutes_hint(action: str) -> str | None:
+    """行動文から所要の目安を拾う（無ければ None）。"""
+    text = action or ""
+    m = _ACTION_MINUTES_HINT_RE.search(text)
+    if not m:
+        return None
+    if m.group(1):
+        return f"{int(m.group(1))}分"
+    if m.group(2):
+        sec = int(m.group(2))
+        if sec < 60:
+            return f"{sec}秒"
+        return f"{max(1, round(sec / 60))}分"
+    return None
+
+
 def format_today_action_line(entry: MemoryEntry) -> str:
     """today 一覧の1行。ID は done へコピペできる完全形。"""
     try:
@@ -1650,42 +1671,6 @@ def render_actions_section(
         lines.append(f"🔥 連続{streaks.current}日")
     elif streaks.broken_yesterday and streaks.best > 0:
         lines.append(f"今日から再スタート（過去最長 {streaks.best}日）")
-    if stats.proposed > 0 or stats.skipped > 0:
-        # §A2: 内部用語（消化/実行済みPASS/未実行のままPASS到達）を出さない平文
-        skip_sentence = (
-            f"スキップは{stats.skipped}件。" if stats.skipped else ""
-        )
-        undone_sentence = (
-            f"うち{stats.undone_passed}件はチェックなしで指標が目標に達しています"
-            f"（習慣化するなら下の「達成済み」からチェック）。"
-            if stats.undone_passed
-            else ""
-        )
-        # 低調期の保護: 悪い消化率%の常時提示が記録行動を止める副作用への対策
-        if (
-            stats.done_rate is not None
-            and stats.done_rate < _DOSING_DONE_RATE
-            and stats.proposed >= _DOSING_MIN_PROPOSED
-        ):
-            line = (
-                f"今週は{stats.proposed}件提案し、"
-                f"チェック完了は{stats.done}件。"
-            )
-        else:
-            rate = (
-                _pct_label(stats.done_rate)
-                if stats.done_rate is not None
-                else "—"
-            )
-            line = (
-                f"直近{stats.window_days}日は{stats.proposed}件提案し、"
-                f"チェック完了は{stats.done}件（完了率 {rate}）。"
-            )
-        if skip_sentence:
-            line = f"{line}{skip_sentence}"
-        if undone_sentence:
-            line = f"{line}{undone_sentence}"
-        lines.append(line)
 
     stats_by_day = _stats_by_day(stats_history)
 
@@ -1751,6 +1736,57 @@ def render_actions_section(
     # §D1: 未完了は最新1件のみ（件数算出は変えず表示上限だけ）
     _OPEN_DISPLAY_CAP = 1
     shown = still_open[:_OPEN_DISPLAY_CAP]
+
+    # 読者UX: スコアボードより先に「今日の実験」を置く
+    if shown:
+        focus = humanize_action_body(shown[0].action)
+        focus_one = " ".join(focus.split())
+        if len(focus_one) > 60:
+            focus_one = focus_one[:59] + "…"
+        mins = _estimate_action_minutes_hint(shown[0].action)
+        if mins:
+            lines.append(f"今日の実験: {focus_one}（目安{mins}）")
+        else:
+            lines.append(f"今日の実験: {focus_one}")
+
+    # 週次サマリは補助（チェック0件を糾弾しない）
+    if stats.proposed > 0 or stats.skipped > 0:
+        skip_sentence = (
+            f"スキップは{stats.skipped}件。" if stats.skipped else ""
+        )
+        undone_sentence = (
+            f"うち{stats.undone_passed}件はチェックなしで指標が目標に達しています"
+            f"（習慣化するなら `kaizenlog today --all`）。"
+            if stats.undone_passed
+            else ""
+        )
+        if stats.done == 0 and stats.proposed > 0:
+            line = f"今週の提案は{stats.proposed}件（未チェックの実験が残っています）。"
+        elif (
+            stats.done_rate is not None
+            and stats.done_rate < _DOSING_DONE_RATE
+            and stats.proposed >= _DOSING_MIN_PROPOSED
+        ):
+            line = (
+                f"今週は{stats.proposed}件提案し、"
+                f"チェック完了は{stats.done}件。"
+            )
+        else:
+            rate = (
+                _pct_label(stats.done_rate)
+                if stats.done_rate is not None
+                else "—"
+            )
+            line = (
+                f"直近{stats.window_days}日は{stats.proposed}件提案し、"
+                f"チェック完了は{stats.done}件（完了率 {rate}）。"
+            )
+        if skip_sentence:
+            line = f"{line}{skip_sentence}"
+        if undone_sentence:
+            line = f"{line}{undone_sentence}"
+        lines.append(line)
+
     for e in shown:
         mark = "x" if e.id in checked_ids else " "
         lines.extend(_action_line(e, mark))

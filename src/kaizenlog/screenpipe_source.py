@@ -83,8 +83,38 @@ def normalize_app_name(app: str | None) -> str:
 
 
 def is_localhost_url(url: str) -> bool:
-    u = (url or "").strip().lower()
-    return u.startswith("http://localhost") or u.startswith("http://127.0.0.1")
+    """True only for plain http:// loopback hosts (no userinfo / no prefix tricks)."""
+    u = (url or "").strip()
+    if not u:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(u)
+    except ValueError:
+        return False
+    if parsed.scheme.lower() != "http":
+        return False
+    # Reject credentials that could re-route or smuggle via userinfo.
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    host = (parsed.hostname or "").lower()
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+_SCREEN_TEXT_EXCERPT_RE = re.compile(r"（画面テキスト:\s*(.+)）\s*(?:\||$)")
+
+
+def extract_screen_text_excerpt(line: str) -> str | None:
+    """日誌行 / 表セルから「画面テキスト」要約を取り出す。
+
+    全角括弧の入れ子（例: 関数（foo））でも、閉じは行末または次セル `|` 手前に合わせる。
+    """
+    if not line or "画面テキスト:" not in line:
+        return None
+    m = _SCREEN_TEXT_EXCERPT_RE.search(line)
+    if not m:
+        return None
+    text = m.group(1).strip()
+    return text or None
 
 
 def _to_utc_iso(dt: datetime) -> str:

@@ -1289,14 +1289,14 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
     # §S6: activity から画面テキスト行を拾い advisor 参考節へ（enabled 時のみ）
     screenpipe_lines: list[str] = []
     if bool(getattr(getattr(cfg, "screenpipe", None), "enabled", False)):
+        from .screenpipe_source import extract_screen_text_excerpt
+
         act = extract_section(content, ACTIVITY_MARKER) or ""
         for ln in act.splitlines():
-            if "画面テキスト:" not in ln:
+            excerpt = extract_screen_text_excerpt(ln)
+            if not excerpt:
                 continue
-            m = re.search(r"（画面テキスト:\s*(.+?)）", ln)
-            if not m:
-                continue
-            screenpipe_lines.append(m.group(1).strip()[:120])
+            screenpipe_lines.append(excerpt[:120])
             if len(screenpipe_lines) >= 3:
                 break
 

@@ -29,5 +29,7 @@ where = ["src"]
 kaizenlog = ["prompts/*.md", "skills/*/SKILL.md", "eval_samples/*.json"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# "." はリポジトリルート。一部のテストが `from tests.xxx import` で共有 fixture を
+# 参照するため必要（`pytest` 直接実行では cwd が sys.path に入らず CI が壊れる）。
+pythonpath = ["src", "."]
 testpaths = ["tests"]

@@ -425,5 +425,41 @@ def test_s12_doctor_three_states():
 
 def test_normalize_app_name():
     assert normalize_app_name("ChatGPT.exe") == "ChatGPT"
+
+
+def test_is_localhost_url_allows_true_localhost_only():
     assert is_localhost_url("http://localhost:3030")
+    assert is_localhost_url("http://127.0.0.1:3030")
+    assert is_localhost_url("http://[::1]:3030")
+    assert is_localhost_url("http://localhost")
+    assert is_localhost_url("  HTTP://127.0.0.1:3030/path  ")
+
+
+def test_is_localhost_url_rejects_prefix_and_userinfo_bypass():
     assert not is_localhost_url("https://evil.example")
+    assert not is_localhost_url("http://localhost.evil.com")
+    assert not is_localhost_url("http://localhost.evil.com:3030")
+    assert not is_localhost_url("http://127.0.0.1.attacker")
+    assert not is_localhost_url("http://127.0.0.1:3030@evil.example/")
+    assert not is_localhost_url("http://user:pass@localhost:3030/")
+    assert not is_localhost_url("https://localhost:3030")
+    assert not is_localhost_url("http://192.168.1.1:3030")
+    assert not is_localhost_url("")
+    assert not is_localhost_url("not-a-url")
+
+
+def test_extract_screen_text_excerpt_handles_nested_fullwidth_parens():
+    from kaizenlog.screenpipe_source import extract_screen_text_excerpt
+
+    nested = "（画面テキスト: 関数（foo）の実装を進めた）"
+    assert extract_screen_text_excerpt(nested) == "関数（foo）の実装を進めた"
+
+    table = (
+        "| 10:00 | 15 | AI作業 | ChatGPT | "
+        "（画面テキスト: 関数（foo）の実装を進めた） |"
+    )
+    assert extract_screen_text_excerpt(table) == "関数（foo）の実装を進めた"
+
+    plain = "（画面テキスト: 単純な要約）"
+    assert extract_screen_text_excerpt(plain) == "単純な要約"
+    assert extract_screen_text_excerpt("画面テキストなし") is None
