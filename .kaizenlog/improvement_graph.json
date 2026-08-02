@@ -3,7 +3,7 @@
   "graph_id": "kaizenlog-practical-journal-advice-2026-08-02",
   "goal": "日誌を30秒で判断でき、アドバイスを1〜3件の証拠に紐づく5〜15分のPASS/FAILマイクロアクションにする",
   "created_at": "2026-08-02T23:01:07+09:00",
-  "updated_at": "2026-08-03T00:21:10+09:00",
+  "updated_at": "2026-08-03T00:48:32+09:00",
   "loop": {
     "pattern": "generate-critique-revise",
     "critique_revise_limit": 2,
@@ -1513,6 +1513,449 @@
         "step": "phase5-ci-timezone-contract",
         "timestamp": "2026-08-03T00:21:10+09:00"
       }
+    },
+    {
+      "id": "E-REAL-ACTIONS-20260803-001",
+      "type": "Evidence",
+      "status": "confirmed",
+      "claim": "実日誌2026-08-03のactions区間は、同じ主アクションを要約行とcheckboxで重複表示した後、達成済み件数・指標後退警告・別KZNの時系列・残件数を同じ視覚階層へ連結しており、今日実行する対象と観測だけする対象の境界が弱い。",
+      "data": {
+        "journal": "C:/develop/obsidian/2026/01 Daily Notes/2026-08-03.md",
+        "managed_lines": "17-33",
+        "primary_action_id": "KZN-20260802-001",
+        "primary_action_target": "1時間あたりのカテゴリ変更回数 <= 65",
+        "primary_action_latest_observation_visible": false,
+        "regressed_monitor_id": "KZN-20260727-002",
+        "regressed_monitor_samples_visible": 5,
+        "manual_region_read_or_modified": false
+      },
+      "provenance": {
+        "sources": [
+          "user-provided actions excerpt",
+          "read-only extraction of kaizenlog:actions marker from 2026-08-03.md"
+        ],
+        "step": "action-clarity-phase1-real-journal-audit",
+        "timestamp": "2026-08-03T00:34:58+09:00"
+      }
+    },
+    {
+      "id": "G-ACTION-SEPARATION-001",
+      "type": "Gap",
+      "status": "open",
+      "claim": "利用者が5秒以内に今日実行する1件を特定できる見出し・手順・完了境界がなく、アクションと観測情報が同列に見える。",
+      "success_metric": "managed actions冒頭だけで実行対象、トリガー、手順、所要時間、完了操作を一意に答えられる",
+      "provenance": {
+        "sources": [
+          "E-REAL-ACTIONS-20260803-001",
+          "user feedback: 何をアクションにあげるのかわかりづらい"
+        ],
+        "step": "action-clarity-phase1-gap-registration",
+        "timestamp": "2026-08-03T00:34:58+09:00"
+      }
+    },
+    {
+      "id": "G-GOAL-MONITORING-001",
+      "type": "Gap",
+      "status": "open",
+      "claim": "主アクションは効果目標だけで最新実測・観測日・測定可否を表示せず、別KZNは時系列があっても行動実施との対応を測れないため、目標に対するモニタリング状態を即断できない。",
+      "success_metric": "各表示対象が目標、最新実測、観測日、サンプル数、状態、実行有無との因果限界を明示する",
+      "provenance": {
+        "sources": [
+          "E-REAL-ACTIONS-20260803-001",
+          "user question: 目標にたいするモニタリングはできていますか"
+        ],
+        "step": "action-clarity-phase1-gap-registration",
+        "timestamp": "2026-08-03T00:34:58+09:00"
+      }
+    },
+    {
+      "id": "E-ACTION-TASK-DIRTY-BASELINE-001",
+      "type": "Evidence",
+      "status": "confirmed",
+      "claim": "新タスク開始時の共有worktreeには非所有のadvice_evidence.pyとtest_round49_goal_achievement_ai_io.pyのtracked変更、および.grok/とscripts/self_improve_graph.pyの未追跡物がある。PLAN.mdだけは本タスクの計画追記である。",
+      "data": {
+        "task_owned": [
+          "PLAN.md",
+          ".kaizenlog/improvement_graph.json"
+        ],
+        "preserve_tracked": [
+          "src/kaizenlog/advice_evidence.py",
+          "tests/test_round49_goal_achievement_ai_io.py"
+        ],
+        "preserve_untracked": [
+          ".grok/",
+          "scripts/self_improve_graph.py"
+        ],
+        "head": "824cad37bfb549524d2d7b74ad358671239c0102"
+      },
+      "provenance": {
+        "sources": [
+          "git status --short --branch",
+          "git rev-parse HEAD",
+          "task-owned PLAN append"
+        ],
+        "step": "action-clarity-phase1-dirty-baseline",
+        "timestamp": "2026-08-03T00:34:58+09:00"
+      }
+    },
+    {
+      "id": "E-MONITOR-DIRECTION-001",
+      "type": "Evidence",
+      "status": "confirmed",
+      "claim": "KZN-20260727-002の目標は平均往復数 >= 2.5で、判定後5点6.1/12.3/1.5/13.3/3.2のうち未達は1.5の1日だけである。表示はこの未達1日を『閾値超過』と記すため、演算子方向と日本語が矛盾する。",
+      "data": {
+        "operator": ">=",
+        "target": 2.5,
+        "samples": [6.1, 12.3, 1.5, 13.3, 3.2],
+        "met_days": 4,
+        "missed_days": 1,
+        "current_label": "1日が閾値超過",
+        "correct_direction_label": "1日が目標未達（2.5未満）"
+      },
+      "provenance": {
+        "sources": [
+          "C:/develop/obsidian/2026/01 Daily Notes/2026-08-03.md kaizenlog:actions",
+          "src/kaizenlog/memory.py:_post_verdict_trajectory_lines"
+        ],
+        "step": "action-clarity-phase1-monitoring-semantics",
+        "timestamp": "2026-08-03T00:37:10+09:00"
+      }
+    },
+    {
+      "id": "F-MONITOR-DIRECTION-LABEL-001",
+      "type": "Failure",
+      "status": "confirmed",
+      "claim": "_post_verdict_trajectory_linesはtarget_metがfalseの件数を演算子に関係なく『閾値超過』と表示する。増加目標では未達は閾値未満なので、監視結果の意味を逆向きに読ませる。",
+      "provenance": {
+        "sources": [
+          "E-MONITOR-DIRECTION-001",
+          "src/kaizenlog/memory.py lines 1474-1520"
+        ],
+        "step": "action-clarity-phase1-monitoring-semantics",
+        "timestamp": "2026-08-03T00:37:10+09:00"
+      }
+    },
+    {
+      "id": "E-ACTIVE-MONITOR-20260803-001",
+      "type": "Evidence",
+      "status": "confirmed",
+      "claim": "KZN-20260802-001の測定日は2026-08-03で、同日statsは存在するが稼働22.7分・context_switches 25のため、60分を分母にするcontext_switches_per_hourは現時点で有効値を返さない。台帳verdictも未判定のままである。",
+      "data": {
+        "entry_id": "KZN-20260802-001",
+        "measure_day": "2026-08-03",
+        "metric": "context_switches_per_hour",
+        "target": "<= 65",
+        "stats_total_minutes": 22.7,
+        "stats_context_switches": 25,
+        "metric_value": null,
+        "reason": "minimum 60-minute denominator not reached",
+        "verdict": null
+      },
+      "provenance": {
+        "sources": [
+          "kaizenlog.memory.load_entries",
+          "kaizenlog.stats.load_stats",
+          "kaizenlog.verdict.measure_day_for_entry",
+          "kaizenlog.experiments.metric_from_stats",
+          "C:/develop/obsidian/2026/.kaizenlog/stats/2026-08-03.json"
+        ],
+        "step": "action-clarity-phase1-real-monitor-audit",
+        "timestamp": "2026-08-03T00:40:26+09:00"
+      }
+    },
+    {
+      "id": "F-MONITOR-REGRESSION-STATE-001",
+      "type": "Failure",
+      "status": "confirmed",
+      "claim": "達成済みカードの『指標が戻っています』判定は直近推移に未達が1件でもあるかだけを見ており、最新8/2値3.2が目標>=2.5を満たしていても現在悪化中と表示する。",
+      "data": {
+        "entry_id": "KZN-20260727-002",
+        "latest_observation": "2026-08-02 3.2 PASS",
+        "recent_met_ratio": "4/5",
+        "trigger": "any failed point in last five",
+        "current_heading": "達成済みだが指標が戻っています"
+      },
+      "provenance": {
+        "sources": [
+          "E-MONITOR-DIRECTION-001",
+          "src/kaizenlog/memory.py pass_achieved regression selection"
+        ],
+        "step": "action-clarity-phase1-monitoring-state",
+        "timestamp": "2026-08-03T00:40:26+09:00"
+      }
+    },
+    {
+      "id": "I-ACTION-MONITORING-SNAPSHOT-001",
+      "type": "Insight",
+      "status": "confirmed",
+      "claim": "目標指標のデータ収集は存在するが、日誌actionsは書込み時点のsnapshotでライブ監視ではない。現在の同一rendererは分母不足を表示する一方、保存済み日誌は効果目標だけを表示しており、観測時点が読者に見えない。",
+      "data": {
+        "saved_section_sha256": "be8e6df90f0c7b47f20820dbec0a7174352a96f58ae3e8a8c0bc857d66aeb5c5",
+        "current_render_sha256": "2be069e1a5b2f99cb513a8d94d5edd63b5df754062a5558b0c4323d51570467e",
+        "live_monitor": false,
+        "metric_collection": true
+      },
+      "provenance": {
+        "sources": [
+          "kaizenlog.vault.extract_section",
+          "render_actions_section with current stats_history",
+          "E-ACTIVE-MONITOR-20260803-001"
+        ],
+        "step": "action-clarity-phase1-snapshot-audit",
+        "timestamp": "2026-08-03T00:40:26+09:00"
+      }
+    },
+    {
+      "id": "E-DAILY-GOAL-MISSING-20260803-001",
+      "type": "Evidence",
+      "status": "confirmed",
+      "claim": "2026-08-03日誌にはkaizenlog:goal区間が存在せず、同日statsのgoal_text・goal_achieved・goal_sourceもnullである。したがって日次作業目標に対する進捗は現在モニタリングされていない。",
+      "data": {
+        "day": "2026-08-03",
+        "goal_marker_present": false,
+        "stats_goal_text": null,
+        "stats_goal_achieved": null,
+        "stats_goal_source": null
+      },
+      "provenance": {
+        "sources": [
+          "kaizenlog.vault.extract_section with kaizenlog:goal",
+          "C:/develop/obsidian/2026/.kaizenlog/stats/2026-08-03.json"
+        ],
+        "step": "action-clarity-phase1-daily-goal-audit",
+        "timestamp": "2026-08-03T00:41:59+09:00"
+      }
+    },
+    {
+      "id": "G-DAILY-GOAL-MONITORING-001",
+      "type": "Gap",
+      "status": "open",
+      "claim": "改善アクションの効果指標と、その日に達成したい作業目標を別々に定義・表示する境界がなく、日次目標未記入時もactionsだけでは監視不能と分からない。",
+      "success_metric": "actions表示が日次目標の有無と監視状態を明示し、改善指標との混同を起こさない",
+      "provenance": {
+        "sources": [
+          "E-DAILY-GOAL-MISSING-20260803-001",
+          "E-ACTIVE-MONITOR-20260803-001"
+        ],
+        "step": "action-clarity-phase1-daily-goal-gap",
+        "timestamp": "2026-08-03T00:41:59+09:00"
+      }
+    },
+    {
+      "id": "E-MONITOR-METRIC-SCOPE-001",
+      "type": "Evidence",
+      "status": "confirmed",
+      "claim": "KZN-20260727-002はCodex起動前の行動なのに、PASS指標ai_avg_turnsはstats.ai.avg_turnsとして全AIセッションを集約する。8/2値3.2の分母22セッションにはCodex 4、Claude Code 7、ChatGPT Web 11が含まれる。",
+      "data": {
+        "entry_id": "KZN-20260727-002",
+        "display_label": "Claude Codeセッションの平均往復数",
+        "machine_metric": "ai_avg_turns",
+        "observed_day": "2026-08-02",
+        "observed_value": 3.2,
+        "all_ai_sessions": 22,
+        "sources": {
+          "codex": 4,
+          "claude-code": 7,
+          "chatgpt-web": 11
+        }
+      },
+      "provenance": {
+        "sources": [
+          "C:/develop/obsidian/2026/Kaizen/Memory/suggestions.jsonl",
+          "C:/develop/obsidian/2026/.kaizenlog/stats/2026-08-02.json",
+          "src/kaizenlog/experiments.py:metric_from_stats ai_avg_turns"
+        ],
+        "step": "action-clarity-phase1-metric-scope-audit",
+        "timestamp": "2026-08-03T00:44:34+09:00"
+      }
+    },
+    {
+      "id": "F-MONITOR-METRIC-SCOPE-001",
+      "type": "Failure",
+      "status": "confirmed",
+      "claim": "表示ラベルと行動は特定ツールを示すが、実測は全AI集約であり、KZN-20260727-002の行動効果として帰属できない。",
+      "provenance": {
+        "sources": [
+          "E-MONITOR-METRIC-SCOPE-001"
+        ],
+        "step": "action-clarity-phase1-metric-scope-audit",
+        "timestamp": "2026-08-03T00:44:34+09:00"
+      }
+    },
+    {
+      "id": "I-MONITORING-PROXY-LIMIT-001",
+      "type": "Insight",
+      "status": "confirmed",
+      "claim": "現行KZNは日次集約指標を観測できるが、トリガー時の行動実施ログと測定窓を結合していない。KZN-20260802-001もアラーム中30分ではなく一日全体のカテゴリ変更率を測るため、目標方向の観測はできても因果効果の監視はできない。",
+      "provenance": {
+        "sources": [
+          "E-ACTIVE-MONITOR-20260803-001",
+          "E-MONITOR-METRIC-SCOPE-001",
+          "src/kaizenlog/experiments.py:metric_from_stats"
+        ],
+        "step": "action-clarity-phase1-causal-boundary",
+        "timestamp": "2026-08-03T00:44:34+09:00"
+      }
+    },
+    {
+      "id": "E-ACTION-RENDERER-STRUCTURE-001",
+      "type": "Evidence",
+      "status": "confirmed",
+      "claim": "render_actions_sectionは主候補shownとconfirmed-passを分離するが、週次件数を主候補の前へ挿入し、直近推移に未達があるpass項目を別枠の未チェックcheckboxとして最大2件再掲する。cmd_today既定経路はこのpass分離を共有しない。",
+      "data": {
+        "main_default_cap": 1,
+        "hard_cap": 3,
+        "regressed_extra_cap": 2,
+        "possible_total_checkboxes": 5,
+        "today_default_shared_selection": false
+      },
+      "provenance": {
+        "sources": [
+          "src/kaizenlog/memory.py:render_actions_section",
+          "src/kaizenlog/memory.py:resolve_display_cap",
+          "src/kaizenlog/cli.py:cmd_today",
+          "read-only action_renderer_audit"
+        ],
+        "step": "action-clarity-phase1-renderer-contract-audit",
+        "timestamp": "2026-08-03T00:47:16+09:00"
+      }
+    },
+    {
+      "id": "F-ACTION-CAP-BYPASS-001",
+      "type": "Failure",
+      "status": "confirmed",
+      "claim": "最大3件のdisplay capは主候補shownだけに適用され、後退項目のcheckbox再掲が別枠なので画面全体では最大5件になり得る。",
+      "provenance": {
+        "sources": [
+          "E-ACTION-RENDERER-STRUCTURE-001"
+        ],
+        "step": "action-clarity-phase1-renderer-contract-audit",
+        "timestamp": "2026-08-03T00:47:16+09:00"
+      }
+    },
+    {
+      "id": "F-TODAY-SELECTION-DIVERGENCE-001",
+      "type": "Failure",
+      "status": "confirmed",
+      "claim": "Obsidian主面はconfirmed-passを今日の候補から除外するが、cmd_today既定表示は全recentを同じ順序関数へ渡すため、最新の達成済み項目を今日の候補として選び得る。",
+      "provenance": {
+        "sources": [
+          "E-ACTION-RENDERER-STRUCTURE-001",
+          "src/kaizenlog/cli.py cmd_today default path"
+        ],
+        "step": "action-clarity-phase1-renderer-contract-audit",
+        "timestamp": "2026-08-03T00:47:16+09:00"
+      }
+    },
+    {
+      "id": "D-ACTION-MONITOR-OPTIONS-001",
+      "type": "DesignDecision",
+      "status": "evaluated-awaiting-user",
+      "claim": "3案を可読性、監視の正直さ、既存契約、実装範囲で比較し、既存データだけで『今日やる1件』と『観測中』を分ける案Bを推奨する。",
+      "data": {
+        "option_a": "配置だけ変更: 低リスクだが測定可否・方向・因果限界を解決しない",
+        "option_b": "行動カードと監視カードを分離: 既存Memory/stats/noteだけで実現し、主checkboxは1件、観測は非checkbox",
+        "option_c": "行動実施イベントと測定窓を新規記録: 因果監視に近づくがschema/CLI/運用変更が大きい",
+        "recommended": "option_b"
+      },
+      "provenance": {
+        "sources": [
+          "G-ACTION-SEPARATION-001",
+          "G-GOAL-MONITORING-001",
+          "G-DAILY-GOAL-MONITORING-001",
+          "prior approved pure-Markdown vertical-card preference"
+        ],
+        "step": "action-clarity-phase1-design-options",
+        "timestamp": "2026-08-03T00:48:32+09:00"
+      }
+    },
+    {
+      "id": "D-ACTION-MONITOR-SPLIT-001",
+      "type": "DesignDecision",
+      "status": "recommended-awaiting-user-approval",
+      "claim": "actions区間を『今日やる1件』『効果モニタリング』『状況/全件導線』の順にし、confirmed-passは今日のcheckboxへ戻さない。主カードはいつ・何を・所要・完了操作・効果目標・測定状態を分離し、監視カードは最新観測・達成率・集計範囲・行動実施/因果のUnknownを非checkboxで示す。",
+      "output_contract": {
+        "primary_checkbox_default": 1,
+        "global_checkbox_max": 3,
+        "confirmed_pass_checkbox_on_main": false,
+        "daily_goal_state_visible": true,
+        "metric_target_visible_when_unmeasurable": true,
+        "latest_observation_date_required": true,
+        "unmet_label_operator_neutral": "未達 n/N日",
+        "latest_regression_requires_latest_point_fail": true,
+        "causal_limit_visible": true,
+        "today_all_preserved": true,
+        "marker_external_bytes_preserved": true
+      },
+      "provenance": {
+        "sources": [
+          "D-ACTION-MONITOR-OPTIONS-001",
+          "E-ACTIVE-MONITOR-20260803-001",
+          "E-MONITOR-DIRECTION-001",
+          "E-MONITOR-METRIC-SCOPE-001",
+          "E-ACTION-RENDERER-STRUCTURE-001"
+        ],
+        "step": "action-clarity-phase1-recommended-design",
+        "timestamp": "2026-08-03T00:48:32+09:00"
+      }
+    },
+    {
+      "id": "F-LAYOUT-ONLY-INSUFFICIENT-001",
+      "type": "Failure",
+      "status": "option-rejected",
+      "claim": "見出し順とインデントだけを変える案Aは、分母不足、誤った閾値方向、最新PASSへの後退警告、全AI集約の帰属誤りを残すため停止条件を満たさない。",
+      "provenance": {
+        "sources": [
+          "F-MONITOR-DIRECTION-LABEL-001",
+          "F-MONITOR-REGRESSION-STATE-001",
+          "F-MONITOR-METRIC-SCOPE-001"
+        ],
+        "step": "action-clarity-phase1-design-critique",
+        "timestamp": "2026-08-03T00:48:32+09:00"
+      }
+    },
+    {
+      "id": "F-CAUSAL-INSTRUMENTATION-DEFERRED-001",
+      "type": "Failure",
+      "status": "option-deferred",
+      "claim": "行動実施イベントと30分測定窓を新設する案Cは因果評価を改善するが、Memory schema、CLI、収集運用、移行を横断し、今回の表示改善とサブスク制約には過大である。",
+      "provenance": {
+        "sources": [
+          "I-MONITORING-PROXY-LIMIT-001",
+          "user subscription credit constraint"
+        ],
+        "step": "action-clarity-phase1-design-critique",
+        "timestamp": "2026-08-03T00:48:32+09:00"
+      }
+    },
+    {
+      "id": "E-ACTION-MONITOR-DESIGN-APPROVAL-001",
+      "type": "Evidence",
+      "status": "confirmed",
+      "claim": "ユーザーは、今日やること・効果モニタリング・日次目標を分離する推奨案Bについて、実装、実日誌反映、テスト、commit、pushまで進めることを2026-08-03に承認した。",
+      "provenance": {
+        "sources": [
+          "user response: はい",
+          "D-ACTION-MONITOR-SPLIT-001"
+        ],
+        "step": "action-clarity-design-approval",
+        "timestamp": "2026-08-03T07:09:32+09:00"
+      }
+    },
+    {
+      "id": "C-ACTION-MONITOR-DESIGN-SPEC-001",
+      "type": "CodeChange",
+      "status": "documented",
+      "claim": "承認済み案Bを docs/superpowers/specs/2026-08-03-action-monitoring-clarity-design.md に固定し、実行候補、観測対象、日次目標、Unknown、privacy、marker外保護、テスト、Graph評価の契約を明文化した。",
+      "provenance": {
+        "sources": [
+          "docs/superpowers/specs/2026-08-03-action-monitoring-clarity-design.md",
+          "E-ACTION-MONITOR-DESIGN-APPROVAL-001",
+          "D-ACTION-MONITOR-SPLIT-001"
+        ],
+        "step": "action-clarity-design-spec",
+        "timestamp": "2026-08-03T07:09:32+09:00"
+      }
     }
   ],
   "edges": [
@@ -2676,6 +3119,454 @@
         ],
         "step": "phase5-ci-timezone-contract",
         "timestamp": "2026-08-03T00:21:10+09:00"
+      }
+    },
+    {
+      "id": "EDGE-084",
+      "source": "E-REAL-ACTIONS-20260803-001",
+      "type": "supports",
+      "target": "G-ACTION-SEPARATION-001",
+      "provenance": {
+        "sources": [
+          "E-REAL-ACTIONS-20260803-001",
+          "G-ACTION-SEPARATION-001"
+        ],
+        "step": "action-clarity-phase1-gap-registration",
+        "timestamp": "2026-08-03T00:34:58+09:00"
+      }
+    },
+    {
+      "id": "EDGE-085",
+      "source": "E-REAL-ACTIONS-20260803-001",
+      "type": "supports",
+      "target": "G-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "E-REAL-ACTIONS-20260803-001",
+          "G-GOAL-MONITORING-001"
+        ],
+        "step": "action-clarity-phase1-gap-registration",
+        "timestamp": "2026-08-03T00:34:58+09:00"
+      }
+    },
+    {
+      "id": "EDGE-086",
+      "source": "G-ACTION-SEPARATION-001",
+      "type": "derived-from",
+      "target": "E-REAL-ACTIONS-20260803-001",
+      "provenance": {
+        "sources": [
+          "G-ACTION-SEPARATION-001",
+          "E-REAL-ACTIONS-20260803-001"
+        ],
+        "step": "action-clarity-phase1-gap-registration",
+        "timestamp": "2026-08-03T00:34:58+09:00"
+      }
+    },
+    {
+      "id": "EDGE-087",
+      "source": "G-GOAL-MONITORING-001",
+      "type": "derived-from",
+      "target": "E-REAL-ACTIONS-20260803-001",
+      "provenance": {
+        "sources": [
+          "G-GOAL-MONITORING-001",
+          "E-REAL-ACTIONS-20260803-001"
+        ],
+        "step": "action-clarity-phase1-gap-registration",
+        "timestamp": "2026-08-03T00:34:58+09:00"
+      }
+    },
+    {
+      "id": "EDGE-088",
+      "source": "E-MONITOR-DIRECTION-001",
+      "type": "supports",
+      "target": "F-MONITOR-DIRECTION-LABEL-001",
+      "provenance": {
+        "sources": [
+          "E-MONITOR-DIRECTION-001",
+          "F-MONITOR-DIRECTION-LABEL-001"
+        ],
+        "step": "action-clarity-phase1-monitoring-semantics",
+        "timestamp": "2026-08-03T00:37:10+09:00"
+      }
+    },
+    {
+      "id": "EDGE-089",
+      "source": "F-MONITOR-DIRECTION-LABEL-001",
+      "type": "causes",
+      "target": "G-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "F-MONITOR-DIRECTION-LABEL-001",
+          "G-GOAL-MONITORING-001"
+        ],
+        "step": "action-clarity-phase1-monitoring-semantics",
+        "timestamp": "2026-08-03T00:37:10+09:00"
+      }
+    },
+    {
+      "id": "EDGE-090",
+      "source": "E-ACTIVE-MONITOR-20260803-001",
+      "type": "supports",
+      "target": "G-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "E-ACTIVE-MONITOR-20260803-001",
+          "G-GOAL-MONITORING-001"
+        ],
+        "step": "action-clarity-phase1-real-monitor-audit",
+        "timestamp": "2026-08-03T00:40:26+09:00"
+      }
+    },
+    {
+      "id": "EDGE-091",
+      "source": "F-MONITOR-REGRESSION-STATE-001",
+      "type": "causes",
+      "target": "G-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "F-MONITOR-REGRESSION-STATE-001",
+          "G-GOAL-MONITORING-001"
+        ],
+        "step": "action-clarity-phase1-monitoring-state",
+        "timestamp": "2026-08-03T00:40:26+09:00"
+      }
+    },
+    {
+      "id": "EDGE-092",
+      "source": "I-ACTION-MONITORING-SNAPSHOT-001",
+      "type": "derived-from",
+      "target": "E-ACTIVE-MONITOR-20260803-001",
+      "provenance": {
+        "sources": [
+          "I-ACTION-MONITORING-SNAPSHOT-001",
+          "E-ACTIVE-MONITOR-20260803-001"
+        ],
+        "step": "action-clarity-phase1-snapshot-audit",
+        "timestamp": "2026-08-03T00:40:26+09:00"
+      }
+    },
+    {
+      "id": "EDGE-093",
+      "source": "I-ACTION-MONITORING-SNAPSHOT-001",
+      "type": "supports",
+      "target": "G-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "I-ACTION-MONITORING-SNAPSHOT-001",
+          "G-GOAL-MONITORING-001"
+        ],
+        "step": "action-clarity-phase1-snapshot-audit",
+        "timestamp": "2026-08-03T00:40:26+09:00"
+      }
+    },
+    {
+      "id": "EDGE-094",
+      "source": "E-DAILY-GOAL-MISSING-20260803-001",
+      "type": "supports",
+      "target": "G-DAILY-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "E-DAILY-GOAL-MISSING-20260803-001",
+          "G-DAILY-GOAL-MONITORING-001"
+        ],
+        "step": "action-clarity-phase1-daily-goal-gap",
+        "timestamp": "2026-08-03T00:41:59+09:00"
+      }
+    },
+    {
+      "id": "EDGE-095",
+      "source": "G-DAILY-GOAL-MONITORING-001",
+      "type": "derived-from",
+      "target": "E-DAILY-GOAL-MISSING-20260803-001",
+      "provenance": {
+        "sources": [
+          "G-DAILY-GOAL-MONITORING-001",
+          "E-DAILY-GOAL-MISSING-20260803-001"
+        ],
+        "step": "action-clarity-phase1-daily-goal-gap",
+        "timestamp": "2026-08-03T00:41:59+09:00"
+      }
+    },
+    {
+      "id": "EDGE-096",
+      "source": "G-DAILY-GOAL-MONITORING-001",
+      "type": "causes",
+      "target": "G-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "G-DAILY-GOAL-MONITORING-001",
+          "G-GOAL-MONITORING-001"
+        ],
+        "step": "action-clarity-phase1-daily-goal-gap",
+        "timestamp": "2026-08-03T00:41:59+09:00"
+      }
+    },
+    {
+      "id": "EDGE-097",
+      "source": "E-MONITOR-METRIC-SCOPE-001",
+      "type": "supports",
+      "target": "F-MONITOR-METRIC-SCOPE-001",
+      "provenance": {
+        "sources": [
+          "E-MONITOR-METRIC-SCOPE-001",
+          "F-MONITOR-METRIC-SCOPE-001"
+        ],
+        "step": "action-clarity-phase1-metric-scope-audit",
+        "timestamp": "2026-08-03T00:44:34+09:00"
+      }
+    },
+    {
+      "id": "EDGE-098",
+      "source": "F-MONITOR-METRIC-SCOPE-001",
+      "type": "causes",
+      "target": "G-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "F-MONITOR-METRIC-SCOPE-001",
+          "G-GOAL-MONITORING-001"
+        ],
+        "step": "action-clarity-phase1-metric-scope-audit",
+        "timestamp": "2026-08-03T00:44:34+09:00"
+      }
+    },
+    {
+      "id": "EDGE-099",
+      "source": "I-MONITORING-PROXY-LIMIT-001",
+      "type": "derived-from",
+      "target": "E-MONITOR-METRIC-SCOPE-001",
+      "provenance": {
+        "sources": [
+          "I-MONITORING-PROXY-LIMIT-001",
+          "E-MONITOR-METRIC-SCOPE-001"
+        ],
+        "step": "action-clarity-phase1-causal-boundary",
+        "timestamp": "2026-08-03T00:44:34+09:00"
+      }
+    },
+    {
+      "id": "EDGE-100",
+      "source": "I-MONITORING-PROXY-LIMIT-001",
+      "type": "supports",
+      "target": "G-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "I-MONITORING-PROXY-LIMIT-001",
+          "G-GOAL-MONITORING-001"
+        ],
+        "step": "action-clarity-phase1-causal-boundary",
+        "timestamp": "2026-08-03T00:44:34+09:00"
+      }
+    },
+    {
+      "id": "EDGE-101",
+      "source": "E-ACTION-RENDERER-STRUCTURE-001",
+      "type": "supports",
+      "target": "F-ACTION-CAP-BYPASS-001",
+      "provenance": {
+        "sources": [
+          "E-ACTION-RENDERER-STRUCTURE-001",
+          "F-ACTION-CAP-BYPASS-001"
+        ],
+        "step": "action-clarity-phase1-renderer-contract-audit",
+        "timestamp": "2026-08-03T00:47:16+09:00"
+      }
+    },
+    {
+      "id": "EDGE-102",
+      "source": "F-ACTION-CAP-BYPASS-001",
+      "type": "causes",
+      "target": "G-ACTION-SEPARATION-001",
+      "provenance": {
+        "sources": [
+          "F-ACTION-CAP-BYPASS-001",
+          "G-ACTION-SEPARATION-001"
+        ],
+        "step": "action-clarity-phase1-renderer-contract-audit",
+        "timestamp": "2026-08-03T00:47:16+09:00"
+      }
+    },
+    {
+      "id": "EDGE-103",
+      "source": "E-ACTION-RENDERER-STRUCTURE-001",
+      "type": "supports",
+      "target": "F-TODAY-SELECTION-DIVERGENCE-001",
+      "provenance": {
+        "sources": [
+          "E-ACTION-RENDERER-STRUCTURE-001",
+          "F-TODAY-SELECTION-DIVERGENCE-001"
+        ],
+        "step": "action-clarity-phase1-renderer-contract-audit",
+        "timestamp": "2026-08-03T00:47:16+09:00"
+      }
+    },
+    {
+      "id": "EDGE-104",
+      "source": "F-TODAY-SELECTION-DIVERGENCE-001",
+      "type": "causes",
+      "target": "G-ACTION-SEPARATION-001",
+      "provenance": {
+        "sources": [
+          "F-TODAY-SELECTION-DIVERGENCE-001",
+          "G-ACTION-SEPARATION-001"
+        ],
+        "step": "action-clarity-phase1-renderer-contract-audit",
+        "timestamp": "2026-08-03T00:47:16+09:00"
+      }
+    },
+    {
+      "id": "EDGE-105",
+      "source": "E-ACTION-RENDERER-STRUCTURE-001",
+      "type": "supports",
+      "target": "G-ACTION-SEPARATION-001",
+      "provenance": {
+        "sources": [
+          "E-ACTION-RENDERER-STRUCTURE-001",
+          "G-ACTION-SEPARATION-001"
+        ],
+        "step": "action-clarity-phase1-renderer-contract-audit",
+        "timestamp": "2026-08-03T00:47:16+09:00"
+      }
+    },
+    {
+      "id": "EDGE-106",
+      "source": "D-ACTION-MONITOR-OPTIONS-001",
+      "type": "derived-from",
+      "target": "G-ACTION-SEPARATION-001",
+      "provenance": {
+        "sources": [
+          "D-ACTION-MONITOR-OPTIONS-001",
+          "G-ACTION-SEPARATION-001"
+        ],
+        "step": "action-clarity-phase1-design-options",
+        "timestamp": "2026-08-03T00:48:32+09:00"
+      }
+    },
+    {
+      "id": "EDGE-107",
+      "source": "D-ACTION-MONITOR-SPLIT-001",
+      "type": "implements",
+      "target": "D-ACTION-MONITOR-OPTIONS-001",
+      "provenance": {
+        "sources": [
+          "D-ACTION-MONITOR-SPLIT-001",
+          "D-ACTION-MONITOR-OPTIONS-001"
+        ],
+        "step": "action-clarity-phase1-recommended-design",
+        "timestamp": "2026-08-03T00:48:32+09:00"
+      }
+    },
+    {
+      "id": "EDGE-108",
+      "source": "D-ACTION-MONITOR-SPLIT-001",
+      "type": "improves",
+      "target": "G-ACTION-SEPARATION-001",
+      "provenance": {
+        "sources": [
+          "D-ACTION-MONITOR-SPLIT-001",
+          "G-ACTION-SEPARATION-001"
+        ],
+        "step": "action-clarity-phase1-recommended-design",
+        "timestamp": "2026-08-03T00:48:32+09:00"
+      }
+    },
+    {
+      "id": "EDGE-109",
+      "source": "D-ACTION-MONITOR-SPLIT-001",
+      "type": "improves",
+      "target": "G-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "D-ACTION-MONITOR-SPLIT-001",
+          "G-GOAL-MONITORING-001"
+        ],
+        "step": "action-clarity-phase1-recommended-design",
+        "timestamp": "2026-08-03T00:48:32+09:00"
+      }
+    },
+    {
+      "id": "EDGE-110",
+      "source": "D-ACTION-MONITOR-SPLIT-001",
+      "type": "improves",
+      "target": "G-DAILY-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "D-ACTION-MONITOR-SPLIT-001",
+          "G-DAILY-GOAL-MONITORING-001"
+        ],
+        "step": "action-clarity-phase1-recommended-design",
+        "timestamp": "2026-08-03T00:48:32+09:00"
+      }
+    },
+    {
+      "id": "EDGE-111",
+      "source": "F-LAYOUT-ONLY-INSUFFICIENT-001",
+      "type": "supports",
+      "target": "D-ACTION-MONITOR-SPLIT-001",
+      "provenance": {
+        "sources": [
+          "F-LAYOUT-ONLY-INSUFFICIENT-001",
+          "D-ACTION-MONITOR-SPLIT-001"
+        ],
+        "step": "action-clarity-phase1-design-critique",
+        "timestamp": "2026-08-03T00:48:32+09:00"
+      }
+    },
+    {
+      "id": "EDGE-112",
+      "source": "F-CAUSAL-INSTRUMENTATION-DEFERRED-001",
+      "type": "supports",
+      "target": "D-ACTION-MONITOR-SPLIT-001",
+      "provenance": {
+        "sources": [
+          "F-CAUSAL-INSTRUMENTATION-DEFERRED-001",
+          "D-ACTION-MONITOR-SPLIT-001"
+        ],
+        "step": "action-clarity-phase1-design-critique",
+        "timestamp": "2026-08-03T00:48:32+09:00"
+      }
+    },
+    {
+      "id": "EDGE-113",
+      "source": "E-ACTION-MONITOR-DESIGN-APPROVAL-001",
+      "type": "supports",
+      "target": "D-ACTION-MONITOR-SPLIT-001",
+      "provenance": {
+        "sources": [
+          "E-ACTION-MONITOR-DESIGN-APPROVAL-001",
+          "D-ACTION-MONITOR-SPLIT-001"
+        ],
+        "step": "action-clarity-design-approval",
+        "timestamp": "2026-08-03T07:09:32+09:00"
+      }
+    },
+    {
+      "id": "EDGE-114",
+      "source": "C-ACTION-MONITOR-DESIGN-SPEC-001",
+      "type": "implements",
+      "target": "D-ACTION-MONITOR-SPLIT-001",
+      "provenance": {
+        "sources": [
+          "C-ACTION-MONITOR-DESIGN-SPEC-001",
+          "D-ACTION-MONITOR-SPLIT-001"
+        ],
+        "step": "action-clarity-design-spec",
+        "timestamp": "2026-08-03T07:09:32+09:00"
+      }
+    },
+    {
+      "id": "EDGE-115",
+      "source": "C-ACTION-MONITOR-DESIGN-SPEC-001",
+      "type": "derived-from",
+      "target": "E-ACTION-MONITOR-DESIGN-APPROVAL-001",
+      "provenance": {
+        "sources": [
+          "C-ACTION-MONITOR-DESIGN-SPEC-001",
+          "E-ACTION-MONITOR-DESIGN-APPROVAL-001"
+        ],
+        "step": "action-clarity-design-spec",
+        "timestamp": "2026-08-03T07:09:32+09:00"
       }
     }
   ]

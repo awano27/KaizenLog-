@@ -1001,3 +1001,41 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 - 対象候補: `src/kaizenlog/intervention.py`、`src/kaizenlog/cli.py`、`tests/test_intervention.py`。Graph Engineeringの日誌・助言契約や非所有artifactは変更しない。
 - 検証候補: +09:00保持、UTC→Asia/Tokyo変換、intervention focused、全pytest、GitHub Actions 4 matrix。
 - `github:gh-fix-ci` の承認ゲートに従い、修正実装・追加pushはユーザー承認後に行う。
+
+## 2026-08-03 — 今日のアクション明確化と目標モニタリング Graph Engineering
+
+### Goal breakdown
+
+- 実日誌 `C:\develop\obsidian\2026\01 Daily Notes\2026-08-03.md` のmanaged actionsだけを対象に、「今日実行する1件」と「観測だけする項目」を5秒で区別できる表示契約を設計する。
+- 選択された行動に、いつ・何を・何分・完了操作・PASS/FAIL・効果目標・現在の観測状態を一貫して表示する。
+- 提案、判定履歴、日次stats、rendererの実データフローを突合し、目標を実際に測定できているかをUnknownを残して監査する。
+- 発見・判断・テスト結果を既存 `.kaizenlog/improvement_graph.json` のtyped node/edgeへ保存し、最大2回のcritique-reviseで止める。
+
+### Dependencies and parallelizable work
+
+- Primaryが実Vault、dirty baseline、renderer、提案/判定データ、設計統合を所有する。
+- 独立な読み取り調査だけを必要最小限で並列化できる。実日誌、graph、`memory.py`、実データを変更する作業はPrimaryが直列で行う。
+- 実装前に短い設計案を提示し、`superpowers:brainstorming` の承認ゲートを通す。承認後のみwriting-plans→TDDへ進む。
+
+### Risks and mitigations
+
+- 手書き破壊: `kaizenlog:actions` marker外bytesを前後比較し、managed section以外を変更しない。
+- 観測と行動の混同: unchecked、達成済み、指標後退、実行有無不明を別状態としてrendering contractにする。
+- 偽のモニタリング: 目標値、実測日、最新値、方向、サンプル数の実データが揃わない場合は「未確認」と表示し、推測で補完しない。
+- 実環境副作用: ActivityWatch、LLM、`generate`、`advise`は起動しない。既存Vault/JSONL/statsを読み、純粋rendererと一時ファイルで検証する。
+- 既存契約破壊: checkbox同期、最大3件、`today --all`、confirmed-only、privacy、marker外保護、legacy PASS prose fallbackを回帰テストする。
+- dirty混入: 開始時statusを固定し、非所有 `.grok/` と `scripts/self_improve_graph.py` および無関係変更をstage/commitしない。
+
+### Acceptance criteria
+
+- 日誌冒頭に「今日やること」が1件だけあり、トリガー・具体手順・所要時間・完了コマンドが隣接する。
+- 目標モニタリングは「目標」「最新実測」「判定期間/件数」「状態」「次に再確認する条件」を表示し、行動カードと明確に分離される。
+- 達成済みだが戻った項目は今日のアクションに見えず、再実行候補または観測中として表示される。
+- 実データ上のKZNとstats/判定履歴の対応を確認し、測定できている範囲とできていない範囲を明記する。
+- focused RED→GREEN、関連回帰、全pytest、graph validation、compileall、diff check、managed-marker外bytes比較がfreshに成功する。
+
+### Approved design
+
+- ユーザーは2026-08-03に、実行対象・効果観測・日次目標を3ブロックへ分ける推奨案Bを承認した。
+- 正式仕様は `docs/superpowers/specs/2026-08-03-action-monitoring-clarity-design.md`。書面レビュー後にimplementation planとTDDへ進む。
+- confirmed PASSはcheckboxを持たない観測対象とし、最新FAIL時だけ警告する。日次目標は既存GOAL区間の読み取り専用サマリとする。
