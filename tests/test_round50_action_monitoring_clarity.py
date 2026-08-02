@@ -192,6 +192,10 @@ def test_actions_render_action_monitor_goal_as_separate_blocks():
     assert "直近5日: 4/5達成・未達1日（目標 >= 2.5）" in out
     assert "指標が戻っています" not in out
     assert "閾値超過" not in out
+    assert (
+        "うち1件はチェックなしで指標が目標に達しています"
+        "（指標は達成済み 1件）。"
+    ) in out
     assert "## 🎯 日次目標" in out
     assert '未設定: `kaizenlog goal "今日達成したい成果"`' in out
 
@@ -244,7 +248,7 @@ def test_session_denominator_shortfall_is_explicitly_unknown():
     assert "AIセッション0件/必要1件" in out
 
 
-def test_monitoring_keeps_two_renderable_cards_after_unmeasurable_newest():
+def test_monitoring_renders_unknown_card_and_preserves_display_cap_without_observations():
     entries = [
         MemoryEntry(
             id="KZN-20260802-001",
@@ -279,9 +283,13 @@ def test_monitoring_keeps_two_renderable_cards_after_unmeasurable_newest():
     out = render_actions_section(entries, date(2026, 8, 3), stats_history=history)
 
     assert out is not None
+    assert "- KZN-20260802-001" in out
+    assert "最新: 測定値なし（未判定）" in out
+    assert "実行ログ: 記録なし（実行の有無は判定できません）" in out
+    assert "判定: 過去の確定PASS（最新値なし）" in out
+    assert "- [ ] KZN-20260802-001" not in out
     assert "- KZN-20260801-001" in out
-    assert "- KZN-20260731-001" in out
-    assert "- KZN-20260802-001" not in out
+    assert "- KZN-20260731-001" not in out
     assert "ほか効果モニタリング 1件" in out
 
 
@@ -309,6 +317,19 @@ def test_monitor_warns_only_when_latest_observation_fails():
 
     assert out is not None
     assert "⚠ 最新観測が目標未達です" in out
+
+
+def test_monitoring_summary_uses_truthful_counts_when_latest_observation_fails():
+    out = render_actions_section(
+        [_achieved_entry()],
+        date(2026, 8, 3),
+        stats_history=_history_with_latest(1.5),
+    )
+
+    assert out is not None
+    assert "効果モニタリングは1件（最新: 達成0件 / 未達1件 / 未判定0件）。" in out
+    assert "うち1件はチェックなしで指標が目標に達しています" not in out
+    assert "指標は達成済み 1件" not in out
 
 
 @pytest.mark.parametrize(

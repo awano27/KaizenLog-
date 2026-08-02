@@ -1925,7 +1925,12 @@ def _monitoring_card_lines(
     """confirmed PASS後の指標だけを、実行カードと混ぜずに表示する。"""
     trajectory = _post_verdict_trajectory(entry, target_day, stats_by_day)
     if trajectory is None:
-        return []
+        return [
+            f"- {entry.id}",
+            "  - 最新: 測定値なし（未判定）",
+            "  - 実行ログ: 記録なし（実行の有無は判定できません）",
+            "  - 判定: 過去の確定PASS（最新値なし）",
+        ]
     latest = trajectory.observations[-1]
     met_count = sum(point.met for point in trajectory.observations)
     total = len(trajectory.observations)
@@ -1946,6 +1951,44 @@ def _monitoring_card_lines(
     return lines
 
 
+def _monitoring_summary_text(
+    monitoring: Sequence[MemoryEntry],
+    target_day: date,
+    stats_by_day: dict[str, Mapping[str, Any]],
+) -> str:
+    """最新観測を基準に、効果モニタリングの状態を要約する。"""
+    latest_met = 0
+    latest_failed = 0
+    latest_unknown = 0
+    for entry in monitoring:
+        trajectory = _post_verdict_trajectory(entry, target_day, stats_by_day)
+        if trajectory is None:
+            latest_unknown += 1
+        elif trajectory.observations[-1].met:
+            latest_met += 1
+        else:
+            latest_failed += 1
+
+    if latest_met == len(monitoring):
+        return (
+            f"うち{latest_met}件はチェックなしで指標が目標に達しています"
+            f"（指標は達成済み {latest_met}件）。"
+        )
+
+    summary = (
+        f"効果モニタリングは{len(monitoring)}件（最新: 達成{latest_met}件"
+        f" / 未達{latest_failed}件 / 未判定{latest_unknown}件）。"
+    )
+    if latest_unknown:
+        summary += (
+            f" 過去の確定PASSとして、うち{latest_unknown}件は"
+            "チェックなしで指標が目標に達しています"
+            f"（指標は達成済み {latest_unknown}件）。"
+            "最新値なし（現在は未判定）。"
+        )
+    return summary
+
+
 def _status_and_all_lines(
     stats: ActionStats,
     buckets: OpenActionBuckets,
@@ -1955,6 +1998,8 @@ def _status_and_all_lines(
     *,
     streaks: Streaks,
     monitoring_shown: int = 2,
+    target_day: date,
+    stats_by_day: dict[str, Mapping[str, Any]],
 ) -> list[str]:
     """週次の投与状況と省略した一覧への導線を最後に置く。"""
     lines = ["## 🗂 状況・全件", ""]
@@ -1976,9 +2021,8 @@ def _status_and_all_lines(
         if stats.skipped:
             summary += f"スキップは{stats.skipped}件。"
         if monitoring:
-            summary += (
-                f"うち{len(monitoring)}件はチェックなしで指標が目標に達しています"
-                f"（指標は達成済み {len(monitoring)}件）。"
+            summary += _monitoring_summary_text(
+                monitoring, target_day, stats_by_day
             )
         lines.append(summary)
 
@@ -2095,6 +2139,8 @@ def render_actions_section(
             monitoring,
             streaks=streaks,
             monitoring_shown=len(shown_monitoring),
+            target_day=target_day,
+            stats_by_day=stats_by_day,
         )
     )
     return "\n".join(lines)
