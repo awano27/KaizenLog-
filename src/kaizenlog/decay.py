@@ -192,11 +192,11 @@ def detect_kzn_decay(
     """PASS 後に直近7日の測定可能日で過半数が条件違反なら風化。"""
     entries = load_entries(memory_dir)
     pass_start = (as_of - timedelta(days=_KZN_PASS_LOOKBACK)).isoformat()
+    # 第37弾 §B3: done ゲートを外す。confirmed 条件は第36弾のまま維持。
     candidates = [
         e
         for e in entries
-        if e.status == "done"
-        and e.verdict == "pass"
+        if e.verdict == "pass"
         and e.verdict_stage == "confirmed"
         and e.verdict_date
         and e.verdict_date >= pass_start

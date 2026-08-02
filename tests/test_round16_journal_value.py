@@ -27,6 +27,8 @@ def _action(pass_v: str, fail_v: str = "fail") -> dict:
             "action": "試す",
             "pass": pass_v,
             "fail": fail_v,
+            "mechanism": "小さな一歩が継続を助けると考える",
+            "falsifier": "指標が目標を外れた場合",
         }
     ]
     return data

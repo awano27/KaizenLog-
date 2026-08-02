@@ -82,6 +82,7 @@ SYSTEM_PROMPT = load_bundled_prompt("daily_advisor")
 
 _BASIC_PASS_METRICS = (
     "context_switches",
+    "context_switches_per_hour",
     "total_active_minutes",
 )
 _STRUCTURED_AI_PASS_METRICS = (
@@ -89,6 +90,7 @@ _STRUCTURED_AI_PASS_METRICS = (
     "ai_fragmented_sessions",
     "ai_retry_chains",
     "ai_tool_errors",
+    "ai_tool_errors_per_session",
     "ai_interruptions",
     "ai_avg_turns",
     "ai_output_tokens",
@@ -567,10 +569,43 @@ def evidence_gated_action_errors(
     return errors
 
 
+def _parse_action_section_blocks(section: str) -> list[tuple[str, dict[str, str]]]:
+    """明日の最小アクション区間を (本文, {mechanism, falsifier}) の列へ。"""
+    blocks: list[tuple[str, dict[str, str]]] = []
+    current: str | None = None
+    meta: dict[str, str] = {}
+    for line in section.splitlines():
+        m = _ACTION_RE.match(line)
+        if m:
+            if current is not None:
+                blocks.append((current, meta))
+            current = m.group(1)
+            meta = {}
+            continue
+        if current is None:
+            continue
+        sub = line.strip()
+        if sub.startswith("- なぜ効くと考えるか:"):
+            meta["mechanism"] = sub.split(":", 1)[1].strip()
+        elif sub.startswith("- 効かなかったと分かる条件:"):
+            meta["falsifier"] = sub.split(":", 1)[1].strip()
+    if current is not None:
+        blocks.append((current, meta))
+    return blocks
+
+
 def render_reader_advice(advice_md: str, evidence: AdviceEvidence) -> str:
     """検証済みの内部回答を、F-IDを見せない読者向け日次提案へ変換する。"""
     sections = _level3_sections(advice_md)
-    actions = _ACTION_RE.findall(sections.get("明日の最小アクション", ""))
+    action_blocks = _parse_action_section_blocks(
+        sections.get("明日の最小アクション", "")
+    )
+    # 後方互換: サブ行が無い旧内部Markdownでも _ACTION_RE だけで拾う
+    if not action_blocks:
+        action_blocks = [
+            (text, {})
+            for text in _ACTION_RE.findall(sections.get("明日の最小アクション", ""))
+        ]
     proposal_contexts = {
         int(match.group("index")): (
             re.sub(r"\s{2,}", " ", _FACT_ID_RE.sub("", match.group("why"))).strip(),
@@ -583,7 +618,7 @@ def render_reader_advice(advice_md: str, evidence: AdviceEvidence) -> str:
         )
     }
     rendered_actions = []
-    for index, action in enumerate(actions, 1):
+    for index, (action, meta) in enumerate(action_blocks, 1):
         without_ids = _FACT_ID_RE.sub("", action)
         cleaned = re.sub(r"\s{2,}", " ", without_ids).strip()
         if cleaned:
@@ -592,6 +627,13 @@ def render_reader_advice(advice_md: str, evidence: AdviceEvidence) -> str:
                 why, metric = context
                 if why and metric:
                     rendered += f"\n    - なぜ: {why}\n    - 明日見る数字: {metric}"
+            # §C2: mechanism / falsifier は素の箇条書きのみ（- [ ] 禁止）
+            mechanism = meta.get("mechanism") or ""
+            falsifier = meta.get("falsifier") or ""
+            if mechanism:
+                rendered += f"\n    - なぜ効くと考えるか: {mechanism}"
+            if falsifier:
+                rendered += f"\n    - 効かなかったと分かる条件: {falsifier}"
             rendered_actions.append(rendered)
     if not rendered_actions:
         raise AdviceContractError(

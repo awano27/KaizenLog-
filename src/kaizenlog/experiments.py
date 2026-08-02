@@ -30,7 +30,9 @@ _ADOPTED_MONITOR_DAYS = 30
 # 注記ラベルは括弧前で切るため、説明文にネスト括弧を入れない（・ で補足）。
 METRIC_DESCRIPTIONS = {
     "context_switches": "コンテキストスイッチ回数",
+    "context_switches_per_hour": "1時間あたりのカテゴリ変更回数",
     "total_active_minutes": "合計アクティブ時間（分）",
+    "ai_tool_errors_per_session": "AI CLIセッション1回あたりのツールエラー回数",
     "ai_activity_blocks": "AIツールの画面アクティビティブロック数",
     "ai_sessions": "AIツールの画面アクティビティブロック数（旧名・互換用）",
     "ai_cc_sessions": "AI CLIセッション数・Claude Code/Codex合算",
@@ -155,6 +157,11 @@ def compute_metric(
         return round(summary.by_site.get(site, 0.0), 1)
     if metric == "context_switches":
         return float(summary.context_switches)
+    if metric == "context_switches_per_hour":
+        # 分母下限: 稼働 < 60 分は未計測（0埋めすると低稼働日が恒久偽PASS）
+        if summary.total_minutes < 60:
+            return None
+        return round(float(summary.context_switches) / summary.total_minutes * 60.0, 1)
     if metric == "total_active_minutes":
         return round(summary.total_minutes, 1)
     if metric in ("ai_activity_blocks", "ai_sessions"):
@@ -170,6 +177,11 @@ def compute_metric(
         return float(retry_chains)
     if metric == "ai_tool_errors":
         return float(sum(s.tool_errors for s in cc_sessions))
+    if metric == "ai_tool_errors_per_session":
+        if not cc_sessions:
+            return None
+        total_err = float(sum(s.tool_errors for s in cc_sessions))
+        return round(total_err / len(cc_sessions), 1)
     if metric == "ai_interruptions":
         return float(sum(s.interruptions for s in cc_sessions))
     if metric == "ai_avg_turns":
@@ -218,6 +230,14 @@ def metric_from_stats(
     if metric == "context_switches":
         v = stats.get("context_switches")
         return float(v) if isinstance(v, (int, float)) else None
+    if metric == "context_switches_per_hour":
+        cs = stats.get("context_switches")
+        mins = stats.get("total_minutes")
+        if not isinstance(cs, (int, float)) or not isinstance(mins, (int, float)):
+            return None
+        if float(mins) < 60:
+            return None
+        return round(float(cs) / float(mins) * 60.0, 1)
     if metric == "total_active_minutes":
         v = stats.get("total_minutes")
         return float(v) if isinstance(v, (int, float)) else None
@@ -236,6 +256,14 @@ def metric_from_stats(
     if metric == "ai_tool_errors":
         v = ai.get("tool_errors")
         return float(v) if isinstance(v, (int, float)) else None
+    if metric == "ai_tool_errors_per_session":
+        errs = ai.get("tool_errors")
+        sessions = ai.get("sessions")
+        if not isinstance(errs, (int, float)) or not isinstance(sessions, (int, float)):
+            return None
+        if float(sessions) <= 0:
+            return None
+        return round(float(errs) / float(sessions), 1)
     if metric == "loop_tax_episodes":
         # loop_tax 欠落日は測定不能（None）。episode_count=0 は計測済み
         lt = ai.get("loop_tax")

@@ -49,6 +49,8 @@ def _valid_data(**overrides):
                 "action": "集中枠を予定へ一件入れる",
                 "pass": "focus_blocks >= 2",
                 "fail": "1回以下",
+                "mechanism": "枠を先に置くと開始が遅れにくいと考える",
+                "falsifier": "focus_blocks が前日より減った場合",
             },
             {
                 "fact_ids": ["F9"],
@@ -56,6 +58,8 @@ def _valid_data(**overrides):
                 "action": "リンクを三件まとめる",
                 "pass": "context_switches <= 40",
                 "fail": "41回以上",
+                "mechanism": "まとめ開きで切替が減ると考える",
+                "falsifier": "context_switches が前日より増えた場合",
             },
         ],
         "ai_review": [
@@ -280,6 +284,8 @@ def test_render_golden():
                 "action": "行動する",
                 "pass": "focus_blocks >= 1",
                 "fail": "0回",
+                "mechanism": "朝の着手を早くすると枠が取れると考える",
+                "falsifier": "focus_blocks がゼロの日が続いた場合",
             }
         ],
         "ai_review": [
@@ -293,6 +299,8 @@ def test_render_golden():
         "\n"
         "### 明日の最小アクション\n"
         "- [ ] 朝いちばんに→行動する｜PASS: focus_blocks >= 1（集中ブロック数）｜FAIL: 0回\n"
+        "    - なぜ効くと考えるか: 朝の着手を早くすると枠が取れると考える\n"
+        "    - 効かなかったと分かる条件: focus_blocks がゼロの日が続いた場合\n"
         "\n"
         "### AI作業の改善\n"
         "- 測定不能なので断定しない\n"

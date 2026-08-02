@@ -697,9 +697,12 @@ def test_c2_cmd_generate_uses_only_calendar_previous_stats_and_hashes_written_se
     summary = _summary(day=day, total_minutes=125.0, by_category={"AI作業": 91.0})
     captured: dict[str, str] = {}
 
+    load_calls: list[dict] = []
+
     def fake_load_stats(*args, **kwargs):
         assert args[1:] == ()
-        assert kwargs == {"days": 2, "end_day": day}
+        load_calls.append(dict(kwargs))
+        # 前日比用 days=2 と ACTIONS 用の広め履歴の両方を許容
         return [
             {"day": "2026-07-31", "total_minutes": 100.0, "by_category": {"AI作業": 80.0}, "ai": {"tool_errors": 1}},
             {"day": day.isoformat(), "total_minutes": 999.0, "by_category": {"AI作業": 999.0}, "ai": {"tool_errors": 999}},
@@ -721,6 +724,10 @@ def test_c2_cmd_generate_uses_only_calendar_previous_stats_and_hashes_written_se
     monkeypatch.setattr("kaizenlog.coachledger.judge_coach_entries", lambda *args, **kwargs: [])
 
     cli_mod.cmd_generate(cfg, day)
+
+    # 前日比は calendar previous のみ (days=2)。ACTIONS 用の広め履歴も追加呼び出し可。
+    assert load_calls[0] == {"days": 2, "end_day": day}
+    assert any(c.get("days") == 2 and c.get("end_day") == day for c in load_calls)
 
     stored = DailyNoteStore(cfg.daily_notes_path).read(day) or ""
     section = extract_section(stored, ACTIVITY_MARKER) or ""
@@ -1145,6 +1152,8 @@ def _single_tool_error_action(pass_value: str) -> dict:
     data["actions"] = [{
         "fact_ids": ["F3"], "trigger": "始業の直後", "action": "試す",
         "pass": pass_value, "fail": "201",
+        "mechanism": "小さな一歩が継続を助けると考える",
+        "falsifier": "指標が目標を外れた場合",
     }]
     return data
 
@@ -1342,9 +1351,11 @@ def test_d2_baseline_and_repair_hint_order_are_deterministic() -> None:
     )
 
     assert list(baselines or {}) == [
-        "context_switches", "total_active_minutes", "ai_activity_blocks",
+        "context_switches", "context_switches_per_hour", "total_active_minutes",
+        "ai_activity_blocks",
         "ai_cc_sessions", "ai_fragmented_sessions", "ai_retry_chains",
-        "ai_tool_errors", "ai_interruptions", "ai_avg_turns", "ai_output_tokens",
+        "ai_tool_errors", "ai_tool_errors_per_session", "ai_interruptions",
+        "ai_avg_turns", "ai_output_tokens",
         "focus_blocks", "focus_minutes", "input_keypresses",
         "category_minutes:alpha", "category_minutes:zeta",
         "site_minutes:alpha.example", "site_minutes:zeta.example",

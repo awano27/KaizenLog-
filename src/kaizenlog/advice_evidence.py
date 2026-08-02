@@ -224,12 +224,14 @@ def _previous_day_stats(
 
 _BASELINE_SIMPLE_METRICS = (
     "context_switches",
+    "context_switches_per_hour",
     "total_active_minutes",
     "ai_activity_blocks",
     "ai_cc_sessions",
     "ai_fragmented_sessions",
     "ai_retry_chains",
     "ai_tool_errors",
+    "ai_tool_errors_per_session",
     "ai_interruptions",
     "ai_avg_turns",
     "ai_output_tokens",
@@ -243,6 +245,12 @@ def _strict_simple_metric_source(metric: str, stats: Mapping[str, Any]) -> bool:
     """``metric_from_stats`` が読む生値が厳密な非負有限数かを確認する。"""
     if metric == "context_switches":
         return _valid_nonnegative_number(stats.get("context_switches"))
+    if metric == "context_switches_per_hour":
+        # 分子・分母とも必要。分母下限は metric_from_stats 側で None になる。
+        return (
+            _valid_nonnegative_number(stats.get("context_switches"))
+            and _valid_nonnegative_number(stats.get("total_minutes"))
+        )
     if metric == "total_active_minutes":
         return _valid_nonnegative_number(stats.get("total_minutes"))
     if metric == "ai_activity_blocks":
@@ -278,6 +286,12 @@ def _strict_simple_metric_source(metric: str, stats: Mapping[str, Any]) -> bool:
     }
     if metric in ai_keys:
         return _valid_nonnegative_number(ai.get(ai_keys[metric]))
+    if metric == "ai_tool_errors_per_session":
+        return (
+            _valid_nonnegative_number(ai.get("tool_errors"))
+            and _valid_nonnegative_number(ai.get("sessions"))
+            and float(ai.get("sessions")) > 0
+        )
     if metric == "ai_avg_turns":
         if "avg_turns" in ai:
             return _valid_nonnegative_number(ai.get("avg_turns"))
@@ -1038,6 +1052,36 @@ def build_advice_evidence(
         if len(ai_sess_vals) >= 3:
             m = float(median(ai_sess_vals))
             band_parts.append(f"ai_cc_sessions {m * 0.85:.1f}〜{m * 0.95:.1f}")
+        # ai_tool_errors_per_session: 入口ガードと同じ structured_ai ゲート
+        err_per_sess_vals: list[float] = []
+        for h in history_list[-14:]:
+            if not isinstance(h, dict):
+                continue
+            from .experiments import metric_from_stats as _mfs
+
+            v = _mfs("ai_tool_errors_per_session", h)
+            if isinstance(v, (int, float)) and isfinite(float(v)):
+                err_per_sess_vals.append(float(v))
+        if len(err_per_sess_vals) >= 3:
+            m = float(median(err_per_sess_vals))
+            band_parts.append(
+                f"ai_tool_errors_per_session {m * 0.85:.1f}〜{m * 0.95:.1f}"
+            )
+    # context_switches_per_hour: cs と total_minutes が両方あり測定可能日3日以上
+    cph_vals: list[float] = []
+    for h in history_list[-14:]:
+        if not isinstance(h, dict):
+            continue
+        from .experiments import metric_from_stats as _mfs
+
+        v = _mfs("context_switches_per_hour", h)
+        if isinstance(v, (int, float)) and isfinite(float(v)):
+            cph_vals.append(float(v))
+    if len(cph_vals) >= 3:
+        m = float(median(cph_vals))
+        band_parts.append(
+            f"context_switches_per_hour {m * 0.85:.1f}〜{m * 0.95:.1f}"
+        )
     # site 帯を将来足す場合も site_metrics_available を掛けること（現状は未使用）
     if band_parts:
         lines.append(

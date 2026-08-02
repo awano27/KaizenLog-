@@ -20,6 +20,7 @@ def test_available_pass_metrics_excludes_unmeasurable_metric_families():
 
     assert metrics == (
         "context_switches",
+        "context_switches_per_hour",
         "total_active_minutes",
         "category_minutes:ブラウジング",
         "category_minutes:開発",

@@ -418,6 +418,27 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
         _check_no_kzn_or_marker(action, f"actions[{i}].action")
         _check_no_kzn_or_marker(pass_v, f"actions[{i}].pass")
         _check_no_kzn_or_marker(fail_v, f"actions[{i}].fail")
+        # §C1: mechanism / falsifier 必須（最大50字・改行禁止）。数字は mechanism のみ禁止。
+        mechanism = _require_single_line(
+            item.get("mechanism"), f"actions[{i}].mechanism"
+        )
+        falsifier = _require_single_line(
+            item.get("falsifier"), f"actions[{i}].falsifier"
+        )
+        if len(mechanism) > 50:
+            raise _contract_error(
+                f"actions[{i}].mechanism は50字以内にしてください"
+            )
+        if len(falsifier) > 50:
+            raise _contract_error(
+                f"actions[{i}].falsifier は50字以内にしてください"
+            )
+        _check_no_kzn_or_marker(mechanism, f"actions[{i}].mechanism")
+        _check_no_kzn_or_marker(falsifier, f"actions[{i}].falsifier")
+        if _DIGIT_RE.search(mechanism):
+            raise _contract_error(
+                f"actions[{i}].mechanism に観測数値を書かないでください"
+            )
         if not _is_measurable(pass_v) or not _is_measurable(fail_v):
             raise _contract_error(
                 f"actions[{i}] の pass/fail は数値条件にしてください"
@@ -458,6 +479,7 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
                 "ai_fragmented_sessions",
                 "ai_retry_chains",
                 "ai_tool_errors",
+                "ai_tool_errors_per_session",
                 "ai_interruptions",
                 "ai_avg_turns",
                 "ai_output_tokens",
@@ -608,6 +630,13 @@ def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
             f"- [ ] {body}"
             f"｜PASS: {core}{note}｜FAIL: {item['fail'].strip()}"
         )
+        # 内部専用の対応付け: 素の箇条書きで運ぶ（- [ ] 禁止＝assign_action_ids 汚染防止）
+        mechanism = str(item.get("mechanism") or "").strip()
+        falsifier = str(item.get("falsifier") or "").strip()
+        if mechanism:
+            lines.append(f"    - なぜ効くと考えるか: {mechanism}")
+        if falsifier:
+            lines.append(f"    - 効かなかったと分かる条件: {falsifier}")
     lines.append("")
 
     lines.append("### AI作業の改善")

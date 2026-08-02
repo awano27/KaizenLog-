@@ -140,6 +140,7 @@ from .verdict import (
     apply_verdicts_to_actions_note,
     apply_verdicts_to_advice_note,
     backfill_verdicts,
+    filter_allowed_stage_updates,
     judge_entries,
     parse_pass_condition,
 )
@@ -149,6 +150,64 @@ def _parse_date(s: str | None, tz: ZoneInfo) -> date:
     if s:
         return date.fromisoformat(s)
     return datetime.now(tz).date()
+
+
+def _format_repeat_prompt_line(
+    day_prompts: list,
+    memory_path,
+    day: date,
+    *,
+    redactor=None,
+    top_n: int = 2,
+) -> str:
+    """ACTIVITY 末尾用: 繰り返し依頼(PRM)の1行。0件なら空文字。
+
+    台帳の最終観測(count/days の max)を表示する。システム注入XMLは除外。
+    """
+    from .aiwork import _is_system_wrapper
+
+    if not day_prompts:
+        return ""
+    clusters = cluster_prompts(day_prompts)
+    clusters = [c for c in clusters if c.count >= 2]
+    if not clusters:
+        return ""
+    upsert_clusters(memory_path, clusters, as_of=day, redactor=redactor)
+    ledger = load_prompt_ledger(memory_path)
+    candidates = [
+        e
+        for e in ledger
+        if e.status == "new"
+        and e.count_total >= 2
+        and e.representative
+        and not _is_system_wrapper(e.representative)
+    ]
+    candidates.sort(key=lambda e: (-e.count_total, e.id))
+    top = candidates[:top_n]
+    if not top:
+        return ""
+
+    def _snippet(text: str, limit: int = 40) -> str:
+        t = " ".join((text or "").split())
+        if len(t) <= limit:
+            return t
+        return t[: limit - 1] + "…"
+
+    parts = [
+        f"「{_snippet(e.representative)}」{e.count_total}回/{e.days_seen}日({e.id})"
+        for e in top
+    ]
+    # 表示例: 1件目の後に改行インデント、2件目
+    if len(parts) == 1:
+        body = parts[0]
+    else:
+        body = parts[0] + "、\n     " + "、".join(parts[1:])
+    skill_id = top[0].id
+    return (
+        f"🔁 繰り返している依頼(台帳の最終観測): {body}\n"
+        f"     → `kaizenlog prompts skill {skill_id}` でスキル化できます"
+        f"(skilled にすると本行から消えます)"
+    )
 
 
 def _safe_log_notify_failed(cfg: Config, context: str) -> None:
@@ -252,6 +311,15 @@ def cmd_generate(
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
+        # §D1: 繰り返し依頼(PRM)の日次1行（台帳の最終観測。システム注入XMLは除外）
+        prm_line = _format_repeat_prompt_line(
+            day_prompts,
+            cfg.memory_path,
+            day,
+            redactor=title_redactor,
+        )
+        if prm_line:
+            section = section.rstrip() + "\n\n" + prm_line
         # ループ税閾値通知（閾値超過のみ。同額は発火しない）— _notify 経由で runlog に残す
         alert = getattr(cfg.aiwork, "loop_tax_alert_usd", None)
         if (
@@ -476,6 +544,11 @@ def cmd_generate(
     )
     if skip_verdict_ids:
         judged = [e for e in judged if e.id not in skip_verdict_ids]
+    # §Z2: 表外 stage 遷移は追記せず当該IDのみスキップ
+    by_id_pre = {e.id: e for e in memory_entries}
+    judged = filter_allowed_stage_updates(
+        by_id_pre, judged, warn=lambda m: print(m, file=sys.stderr)
+    )
     if judged:
         append_entries(cfg.memory_path, judged)
         for entry in judged:
@@ -498,6 +571,7 @@ def cmd_generate(
 
     # A1b: 遅延 PASS バックフィル（提案翌日に stats が無かった行を後追い）
     # 測定日 = done_date+1（行動効果）/ 無ければ提案日+1（提案妥当性）
+    # 既判定行は verdict_date を優先（§Z1）
     by_id = {e.id: e for e in memory_entries}
     by_id.update({e.id: e for e in judged})
     bf = backfill_verdicts(
@@ -505,6 +579,10 @@ def cmd_generate(
         cfg.stats_path,
         day,
         known_categories=known_cats,
+    )
+    # backfill 内でも表外を落とすが、append 直前に二重でフィルタ
+    bf_judged = filter_allowed_stage_updates(
+        by_id, bf.judged, warn=lambda m: print(m, file=sys.stderr)
     )
     print(bf.log_line())
     # 無言スキップ可視化: コンソールに加え runlog にも1行（二次失敗は握り潰す）
@@ -519,9 +597,9 @@ def cmd_generate(
         )
     except Exception:
         pass
-    if bf.judged:
-        append_entries(cfg.memory_path, bf.judged)
-        for entry in bf.judged:
+    if bf_judged:
+        append_entries(cfg.memory_path, bf_judged)
+        for entry in bf_judged:
             by_id[entry.id] = entry
             provisional = entry.verdict_stage == "provisional"
             mark = "⏳" if provisional else ("✅" if entry.verdict == "pass" else "❌")
@@ -546,7 +624,7 @@ def cmd_generate(
     _resync_measurement_day_actions(
         cfg,
         store,
-        [*judged, *bf.judged],
+        [*judged, *bf_judged],
         today=datetime.now(ZoneInfo(cfg.timezone)).date(),
     )
 
@@ -602,6 +680,16 @@ def _resync_measurement_day_actions(
         print(f"📌 判定日 ACTIONS を再同期しました: {path}")
 
 
+def _actions_stats_history(cfg: Config, target_day: date) -> list:
+    """ACTIONS の判定不成立・判定後推移用に十分な stats 履歴を読む。"""
+    # handoff 窓 + 判定後推移最大5日 + 余裕
+    return load_stats(
+        cfg.stats_path,
+        days=ACTIONS_HANDOFF_DAYS + 14,
+        end_day=target_day,
+    )
+
+
 def _write_actions_handoff(
     cfg: Config, store: DailyNoteStore, day: date, entries: list,
 ) -> None:
@@ -610,7 +698,12 @@ def _write_actions_handoff(
     target = day + timedelta(days=1)
     if target < today:
         return
-    section = render_actions_section(entries, target, store.read(target))
+    section = render_actions_section(
+        entries,
+        target,
+        store.read(target),
+        stats_history=_actions_stats_history(cfg, target),
+    )
     if not section:
         return
     path = store.write_section(
@@ -798,7 +891,12 @@ def cmd_morning(cfg: Config, day: date, *, skip_catch_up: bool = False) -> int:
             catch_up = catch_up_yesterday(cfg, day)
         store = DailyNoteStore(cfg.daily_notes_path)
         entries = load_entries(cfg.memory_path)
-        section = render_actions_section(entries, day, store.read(day))
+        section = render_actions_section(
+            entries,
+            day,
+            store.read(day),
+            stats_history=_actions_stats_history(cfg, day),
+        )
         if section:
             path = store.write_section(
                 day, ACTIONS_MARKER, section, position=cfg.actions_position
@@ -1343,7 +1441,12 @@ def cmd_done(cfg: Config, action_id: str, day: date) -> int:
         print(f"⚠️  当日ノートが無いためノート同期をスキップしました: {store.path_for(day)}")
     else:
         merged = {e.id: e for e in load_entries(cfg.memory_path)}
-        section = render_actions_section(list(merged.values()), day, note)
+        section = render_actions_section(
+            list(merged.values()),
+            day,
+            note,
+            stats_history=_actions_stats_history(cfg, day),
+        )
         if section:
             store.write_section(
                 day, ACTIONS_MARKER, section, position=cfg.actions_position

@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 MEMORY_FILE = "suggestions.jsonl"
 ID_PATTERN = re.compile(r"KZN-(\d{8})-(\d{3,})")  # 1000件目以降は4桁になるため下限のみ固定
@@ -540,6 +542,52 @@ def metric_pass_rates(
     return rows
 
 
+def metric_behavior_rates(
+    entries: list[MemoryEntry],
+    today: date,
+    *,
+    window_days: int = 30,
+    min_judged: int = 1,
+) -> list[tuple[str, int, int]]:
+    """指標別の挙動PASS/判定数（実行の有無は問わない・confirmed のみ）。
+
+    対象: status in (proposed, done) かつ verdict in (pass, fail)
+    かつ verdict_stage == confirmed。
+    superseded/skipped/unmeasurable/graduated/retired と provisional は除外。
+    戻り値: (metric, passed, judged) を判定数降順。
+    """
+    from .verdict import parse_pass_condition
+
+    start = (today - timedelta(days=window_days)).isoformat()
+    end = today.isoformat()
+    tallies: dict[str, list[int]] = {}
+    for e in entries:
+        if e.status not in ("proposed", "done"):
+            continue
+        if (
+            e.verdict not in ("pass", "fail")
+            or e.verdict_stage != "confirmed"
+        ):
+            continue
+        if not e.date or not (start <= e.date <= end):
+            continue
+        parsed = parse_pass_condition(e.action)
+        if not parsed:
+            continue
+        metric, _op, _t = parsed
+        bucket = tallies.setdefault(metric, [0, 0])
+        bucket[1] += 1
+        if e.verdict == "pass":
+            bucket[0] += 1
+    rows = [
+        (m, p, j)
+        for m, (p, j) in tallies.items()
+        if j >= min_judged
+    ]
+    rows.sort(key=lambda r: (-r[2], r[0]))
+    return rows
+
+
 # 2連続FAIL較正の判定窓（verdict_date 基準）
 _CONSECUTIVE_FAIL_WINDOW_DAYS = 30
 
@@ -957,11 +1005,19 @@ def summarize_for_prompt(
         lines.append("## 直近の判定（最大3日・新しい順）")
         lines.extend(verdict_lines)
 
-    # 指標別PASS実績
+    # 指標別PASS実績（実行済みトラック）
     mpr = metric_pass_rates(entries, today, window_days=30, min_judged=3)
     if mpr:
         lines.append("## 指標別PASS実績（直近30日）")
         for metric, passed, judged in mpr[:6]:
+            trend = "✅傾向" if passed * 2 >= judged else "❌傾向"
+            lines.append(f"- {metric} {passed}/{judged} {trend}")
+
+    # 実行の有無は問わない指標の挙動（§B1）。達成断定ラベルは使わない。
+    mbr = metric_behavior_rates(entries, today, window_days=30, min_judged=1)
+    if mbr:
+        lines.append("## 実行の有無は問わない指標の挙動（直近30日）")
+        for metric, passed, judged in mbr[:6]:
             trend = "✅傾向" if passed * 2 >= judged else "❌傾向"
             lines.append(f"- {metric} {passed}/{judged} {trend}")
 
@@ -996,10 +1052,123 @@ def summarize_for_prompt(
     return "\n".join(lines)
 
 
+def _stats_by_day(
+    stats_history: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, Mapping[str, Any]]:
+    out: dict[str, Mapping[str, Any]] = {}
+    if not stats_history:
+        return out
+    for item in stats_history:
+        if not isinstance(item, Mapping):
+            continue
+        day_key = item.get("day")
+        if isinstance(day_key, str) and day_key:
+            out[day_key] = item
+    return out
+
+
+def _denominator_shortfall_note(
+    entry: MemoryEntry,
+    stats_by_day: dict[str, Mapping[str, Any]],
+) -> str | None:
+    """分母不足で判定できないとき「判定不成立」注記を返す。失敗アイコンは付けない。"""
+    if entry.verdict in ("pass", "fail"):
+        return None
+    from .experiments import metric_from_stats
+    from .verdict import measure_day_for_entry, parse_pass_condition
+
+    parsed = parse_pass_condition(entry.action)
+    if parsed is None:
+        return None
+    metric, _op, _t = parsed
+    if not (metric.endswith("_per_hour") or metric.endswith("_per_session")):
+        return None
+    measure_day = measure_day_for_entry(entry)
+    if measure_day is None:
+        return None
+    day_stats = stats_by_day.get(measure_day.isoformat())
+    if day_stats is None:
+        return None
+    # stats はあるが metric が None → 分母下限未満
+    if metric_from_stats(metric, dict(day_stats)) is not None:
+        return None
+    try:
+        proposal_day = date.fromisoformat(entry.date)
+        proposal_label = f"{proposal_day.month}/{proposal_day.day}"
+    except ValueError:
+        proposal_label = entry.date
+    reason = ""
+    if metric.endswith("_per_hour"):
+        mins = day_stats.get("total_minutes")
+        if isinstance(mins, (int, float)):
+            reason = f"・稼働{float(mins):g}分のため分母不足"
+        else:
+            reason = "・分母不足"
+    else:
+        ai = day_stats.get("ai") if isinstance(day_stats.get("ai"), Mapping) else {}
+        sessions = ai.get("sessions") if isinstance(ai, Mapping) else None
+        if sessions is not None:
+            reason = f"・AIセッション{sessions}件のため分母不足"
+        else:
+            reason = "・分母不足"
+    return f"{proposal_label}提案・判定不成立{reason}"
+
+
+def _post_verdict_trajectory_lines(
+    entry: MemoryEntry,
+    target_day: date,
+    stats_by_day: dict[str, Mapping[str, Any]],
+) -> list[str]:
+    """confirmed 判定後の実測推移（最大5日）。全日測定不能なら空。"""
+    if entry.verdict not in ("pass", "fail"):
+        return []
+    if entry.verdict_stage != "confirmed":
+        return []
+    if not entry.verdict_date:
+        return []
+    from .experiments import metric_from_stats, target_met
+    from .verdict import parse_pass_condition
+
+    parsed = parse_pass_condition(entry.action)
+    if parsed is None:
+        return []
+    metric, op, target = parsed
+    try:
+        start = date.fromisoformat(entry.verdict_date) + timedelta(days=1)
+    except ValueError:
+        return []
+    end = target_day - timedelta(days=1)
+    if start > end:
+        return []
+    points: list[tuple[date, float, bool]] = []
+    d = start
+    while d <= end and len(points) < 5:
+        s = stats_by_day.get(d.isoformat())
+        if s is not None:
+            v = metric_from_stats(metric, dict(s))
+            if v is not None:
+                met = target_met(float(v), op, float(target))
+                points.append((d, float(v), met))
+        d += timedelta(days=1)
+    if not points:
+        return []
+    chain = " → ".join(
+        f"{p.month}/{p.day} {v:g} {'✅' if met else '❌'}"
+        for p, v, met in points
+    )
+    over = sum(1 for _p, _v, met in points if not met)
+    return [
+        f"  └ 判定後の実測: {chain}",
+        f"     (測定できた{len(points)}日のうち{over}日が閾値超過。"
+        f"実行の有無は問わない指標の挙動です)",
+    ]
+
+
 def render_actions_section(
     entries: list[MemoryEntry],
     target_day: date,
     note_content: str | None = None,
+    stats_history: Sequence[Mapping[str, Any]] | None = None,
 ) -> str | None:
     """翌日ノート用「今日のアクション」転記 Markdown。
 
@@ -1009,6 +1178,8 @@ def render_actions_section(
     0件なら None（既存セクションは消さない。ただし stale/older のみある場合は
     件数案内セクションを返す）。
     note_content に同じ KZN の [x] があればチェック状態を保持する。
+    stats_history を渡すと分母不足の「判定不成立」と判定後の実測推移を出す。
+    未指定なら現行出力のまま（後方互換）。
     """
     buckets = partition_open_actions(
         entries, target_day, recent_include_today=False
@@ -1066,9 +1237,14 @@ def render_actions_section(
                 f" / {pass_part}{undone_part}"
             )
 
+    stats_by_day = _stats_by_day(stats_history)
+
     def _action_line(e: MemoryEntry, mark: str) -> str:
         from .verdict import format_action_verdict_tag
 
+        shortfall = _denominator_shortfall_note(e, stats_by_day)
+        if shortfall is not None:
+            return f"- [{mark}] {e.id}: {e.action}（{shortfall}）"
         tag = format_action_verdict_tag(e)
         return f"- [{mark}] {e.id}: {e.action}（{tag}）"
 
@@ -1096,11 +1272,15 @@ def render_actions_section(
     for e in shown:
         mark = "x" if e.id in checked_ids else " "
         lines.append(_action_line(e, mark))
+        lines.extend(_post_verdict_trajectory_lines(e, target_day, stats_by_day))
 
     if pass_achieved:
         lines.append("### ☑ 指標は達成済み（習慣化するならチェック）")
         for e in pass_achieved[:TODAY_CANDIDATE_CAP]:
             lines.append(_action_line(e, " "))
+            lines.extend(
+                _post_verdict_trajectory_lines(e, target_day, stats_by_day)
+            )
         rest_achieved = max(0, len(pass_achieved) - TODAY_CANDIDATE_CAP)
         if rest_achieved:
             # 表示上限超過分を無言で落とさない（全件は today --all）

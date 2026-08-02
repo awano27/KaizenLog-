@@ -69,7 +69,9 @@ KaizenLog が決定論的に組み立てます。
       "trigger": "朝一のメール確認の後",
       "action": "15分以内に始める行動",
       "pass": "context_switches <= 40",
-      "fail": "41回以上"
+      "fail": "41回以上",
+      "mechanism": "切り替え回数を減らすと集中が途切れにくいと考える",
+      "falsifier": "context_switches が前日より増え続けた場合"
     }
   ],
   "ai_review": [
@@ -90,7 +92,9 @@ KaizenLog が決定論的に組み立てます。
 ### フィールド規則
 - `fact_ids` は `"F3"` 形式（角括弧なし可）。入力の確定事実に存在する ID のみ
 - `interpretation` と `ai_review.text` に算用数字を書かない（観測値は F 本文が正）
-- `proposal` / `action` / `trigger` / `pass` / `fail` / `next_metric` は数字可
+- `proposal` / `action` / `trigger` / `pass` / `fail` / `next_metric` / `falsifier` は数字可
+- `mechanism` は算用数字禁止（観測値は F 本文が正）。改行禁止・最大50字
+- `falsifier` は効かなかったと分かる条件。改行禁止・最大50字。指標条件のため数字可
 - `trigger` は必須。実行意図（if-then）の合図。当日ログや Today's Focus に実在する
   行動・時刻をアンカーにする（例: 「朝一のメール確認の後」）。見つからなければ
   「朝いちばんに」等の汎用でよい。改行禁止・短い文（目安15字）

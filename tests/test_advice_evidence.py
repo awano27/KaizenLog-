@@ -90,14 +90,18 @@ VALID_ADVICE_JSON = """{
       "trigger": "始業の直後",
       "action": "集中枠を予定へ一件入れる",
       "pass": "focus_blocks >= 2",
-      "fail": "1回以下"
+      "fail": "1回以下",
+      "mechanism": "枠を先に置くと開始が遅れにくいと考える",
+      "falsifier": "focus_blocks が前日より減った場合"
     },
     {
       "fact_ids": ["F9"],
       "trigger": "調査を始める前",
       "action": "リンクを三件まとめる",
       "pass": "context_switches <= 40",
-      "fail": "41回以上"
+      "fail": "41回以上",
+      "mechanism": "まとめ開きで切替が減ると考える",
+      "falsifier": "context_switches が前日より増えた場合"
     }
   ],
   "ai_review": [
@@ -135,7 +139,9 @@ MISSING_EVIDENCE_JSON = """{
       "trigger": "始業の直後",
       "action": "統計ファイルを一件確認する",
       "pass": "context_switches <= 200",
-      "fail": "201回以上"
+      "fail": "201回以上",
+      "mechanism": "生成状態を見ると欠測に早く気づけると考える",
+      "falsifier": "統計ファイルが翌日も無い場合"
     }
   ],
   "ai_review": [
@@ -356,6 +362,8 @@ def test_short_day_rejects_unmeasured_or_low_priority_actions(action_text, expec
             "action": action_text,
             "pass": "focus_blocks >= 1",
             "fail": "0回",
+            "mechanism": "小さな着手が継続を助けると考える",
+            "falsifier": "focus_blocks がゼロの日が続いた場合",
         }
     ]
     assert any(expected in e for e in validate_advice(data, evidence))
@@ -372,6 +380,8 @@ def test_without_previous_day_rejects_relative_action_condition():
             "action": "前日比で増やす",
             "pass": "focus_blocks >= 1",
             "fail": "0回",
+            "mechanism": "小さな着手が継続を助けると考える",
+            "falsifier": "focus_blocks がゼロの日が続いた場合",
         }
     ]
     # 前日 を action に含める
@@ -462,6 +472,8 @@ def test_switch_guard_allows_independently_measured_f5_interruptions():
         "action": "中断理由を記録する",
         "pass": "ai_interruptions <= 100",
         "fail": "101回以上",
+        "mechanism": "理由を残すと再発パターンが見えると考える",
+        "falsifier": "ai_interruptions が前日より増えた場合",
     }
     data["ai_review"] = [
         {"fact_ids": ["F5"], "text": "中断回数は明示テレメトリで測定済み"}
@@ -486,6 +498,8 @@ def test_semantic_guard_allows_measurement_and_maintenance_actions():
         "action": "セッション計測を設定する",
         "pass": "ai_cc_sessions >= 1",
         "fail": "0回",
+        "mechanism": "計測を入れると欠測に早く気づけると考える",
+        "falsifier": "ai_cc_sessions がゼロの日が続いた場合",
     }
     data["ai_review"] = [
         {"fact_ids": ["F5"], "text": "明日から往復ごとにログへ記録する"}
@@ -507,6 +521,8 @@ def test_semantic_guard_allows_zero_entertainment_maintenance():
         "action": "分類設定を確認する",
         "pass": "category_minutes:エンタメ <= 0",
         "fail": "1分以上",
+        "mechanism": "分類精度を保つと誤計上を防げると考える",
+        "falsifier": "category_minutes:エンタメ が正になった場合",
     }
     assert validate_advice(data, build_advice_evidence(CURRENT)) == []
 

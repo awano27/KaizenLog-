@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import math
 import re
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -249,10 +251,13 @@ class BackfillResult:
 
 
 def measure_day_for_entry(entry: MemoryEntry) -> date | None:
-    """判定に使う測定日。
+    """判定に使う測定日（未判定行向け）。
 
     done_date あり → done_date + 1日（行動の効果を測る）。
     無し → 提案日 + 1日（提案の妥当性）。不正日付は None。
+
+    既に verdict_date がある行の再判定では、backfill_verdicts が
+    verdict_date を優先する（一度決めた測定日を動かさない）。
     """
     if entry.done_date:
         try:
@@ -263,6 +268,59 @@ def measure_day_for_entry(entry: MemoryEntry) -> date | None:
         return date.fromisoformat(entry.date) + timedelta(days=1)
     except ValueError:
         return None
+
+
+# stage 遷移表（第36弾 §A4 / 第37弾 §Z2）。表外遷移は追記せず警告して当該IDのみスキップ。
+# キー: (現在 stage | None=未判定, 次 stage) → 許可
+ALLOWED_VERDICT_STAGE_TRANSITIONS: frozenset[tuple[str | None, str]] = frozenset(
+    {
+        (None, "provisional"),
+        (None, "confirmed"),
+        ("provisional", "provisional"),
+        ("provisional", "confirmed"),
+        ("confirmed", "confirmed"),
+    }
+)
+
+
+def is_allowed_verdict_stage_transition(
+    from_stage: str | None, to_stage: str
+) -> bool:
+    """遷移表内の stage 変化なら True。from_stage は未判定時 None。"""
+    return (from_stage, to_stage) in ALLOWED_VERDICT_STAGE_TRANSITIONS
+
+
+def filter_allowed_stage_updates(
+    current_by_id: dict[str, MemoryEntry],
+    candidates: list[MemoryEntry],
+    *,
+    warn: Callable[[str], None] | None = None,
+) -> list[MemoryEntry]:
+    """表外 stage 遷移の候補を落とし、許可された更新だけ返す。
+
+    同一IDの最新行が confirmed なのに provisional へ落ちる等は
+    推測で補正せず、台帳へ追記しない（当該IDのみスキップ）。
+    """
+    kept: list[MemoryEntry] = []
+    for cand in candidates:
+        cur = current_by_id.get(cand.id)
+        if cur is not None and cur.verdict in ("pass", "fail"):
+            from_stage: str | None = cur.verdict_stage
+        else:
+            from_stage = None
+        to_stage = cand.verdict_stage
+        if not is_allowed_verdict_stage_transition(from_stage, to_stage):
+            msg = (
+                f"⚠️  stage遷移が表外のためスキップ: {cand.id} "
+                f"{from_stage!r} → {to_stage!r}"
+            )
+            if warn is not None:
+                warn(msg)
+            else:
+                print(msg, file=sys.stderr)
+            continue
+        kept.append(cand)
+    return kept
 
 
 def backfill_verdicts(
@@ -278,6 +336,10 @@ def backfill_verdicts(
     実測は保存済み stats の metric_from_stats のみ。
     ai_avg_turns は v2 キー / 導出 / v1 projects 近似で復元可能。不能時はスキップ。
     測定日の stats が無ければスキップ（次回 generate で再試行）。
+
+    既に verdict_date がある行は、その日を測定日として固定する
+    （done_date 後付けで測定日がずれて confirmed 昇格が永久に起きない退行を防ぐ）。
+    done_date による再割り当ては verdict 未設定の行に限る。
     """
     window_start = (as_of - timedelta(days=window_days)).isoformat()
     # as_of 当日提案は測定日が明日になるので対象外（window は提案日）
@@ -307,7 +369,15 @@ def backfill_verdicts(
         if parsed is None:
             continue
         metric, op, target_value = parsed
-        measure_day = measure_day_for_entry(entry)
+        # 一度決めた測定日は動かさない。done_date 再割当は未判定行のみ。
+        measure_day: date | None = None
+        if entry.verdict_date:
+            try:
+                measure_day = date.fromisoformat(entry.verdict_date)
+            except ValueError:
+                measure_day = None
+        if measure_day is None:
+            measure_day = measure_day_for_entry(entry)
         if measure_day is None or measure_day > as_of:
             # 測定日が未来ならまだ測れない
             continue
@@ -338,6 +408,19 @@ def backfill_verdicts(
         verdict = "pass" if met else "fail"
         judged_day = measure_day.isoformat()
         stage = "confirmed" if measure_day < as_of else "provisional"
+        # 表外遷移（例: confirmed→provisional）は追記しない
+        from_stage = (
+            entry.verdict_stage
+            if entry.verdict in ("pass", "fail")
+            else None
+        )
+        if not is_allowed_verdict_stage_transition(from_stage, stage):
+            print(
+                f"⚠️  stage遷移が表外のためスキップ: {entry.id} "
+                f"{from_stage!r} → {stage!r}",
+                file=sys.stderr,
+            )
+            continue
         if (
             entry.verdict == verdict
             and entry.verdict_date == judged_day
