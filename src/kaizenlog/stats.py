@@ -10,9 +10,10 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 from .aiwork import (
     AISession,
@@ -58,6 +59,7 @@ def build_stats(
     internal_ai_sessions: int = 0,
     loop_tax_summary: LoopTaxSummary | None = None,
     outcome_git: list[dict] | None = None,
+    screenpipe: Mapping[str, Any] | None = None,
 ) -> dict:
     projects: dict[str, dict] = {}
     for s in cc_sessions:
@@ -251,6 +253,12 @@ def build_stats(
     # §C1: コミット統計（subjects は呼び出し側で redact 済みを渡す）
     if outcome_git is not None:
         stats["outcome_git"] = list(outcome_git)
+    # screenpipe は件数のみ（本文は保存しない）
+    if screenpipe is not None:
+        stats["screenpipe"] = {
+            "queried_blocks": int(screenpipe.get("queried_blocks") or 0),
+            "filled_blocks": int(screenpipe.get("filled_blocks") or 0),
+        }
     # 今日の目標（redact 適用後の文言のみ保存。generate がノートから読む）
     if goal_text:
         stats["goal_text"] = str(goal_text)
@@ -275,6 +283,7 @@ def write_stats(
     internal_ai_sessions: int = 0,
     loop_tax_summary: LoopTaxSummary | None = None,
     outcome_git: list[dict] | None = None,
+    screenpipe: Mapping[str, Any] | None = None,
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
@@ -296,6 +305,7 @@ def write_stats(
                 internal_ai_sessions=internal_ai_sessions,
                 loop_tax_summary=loop_tax_summary,
                 outcome_git=outcome_git,
+                screenpipe=screenpipe,
             ),
             ensure_ascii=False,
             indent=1,

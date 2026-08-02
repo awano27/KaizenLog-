@@ -17,3 +17,5 @@ grok-desktop-experiment/
 .worktrees/
 # Claude Code ローカル設定（絶対パス付き hook。git add . 誤コミット防止）
 .claude/settings.json
+# ブレインストーミング用スキルの作業ツリー（.last-token 等のローカル資格情報を含む）
+.superpowers/

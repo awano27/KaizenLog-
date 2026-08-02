@@ -32,6 +32,15 @@ replacement = "[REDACTED]"
 [activitywatch]
 base_url = "http://localhost:5600"
 
+# [screenpipe]
+# 画面テキスト補完（read-only・既定 OFF）。API キーは toml に書かず環境変数へ。
+# enabled = false
+# base_url = "http://localhost:3030"
+# api_key_env = "SCREENPIPE_API_KEY"
+# timeout_seconds = 3.0
+# max_lines = 3
+# max_excerpt_chars = 120
+
 [aiwork]
 # Claude Codeのセッションログ（JSONL）から「AI作業の質」を集計する
 # 往復数・細切れセッション・ツールエラー・中断を検出し、改善提案の材料にする

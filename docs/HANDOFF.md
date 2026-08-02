@@ -51,13 +51,23 @@ Windows のPC作業を ActivityWatch + AI CLIセッションログから自動�
 | 40 | **第38弾レビュー残件**: digest redactor ガード撤去・git root 正規化・known_categories 伝搬・卒業日境界・変異テスト強化 |
 | 41 | **日誌可読性の抜本改善**(実日誌2026-08-02レビュー起点): アクション2行平文化(描画のみ・台帳契約不変・演算子和訳)・サマリ行平文化・タイムライン×AIセッション時間突合(ツール適合・（ログなし）フォールバック)・未計測分数の表記正規化・outcome_git subjects取得+stats永続化・日報ドラフトのプロジェクト事実化(業務=digests集約/成果=コミットsubjects/明日=未チェックKZN) |
 
+| 42 | **screenpipe 画面内容連携**: `screenpipe_source.py`(read-only 3エンドポイント・Bearer認証・OCR優先/accessibility フォールバック・要約は純関数・自己参照除外・サーキットブレーカ)・未突合AIブロックの「（ログなし）」を「（画面テキスト: …）」で補完・🖥小節/日報/advisor参考節・`doctor`3状態・`screenpipe-probe` |
+
 | 43 | **第41弾レビュー残件**: Kaizen節アクションの平文化(`humanize_advice_markdown_actions`・ID付与後/書込前・台帳は機械構文のまま・冪等)・status文言の平文化・日報の40字切詰めを39字+「…」へ |
 
 | 44 | **過去ノートの遡及平文化**(実装: Grok): `kaizenlog rehumanize`(既定dry-run・`--write`/`--days`/`--date`・冪等・タイムスタンプ付きバックアップ・変換/書込の失敗は当該ファイルのみスキップして続行)・ADVICE/ACTIONS 両区間対応(判定タグ保持・変換不能行は無変換)・digest/aiwork の切詰めを「結果が上限字数」規約へ統一 |
 
-テスト基準線: **pytest 923 passed**（2026-08-02 第44弾適用後・実行結果を正とする。`./.venv/Scripts/python.exe -m pytest -q`）。
-**HEAD**: `08587bb`(第38〜41弾までコミット)。第43〜44弾はワーキングツリー適用済み・未コミット。
-第42弾(screenpipe画面内容連携)は指示書のみで**未実装** — ユーザーのscreenpipe導入待ち(read-only 3エンドポイント・既定OFF・fail-closed設計)。
+テスト基準線: **pytest 937 passed**（2026-08-02 第42弾適用後・実行結果を正とする。`./.venv/Scripts/python.exe -m pytest -q`）。
+**HEAD**: `93f3d03`(第38〜44弾までコミット)。第42弾はワーキングツリー適用済み・未コミット。
+
+## screenpipe 運用メモ(第42弾・2026-08-02 実機検証)
+
+- 既定 **OFF**。有効化は `kaizenlog.toml` の `[screenpipe] enabled = true` と、**環境変数 `SCREENPIPE_API_KEY` の設定**が両方必要(キー値は toml に書かない)。トークンは `screenpipe auth token` で取得。**スケジュールタスク(21:30/08:30)から使うにはタスク側にも環境変数が要る**(未設定なら disabled 扱いで既存出力のまま)。
+- 認証は localhost でも必須。`Authorization: Bearer` のみ有効(`X-API-Key`・クエリ方式は 403)。`/health` だけ無認証で通る。
+- 本文が読めるのは **OCR**。accessibility は UI 部品(平均19〜25字)が主で、Electron アプリの会話本文は取れない。
+- 補完対象は「AI作業カテゴリ かつ セッションログと突合できなかったブロック」のみ。claude/codex のようにログがあるアプリでは screenpipe は照会されない(設計どおり)。
+- **既知の限界(実測)**: ChatGPT デスクトップの OCR にはサイドバーの過去会話タイトル一覧が混ざるため、「その時間帯の作業内容」とは限らない。日本語 OCR は分かち書き誤認識・字形誤認(`エ`→`工`)あり。Claude Code の画面に映る KaizenLog 自身の議論は `SELF_REFERENCE_PATTERNS` で全ては落とせない(キーワードに当たらない文が残る)。いずれも参考層扱いのため指標は汚染しない。
+- リソース実測: screenpipe 本体 1.05GB/最大23%CPU + MCP 関連 1.03GB。
 **未実施の運用作業**: 過去ノートの遡及平文化は第44弾で実装済みだが、**実ボールトへの `rehumanize --write` はまだ実行していない**(dry-run で 7/26〜8/2 の8件が変更対象と確認済み・ユーザー実行待ち)。実行前に dry-run で差分を確認すること。バックアップは `<vault>/.kaizenlog/backup/rehumanize/<timestamp>/` に残る。
 設計メモ(第44弾): rehumanize の書込は `write_section` ではなく `upsert_section`+`atomic_write_text` の直呼び(ADVICE/ACTIONS の2区間を1回の atomic 書込にまとめるため)。区間APIを通すので区間外不可侵は保たれる(区間外バイト完全一致をテストと実挙動の両方で確認済み)。
 既知の残存: 平文化は `requires_daily_contract` 判定の外にあるため weekly/自作プロンプト経路のノートにも適用される(ノート側にPASS構文の消費者はゼロと第43弾§P0で確認済みのため無害)。タイムラインのツール適合は source→tool_class 写像方式(仕様の project 判定と現行 source 語彙では等価・不一致時は（ログなし）側に倒れる fail-safe)。不正な `--date` は全コマンド共通で `ValueError` の生トレースになる(既存仕様・rehumanize も踏襲)。

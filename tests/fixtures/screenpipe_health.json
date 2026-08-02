@@ -1,0 +1,10 @@
+{
+  "status": "healthy",
+  "status_code": 200,
+  "version": "0.4.35-test",
+  "last_frame_timestamp": "2026-08-02T05:00:00Z",
+  "last_audio_timestamp": null,
+  "frame_status": "ok",
+  "audio_status": "ok",
+  "message": "ok"
+}

@@ -209,6 +209,65 @@ def _check_llm(c: Check, cfg: Config) -> None:
         _check_openai_compatible(c, llm, as_fallback=True, essential=(path is None))
 
 
+def _check_screenpipe(c: Check, cfg: Config) -> None:
+    """screenpipe: disabled / OK / unreachable（終了コードには影響しない）。"""
+    sp = getattr(cfg, "screenpipe", None)
+    if sp is None or not bool(getattr(sp, "enabled", False)):
+        c.ok("screenpipe: disabled")
+        return
+    from .screenpipe_source import (
+        ScreenpipeClient,
+        is_localhost_url,
+        resolve_api_key,
+    )
+
+    base = str(getattr(sp, "base_url", "") or "")
+    if not is_localhost_url(base):
+        c.warn("screenpipe: disabled（base_url が localhost 以外）")
+        return
+    key = resolve_api_key(str(getattr(sp, "api_key_env", "") or ""))
+    client = ScreenpipeClient(
+        base,
+        api_key=key,
+        timeout_seconds=float(getattr(sp, "timeout_seconds", 3.0) or 3.0),
+    )
+    health = client.health()
+    if health is None:
+        c.warn("screenpipe: unreachable（enabled だが応答なし）")
+        return
+    if not key:
+        c.warn(
+            "screenpipe: 認証未設定"
+            f"（{getattr(sp, 'api_key_env', 'SCREENPIPE_API_KEY')} を確認）"
+            " — /health のみ成功"
+        )
+        return
+    # 軽い search で 403 を検出（空クエリ相当・短い窓）
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(getattr(cfg, "timezone", "Asia/Tokyo") or "Asia/Tokyo")
+    end = datetime.now(tz)
+    start = end - timedelta(minutes=5)
+    client.search_text(None, start, end, limit=1)
+    if client.last_warning and "認証" in client.last_warning:
+        c.warn("screenpipe: 認証エラー（SCREENPIPE_API_KEY を確認）")
+        return
+    version = health.get("version") or "?"
+    last = health.get("last_frame_timestamp")
+    ago = ""
+    if isinstance(last, str) and last:
+        try:
+            from datetime import datetime as dt
+
+            ts = dt.fromisoformat(last.replace("Z", "+00:00"))
+            mins = max(0, int((datetime.now(tz) - ts.astimezone(tz)).total_seconds() // 60))
+            ago = f"・最終フレーム: {mins}分前"
+        except Exception:
+            ago = ""
+    c.ok(f"screenpipe: OK（version {version}{ago}）")
+
+
 def _check_aiwork(c: Check, cfg: Config) -> None:
     if not cfg.aiwork.enabled:
         c.warn("AI Work Telemetry: 無効（[aiwork] enabled = false）")
@@ -509,6 +568,7 @@ def run_doctor(
         _check_schedule(c)
         _check_llm(c, cfg)
         _check_aiwork(c, cfg)
+        _check_screenpipe(c, cfg)
         _check_history(c, cfg)
         _check_advise_health(c, cfg)
         _check_artifacts(c, cfg)

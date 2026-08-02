@@ -283,6 +283,9 @@ def cmd_generate(
     loop_tax = None
     session_spans = []
     outcome_git_payload: list[dict] | None = None
+    screen_fills: dict[str, str] = {}
+    screenpipe_stats: dict[str, int] | None = None
+    screen_samples: list[dict] = []
 
     if cfg.aiwork.enabled:
         adapters = available_adapters(cfg)
@@ -349,12 +352,58 @@ def cmd_generate(
                         }
                     )
 
+    # §S4: screenpipe で未突合 AI ブロックを補完（enabled かつキーあり時のみ）
+    sp_cfg = getattr(cfg, "screenpipe", None)
+    if (
+        sp_cfg is not None
+        and bool(getattr(sp_cfg, "enabled", False))
+    ):
+        from .screenpipe_source import (
+            ScreenpipeClient,
+            collect_screen_fills_for_ai_blocks,
+            is_localhost_url,
+            resolve_api_key,
+        )
+
+        base = str(getattr(sp_cfg, "base_url", "") or "")
+        key = resolve_api_key(str(getattr(sp_cfg, "api_key_env", "") or ""))
+        if is_localhost_url(base) and key:
+            client = ScreenpipeClient(
+                base,
+                api_key=key,
+                timeout_seconds=float(
+                    getattr(sp_cfg, "timeout_seconds", 3.0) or 3.0
+                ),
+                tz=tz,
+            )
+            self_paths = [
+                str(cfg.daily_notes_path),
+                str(Path(__file__).resolve().parents[2]),
+            ]
+            screen_fills, screenpipe_stats, screen_samples = (
+                collect_screen_fills_for_ai_blocks(
+                    summary.blocks,
+                    session_spans,
+                    client,
+                    redactor=title_redactor,
+                    max_lines=int(getattr(sp_cfg, "max_lines", 3) or 3),
+                    max_chars=int(
+                        getattr(sp_cfg, "max_excerpt_chars", 120) or 120
+                    ),
+                    self_paths=self_paths,
+                    min_block_minutes=float(cfg.min_block_minutes),
+                )
+            )
+            if client.last_warning:
+                print(f"⚠️  {client.last_warning}")
+
     section = render_markdown(
         summary,
         tz,
         min_block_minutes=cfg.min_block_minutes,
         input_stats=input_stats,
         session_spans=session_spans,
+        screen_fills=screen_fills or None,
     )
 
     if cfg.aiwork.enabled:
@@ -395,6 +444,7 @@ def cmd_generate(
             screen_total_minutes=summary.total_minutes,
             measurement_gap=gap,
             structured_cli_sessions=structured_cli_n,
+            screen_samples=screen_samples or None,
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
@@ -438,6 +488,7 @@ def cmd_generate(
         internal_ai_sessions=internal_ai_n,
         loop_tax_summary=loop_tax,
         outcome_git=outcome_git_payload,
+        screenpipe=screenpipe_stats,
     )
     previous_day = (day - timedelta(days=1)).isoformat()
     previous_stats = next(
@@ -493,6 +544,7 @@ def cmd_generate(
         internal_ai_sessions=internal_ai_n,
         loop_tax_summary=loop_tax,
         outcome_git=outcome_git_payload,
+        screenpipe=screenpipe_stats,
     )
 
     # 実験の実測追記: running 全件 + adopted（deadline から30日以内のみ）
@@ -1234,6 +1286,20 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         coach_for_f18 = load_coach_ledger(cfg.memory_path)
     except Exception:
         coach_for_f18 = []
+    # §S6: activity から画面テキスト行を拾い advisor 参考節へ（enabled 時のみ）
+    screenpipe_lines: list[str] = []
+    if bool(getattr(getattr(cfg, "screenpipe", None), "enabled", False)):
+        act = extract_section(content, ACTIVITY_MARKER) or ""
+        for ln in act.splitlines():
+            if "画面テキスト:" not in ln:
+                continue
+            m = re.search(r"（画面テキスト:\s*(.+?)）", ln)
+            if not m:
+                continue
+            screenpipe_lines.append(m.group(1).strip()[:120])
+            if len(screenpipe_lines) >= 3:
+                break
+
     evidence_ctx = build_advice_evidence(
         current_stats,
         prior_stats,
@@ -1244,6 +1310,7 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         decay_events=decay_for_f17,
         coach_entries=coach_for_f18,
         lifecycle_notes=lifecycle_notes,
+        screenpipe_lines=screenpipe_lines or None,
     )
 
     redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
@@ -1741,6 +1808,80 @@ def _open_kzn_for_nippou(cfg: Config, day: date, content: str) -> list[tuple[str
     return out
 
 
+def cmd_screenpipe_probe(
+    cfg: Config,
+    *,
+    minutes: int = 30,
+    app: str | None = None,
+) -> int:
+    """screenpipe 疎通と直近サンプル（日誌・stats 非書き込み）。"""
+    from .screenpipe_source import (
+        ScreenpipeClient,
+        is_localhost_url,
+        normalize_app_name,
+        resolve_api_key,
+        summarize_screen_texts,
+    )
+
+    sp = getattr(cfg, "screenpipe", None)
+    if sp is None:
+        print("screenpipe: 設定なし")
+        return 0
+    base = str(getattr(sp, "base_url", "") or "")
+    print(f"screenpipe base_url={base} enabled={bool(getattr(sp, 'enabled', False))}")
+    if not is_localhost_url(base):
+        print("screenpipe: base_url が localhost 以外のため中止")
+        return 1
+    key = resolve_api_key(str(getattr(sp, "api_key_env", "") or ""))
+    if not key:
+        print(
+            f"screenpipe: API キー未設定"
+            f"（環境変数 {getattr(sp, 'api_key_env', 'SCREENPIPE_API_KEY')}）"
+        )
+    tz = ZoneInfo(cfg.timezone)
+    client = ScreenpipeClient(
+        base,
+        api_key=key,
+        timeout_seconds=float(getattr(sp, "timeout_seconds", 3.0) or 3.0),
+        tz=tz,
+    )
+    health = client.health()
+    if health is None:
+        print("health: unreachable")
+    else:
+        print(
+            f"health: status={health.get('status')} version={health.get('version')} "
+            f"last_frame={health.get('last_frame_timestamp')}"
+        )
+    if not key:
+        return 0
+    end = datetime.now(tz)
+    start = end - timedelta(minutes=max(1, int(minutes)))
+    texts = client.search_text(
+        normalize_app_name(app) if app else None,
+        start,
+        end,
+        limit=40,
+    )
+    redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
+    summaries = summarize_screen_texts(
+        texts,
+        max_lines=3,
+        max_chars=int(getattr(sp, "max_excerpt_chars", 120) or 120),
+        self_paths=[str(cfg.daily_notes_path)],
+    )
+    if client.last_warning:
+        print(f"warning: {client.last_warning}")
+    if not summaries:
+        print("samples: (none)")
+        return 0
+    print("samples:")
+    for s in summaries:
+        # redact_patterns 未設定（既定）では make_redactor が None を返す
+        print(f"- {redactor(s) if redactor else s}")
+    return 0
+
+
 def cmd_rehumanize(
     cfg: Config,
     *,
@@ -1964,12 +2105,14 @@ def cmd_report(cfg: Config, day: date, use_llm: bool, write: bool) -> None:
             raise SystemExit(
                 f"{day} の統計がありません。先に `kaizenlog generate` を実行してください。"
             )
+        activity_md = extract_section(content, ACTIVITY_MARKER)
         section = generate_nippou_deterministic(
             stats_list[0],
             tz,
             intent,
             min_block_minutes=cfg.min_block_minutes,
             open_kzn_actions=open_kzn,
+            activity_md=activity_md,
         )
 
     print(section)
@@ -3013,6 +3156,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="実際に書き込む（未指定時は差分表示のみ）",
     )
+    spp = sub.add_parser(
+        "screenpipe-probe",
+        help="screenpipe 疎通と直近画面テキストのサンプル（非書き込み）",
+    )
+    spp.add_argument("--minutes", type=int, default=30, help="直近N分（既定30）")
+    spp.add_argument("--app", help="アプリ名フィルタ（例: ChatGPT）")
     sub.add_parser("status", help="実行履歴の確認")
     sub.add_parser("doctor", help="セットアップ診断")
     sk = sub.add_parser("skill", help="Claude Codeスキルの管理")
@@ -3443,6 +3592,13 @@ def main(argv: list[str] | None = None) -> int:
             days=int(getattr(args, "days", 30) or 30),
             only_date=only,
             write=bool(getattr(args, "write", False)),
+        )
+
+    if args.command == "screenpipe-probe":
+        return cmd_screenpipe_probe(
+            cfg,
+            minutes=int(getattr(args, "minutes", 30) or 30),
+            app=getattr(args, "app", None),
         )
 
     if args.command == "status":

@@ -647,6 +647,7 @@ def build_advice_evidence(
     decay_events: Sequence[Any] | None = None,
     coach_entries: Sequence[Any] | None = None,
     lifecycle_notes: Sequence[str] | None = None,
+    screenpipe_lines: Sequence[str] | None = None,
 ) -> AdviceEvidence:
     """LLMがログの意味を取り違えないための根拠コンテキストを作る。
 
@@ -1262,6 +1263,21 @@ def build_advice_evidence(
         lines.extend(format_f18_lines(list(coach_entries or [])))
     except Exception:
         pass
+
+    # §S6: screenpipe 画面観測（参考・推定）。redact 済み行のみ受け取る
+    if screenpipe_lines:
+        block: list[str] = ["", "## screenpipe画面観測（参考・推定）"]
+        total_chars = 0
+        for raw in list(screenpipe_lines)[:3]:
+            line = str(raw or "").strip()
+            if not line:
+                continue
+            if total_chars + len(line) > 600:
+                break
+            block.append(f"- {line}")
+            total_chars += len(line)
+        if len(block) > 2:
+            lines.extend(block)
 
     # 寿命管理の読者向け1行（空なら足さない。第35弾の空許容と両立）
     notes_out = list(reader_notes)

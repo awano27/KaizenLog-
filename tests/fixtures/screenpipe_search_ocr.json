@@ -1,0 +1,30 @@
+{
+  "data": [
+    {
+      "type": "OCR",
+      "content": {
+        "frame_id": 1,
+        "text": "最小化 復元 閉じる\nSHORT_RECORD_MIN_MINUTES = 120.0 の単一定数、120 リテラルの重複ゼロ。判定は呼び出し側（cli）\nバ ッ ク グ ラ ウ ン ド で実行\n[URL_WITH_CREDENTIALS]\nkaizenlog rehumanize を実行して第42弾を実装するか検討\nコードをコピー\nターミナルで実行",
+        "timestamp": "2026-08-02T00:00:10Z",
+        "file_path": "C:/tmp/frame1",
+        "offset_index": 0,
+        "app_name": "ChatGPT",
+        "window_name": "ChatGPT",
+        "browser_url": "",
+        "focused": true
+      }
+    },
+    {
+      "type": "OCR",
+      "content": {
+        "frame_id": 2,
+        "text": "最小化 復元 閉じる  日誌の改善案をレビューして PASS 条件を確認する",
+        "timestamp": "2026-08-02T00:00:20Z",
+        "app_name": "ChatGPT",
+        "window_name": "ChatGPT",
+        "focused": true
+      }
+    }
+  ],
+  "pagination": {"limit": 60, "offset": 0, "total": 2}
+}

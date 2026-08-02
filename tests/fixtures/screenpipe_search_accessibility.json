@@ -1,0 +1,26 @@
+{
+  "data": [
+    {
+      "type": "UI",
+      "content": {
+        "id": 1,
+        "text": "新しいチャット 送信 検索",
+        "timestamp": "2026-08-02T00:00:15Z",
+        "app_name": "ChatGPT",
+        "window_name": "ChatGPT",
+        "browser_url": ""
+      }
+    },
+    {
+      "type": "UI",
+      "content": {
+        "id": 2,
+        "text": "サイドバーを非表示にする 優先度でフィルター",
+        "timestamp": "2026-08-02T00:00:16Z",
+        "app_name": "ChatGPT",
+        "window_name": "ChatGPT"
+      }
+    }
+  ],
+  "pagination": {"limit": 60, "offset": 0, "total": 2}
+}

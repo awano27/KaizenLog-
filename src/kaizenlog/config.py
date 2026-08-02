@@ -151,6 +151,18 @@ class PrivacyConfig:
 
 
 @dataclass
+class ScreenpipeConfig:
+    """screenpipe 画面テキスト連携（read-only・既定 OFF）。"""
+
+    enabled: bool = False
+    base_url: str = "http://localhost:3030"
+    api_key_env: str = "SCREENPIPE_API_KEY"
+    timeout_seconds: float = 3.0
+    max_lines: int = 3
+    max_excerpt_chars: int = 120
+
+
+@dataclass
 class HandoffConfig:
     """kaizenlog handoff の注入先（CLAUDE.md / AGENTS.md 等）。"""
 
@@ -188,6 +200,7 @@ class Config:
     aw_base_url: str = "http://localhost:5600"
     aiwork: AIWorkConfig = field(default_factory=AIWorkConfig)
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
+    screenpipe: ScreenpipeConfig = field(default_factory=ScreenpipeConfig)
     handoff: HandoffConfig = field(default_factory=HandoffConfig)
     guard: GuardConfig = field(default_factory=GuardConfig)
     min_block_minutes: float = 3.0  # タイムラインに載せる最小ブロック長
@@ -349,6 +362,15 @@ session_titles = true
 # outcome_git_timeout_seconds = 5.0
 # outcome_git_max_repos = 5
 # loop_tax_alert_usd = 1.0
+
+# [screenpipe]
+# 画面テキスト補完（read-only・既定 OFF）。キー値は toml に書かず環境変数へ。
+# enabled = false
+# base_url = "http://localhost:3030"
+# api_key_env = "SCREENPIPE_API_KEY"
+# timeout_seconds = 3.0
+# max_lines = 3
+# max_excerpt_chars = 120
 
 # [handoff]
 # targets = ["C:/develop/myrepo/CLAUDE.md"]
@@ -526,6 +548,38 @@ def load_config(path: str | None = None) -> Config:
             except (TypeError, ValueError):
                 continue
         cfg.aiwork.pricing = parsed
+
+    sp = data.get("screenpipe", {})
+    if isinstance(sp, dict):
+        if "enabled" in sp:
+            cfg.screenpipe.enabled = bool(sp.get("enabled"))
+        if "base_url" in sp and sp.get("base_url") is not None:
+            cfg.screenpipe.base_url = str(sp.get("base_url") or "").rstrip("/")
+        if "api_key_env" in sp and sp.get("api_key_env") is not None:
+            cfg.screenpipe.api_key_env = str(sp.get("api_key_env") or "").strip()
+        if "timeout_seconds" in sp and sp.get("timeout_seconds") is not None:
+            cfg.screenpipe.timeout_seconds = _coerce(
+                float, sp.get("timeout_seconds"), "screenpipe.timeout_seconds"
+            )
+        if "max_lines" in sp and sp.get("max_lines") is not None:
+            cfg.screenpipe.max_lines = _coerce(
+                int, sp.get("max_lines"), "screenpipe.max_lines"
+            )
+        if "max_excerpt_chars" in sp and sp.get("max_excerpt_chars") is not None:
+            cfg.screenpipe.max_excerpt_chars = _coerce(
+                int, sp.get("max_excerpt_chars"), "screenpipe.max_excerpt_chars"
+            )
+        # localhost 以外は disabled 扱い（警告は load 後の呼び出し側でも可）
+        from .screenpipe_source import is_localhost_url
+
+        if cfg.screenpipe.enabled and not is_localhost_url(cfg.screenpipe.base_url):
+            import warnings
+
+            warnings.warn(
+                "screenpipe.base_url が localhost 以外のため disabled にします",
+                stacklevel=2,
+            )
+            cfg.screenpipe.enabled = False
 
     handoff = data.get("handoff", {})
     if isinstance(handoff, dict):

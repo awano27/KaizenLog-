@@ -205,6 +205,17 @@ kaizenlog today
 
 `morning`は未完了アクションを再表示し、必要な場合は追いつき処理も行います。追いつきを行わない表示だけの確認には`kaizenlog morning --skip-catch-up`を使います。`today`で候補を確認し、実行済みなら`kaizenlog done KZN-…001`で完了にできます。日々のLLM提案は現在の契約どおり1〜3件です。
 
+### 補助コマンド
+
+```powershell
+kaizenlog rehumanize --days 30        # 過去ノートの機械構文を平文へ（既定は差分表示のみ、--write で反映）
+kaizenlog excavate                    # 過去ログをさかのぼって空転を監査
+kaizenlog guard install --write       # セッション中の空転をフックで即時警告（明示実行時のみ）
+kaizenlog screenpipe-probe --minutes 30   # screenpipe 連携の疎通確認（有効化時のみ）
+```
+
+`rehumanize`はマーカー区間の中だけを書き換え、`<vault>/.kaizenlog/backup/` にバックアップを残します。日誌冒頭のダイジェストと、当日コミットの件数・主な内容（`outcome_git`）は`generate`が自動で書き込むため、専用コマンドはありません。
+
 ---
 
 ## ブラウザAIとM365 Copilot
@@ -285,8 +296,9 @@ pytest
 - [x] Prompt ROI、handoff / coach、A/B testによる改善ループ
 - [x] Claude Code／Copilot CLI／OpenAI互換バックエンド
 - [x] ブラウザAIテレメトリ
+- [x] [screenpipe](https://github.com/mediar-ai/screenpipe)連携（既定OFF。AIセッションログの無い画面の内容を参考情報として補完）
 - [ ] M365 Copilot改善アシスト（Next / Planned、現在未実装）
-- [ ] Cursorなど追加AIログ、[screenpipe](https://github.com/mediar-ai/screenpipe)連携
+- [ ] Cursorなど追加AIログ
 
 ## ライセンス
 

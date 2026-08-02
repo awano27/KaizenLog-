@@ -292,6 +292,57 @@ def _outcome_lines(
     return lines
 
 
+def _parse_block_minutes(text: str) -> float:
+    """タイムライン表の時間セル（`6m` / `1h5m`）を分に直す。"""
+    m = re.fullmatch(r"\s*(?:(\d+)h)?(?:(\d+)m)?\s*", text or "")
+    if not m or not (m.group(1) or m.group(2)):
+        return 0.0
+    return int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
+
+
+def _screenpipe_work_lines(
+    stats: Mapping[str, Any],
+    activity_md: str | None,
+) -> list[str]:
+    """digest が無い AI 画面を screenpipe 要約で補完（activity 表から抽出）。
+
+    合計10分以上のとき最大1行。テキストは stats に保存しない設計のため
+    日誌のタイムライン行 `（画面テキスト: …）` を読む。
+    """
+    if not activity_md or "画面テキスト" not in activity_md:
+        return []
+    # 画面テキストで補完された行だけを集計する（AI作業全体ではない）
+    by_app: dict[str, dict[str, Any]] = {}
+    for ln in activity_md.splitlines():
+        if "画面テキスト:" not in ln or "|" not in ln:
+            continue
+        # | time | min | AI作業 | App | （画面テキスト: …） |
+        parts = [p.strip() for p in ln.strip().strip("|").split("|")]
+        if len(parts) < 5:
+            continue
+        if parts[2] != "AI作業":
+            continue
+        m = re.search(r"（画面テキスト:\s*(.+?)）\s*$", parts[4])
+        if not m:
+            continue
+        bucket = by_app.setdefault(parts[3], {"minutes": 0.0, "excerpt": None})
+        bucket["minutes"] += _parse_block_minutes(parts[1])
+        if not bucket["excerpt"]:
+            bucket["excerpt"] = m.group(1).strip()
+    if not by_app:
+        return []
+    app_label, data = max(
+        by_app.items(), key=lambda kv: (float(kv[1]["minutes"]), kv[0])
+    )
+    minutes = float(data["minutes"])
+    if minutes < 10.0 or not data["excerpt"]:
+        return []
+    from .screenpipe_source import normalize_app_name
+
+    app = normalize_app_name(app_label) or app_label or "AI"
+    return [f"- {app}: 「{data['excerpt']}」（画面テキストより・約{_fmt_minutes(minutes)}）"]
+
+
 def generate_nippou_deterministic(
     stats: dict,
     tz: tzinfo,
@@ -299,10 +350,12 @@ def generate_nippou_deterministic(
     min_block_minutes: float = 15.0,
     *,
     open_kzn_actions: Sequence[tuple[str, str]] | None = None,
+    activity_md: str | None = None,
 ) -> str:
     """統計JSONから事実ベースの日報ドラフトを組み立てる。
 
     open_kzn_actions: (KZN-ID, 平文化済み行動文) の未チェック上位。
+    activity_md: タイムラインに載った画面テキスト補完を読むため（任意）。
     """
     lines = [NIPPOU_MARKER_HEADING, ""]
 
@@ -313,6 +366,7 @@ def generate_nippou_deterministic(
     if isinstance(goal, str) and goal.strip():
         work.append(f"- 目標: {goal.strip()}")
     work.extend(_project_work_lines(stats))
+    work.extend(_screenpipe_work_lines(stats, activity_md))
     # スクリーン補完（15分以上・エンタメ除外・最大3）
     work.extend(
         _screen_block_lines(stats, tz, min_block_minutes=max(15.0, min_block_minutes), limit=3)

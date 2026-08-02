@@ -382,8 +382,12 @@ def render_markdown(
     max_timeline_rows: int = 60,
     input_stats: InputStats | None = None,
     session_spans: Sequence[SessionSpan] | None = None,
+    screen_fills: Mapping[str, str] | None = None,
 ) -> str:
-    """デイリーノートに埋め込むアクティビティログのMarkdownを生成する。"""
+    """デイリーノートに埋め込むアクティビティログのMarkdownを生成する。
+
+    screen_fills: block_key → redact 済み画面テキスト要約（未突合 AI のみ）。
+    """
     lines: list[str] = []
     lines.append("## 📊 Activity Log")
     lines.append("")
@@ -495,7 +499,17 @@ def render_markdown(
             if matched is not None:
                 title = matched
             else:
-                title = f"{title}（ログなし）" if title else "（ログなし）"
+                fill = None
+                if screen_fills:
+                    from .screenpipe_source import block_fill_key
+
+                    fill = screen_fills.get(
+                        block_fill_key(b.start, b.end, b.app)
+                    )
+                if fill:
+                    title = f"（画面テキスト: {fill}）"
+                else:
+                    title = f"{title}（ログなし）" if title else "（ログなし）"
         md = (
             f"| {_fmt_time(b.start, tz)}-{_fmt_time(b.end, tz)} "
             f"| {_fmt_minutes(b.minutes)} "

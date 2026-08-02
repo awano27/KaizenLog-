@@ -1286,6 +1286,7 @@ def render_aiwork_markdown(
     screen_total_minutes: float | None = None,
     measurement_gap: bool | None = None,
     structured_cli_sessions: int | None = None,
+    screen_samples: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     """「AI作業の質」セクションのMarkdownを生成する。セッションが無ければ空文字。
 
@@ -1358,6 +1359,25 @@ def render_aiwork_markdown(
     lines.append("### 🧠 AI作業の質")
     lines.append("")
     lines.append("計測範囲: セッションログのある AI CLI / ブラウザ拡張のみが対象です。")
+    # §S5: ログなし AI 画面の内容（screenpipe・参考）
+    if screen_samples:
+        from .report import _fmt_time
+
+        lines.append("")
+        lines.append("🖥 ログなしAI画面の内容（screenpipe・参考）")
+        for sample in list(screen_samples)[:3]:
+            start = sample.get("start")
+            end = sample.get("end")
+            app = str(sample.get("app") or "—")
+            summary = str(sample.get("summary") or "").strip()
+            if not summary:
+                continue
+            if start is not None and end is not None:
+                tlabel = f"{_fmt_time(start, tz)}-{_fmt_time(end, tz)}"
+            else:
+                tlabel = "—-—"
+            lines.append(f"- {tlabel} {app}: {summary}")
+        lines.append("")
     screen_sources = {
         "chatgpt": ("chatgpt-web",),
         "claude": ("claude-web",),
