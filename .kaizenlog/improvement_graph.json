@@ -3,7 +3,7 @@
   "graph_id": "kaizenlog-practical-journal-advice-2026-08-02",
   "goal": "日誌を30秒で判断でき、アドバイスを1〜3件の証拠に紐づく5〜15分のPASS/FAILマイクロアクションにする",
   "created_at": "2026-08-02T23:01:07+09:00",
-  "updated_at": "2026-08-03T08:35:46+09:00",
+  "updated_at": "2026-08-03T08:50:22+09:00",
   "loop": {
     "pattern": "generate-critique-revise",
     "critique_revise_limit": 2,
@@ -2039,7 +2039,7 @@
       "id": "F-ACTION-MONITOR-MARKER-BASELINE-DISCREPANCY-001",
       "type": "Failure",
       "status": "mitigated-by-controller-rebaseline",
-      "claim": "Task 4 briefのmarker-external値d0ecbc...は実際の式と一致しなかった。初回body-only apply_patchは混在EOLの実日誌全体をLFへ正規化し、旧raw外側9153a097...は復元不能になった。controllerは現行all-LF外側601394f3...を新しい保護baselineとして承認した。",
+      "claim": "Task 4 briefのmarker-external値d0ecbc...は実際の式と一致しなかった。初回body-only apply_patchは混在EOLの実日誌全体をLFへ正規化した。旧値9153a097...は履歴証拠として保持し、controllerは当時のall-LF外側601394f3...を新しい保護baselineとして承認した。",
       "data": {
         "brief_marker_external_sha256": "d0ecbc8590a83208175d600a4802886ecc93a3f36da50e67c6b32a90520caf3a",
         "pre_patch_full_sha256": "b2e1260ad54df7a119e6bc5a11d590f48d28f0e8ec84bcf46ee000e7da67ab27",
@@ -2214,6 +2214,85 @@
         ],
         "step": "action-clarity-phase4-postcommit-full-verification",
         "timestamp": "2026-08-03T08:35:46+09:00"
+      }
+    },
+    {
+      "id": "C-ACTION-MONITOR-STATE-EXPLICIT-003",
+      "type": "CodeChange",
+      "status": "implemented",
+      "claim": "67c1bd2は、観測値を持たないconfirmed PASSを効果モニタリングから落とさず、最新値なし・実行ログなし・過去確定PASSとして明示する。status要約も過去PASS件数ではなく最新の達成・未達・未判定数で表示する。",
+      "data": {
+        "commit": "67c1bd20a6471b4f9beb933658db2b8c378874f5",
+        "files": [
+          "src/kaizenlog/memory.py",
+          "tests/test_round50_action_monitoring_clarity.py"
+        ],
+        "behavior": [
+          "unmeasurable confirmed PASS remains a non-checkbox monitoring card",
+          "latest observation summary distinguishes met, unmet, and unknown"
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "git show 67c1bd20a6471b4f9beb933658db2b8c378874f5",
+          "src/kaizenlog/memory.py:_monitoring_card_lines",
+          "src/kaizenlog/memory.py:_monitoring_summary_text",
+          "tests/test_round50_action_monitoring_clarity.py"
+        ],
+        "step": "action-clarity-final-review-fix",
+        "timestamp": "2026-08-03T08:50:22+09:00"
+      }
+    },
+    {
+      "id": "T-ACTION-MONITOR-FINAL-FULL-003",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "reviewer fix 67c1bd2を含む最終revisionで、controllerが独立にfull pytestを実行し1078件すべての成功を確認した。",
+      "data": {
+        "command": "C:/develop/KaizenLog/KaizenLog-/.venv/Scripts/python.exe -m pytest --basetemp <OS-temp> -q",
+        "passed": 1078,
+        "failed": 0,
+        "exit_code": 0,
+        "duration_seconds": 83.06,
+        "revision": "67c1bd20a6471b4f9beb933658db2b8c378874f5",
+        "executor": "controller independent verification"
+      },
+      "provenance": {
+        "sources": [
+          "controller report: final full pytest 1078 passed in 83.06s",
+          "commit 67c1bd20a6471b4f9beb933658db2b8c378874f5"
+        ],
+        "step": "action-clarity-final-review-full-verification",
+        "timestamp": "2026-08-03T08:50:22+09:00"
+      }
+    },
+    {
+      "id": "E-ACTION-MONITOR-FINAL-NOTE-003",
+      "type": "Evidence",
+      "status": "verified",
+      "claim": "67c1bd2後に実日誌をfresh rendererで再検証したところ、ACTIONS本文は既に完全一致していたため再置換は不要だった。唯一のcheckbox行はKZN-20260801-001:、KZN-20260727-002はcheckboxなしの効果モニタリング、日次目標は未設定である。",
+      "data": {
+        "journal": "C:/develop/obsidian/2026/01 Daily Notes/2026-08-03.md",
+        "full_sha256": "d2a4fe3fd7f7138537d186b996280697f543be22103206c78d6e94aafab54c7c",
+        "marker_external_sha256": "5da2f29758164463ebaff253e99ef63737051aea95d409deb6cd62b0a807570b",
+        "line_endings": "0 CRLF / 216 LF",
+        "renderer_section_exact_match": true,
+        "marker_mutation_required": false,
+        "primary_action_id": "KZN-20260801-001",
+        "monitoring_id": "KZN-20260727-002",
+        "daily_goal_state": "unset"
+      },
+      "provenance": {
+        "sources": [
+          "kaizenlog.config.load_config(C:/develop/KaizenLog/KaizenLog-/kaizenlog.toml)",
+          "kaizenlog.memory.load_entries",
+          "kaizenlog.stats.load_stats",
+          "kaizenlog.memory.render_actions_section",
+          "kaizenlog.vault.extract_section",
+          "SHA-256(raw[:start] + raw[end:])"
+        ],
+        "step": "action-clarity-final-fresh-note-verification",
+        "timestamp": "2026-08-03T08:50:22+09:00"
       }
     }
   ],
@@ -4008,6 +4087,76 @@
         ],
         "step": "action-clarity-phase4-postcommit-full-verification",
         "timestamp": "2026-08-03T08:35:46+09:00"
+      }
+    },
+    {
+      "id": "EDGE-129",
+      "source": "C-ACTION-MONITOR-STATE-EXPLICIT-003",
+      "type": "implements",
+      "target": "D-ACTION-MONITOR-SPLIT-001",
+      "provenance": {
+        "sources": [
+          "C-ACTION-MONITOR-STATE-EXPLICIT-003",
+          "D-ACTION-MONITOR-SPLIT-001"
+        ],
+        "step": "action-clarity-final-review-fix",
+        "timestamp": "2026-08-03T08:50:22+09:00"
+      }
+    },
+    {
+      "id": "EDGE-130",
+      "source": "T-ACTION-MONITOR-FINAL-FULL-003",
+      "type": "supports",
+      "target": "C-ACTION-MONITOR-STATE-EXPLICIT-003",
+      "provenance": {
+        "sources": [
+          "T-ACTION-MONITOR-FINAL-FULL-003",
+          "C-ACTION-MONITOR-STATE-EXPLICIT-003"
+        ],
+        "step": "action-clarity-final-review-full-verification",
+        "timestamp": "2026-08-03T08:50:22+09:00"
+      }
+    },
+    {
+      "id": "EDGE-131",
+      "source": "C-ACTION-MONITOR-STATE-EXPLICIT-003",
+      "type": "evaluated-as",
+      "target": "T-ACTION-MONITOR-FINAL-FULL-003",
+      "provenance": {
+        "sources": [
+          "C-ACTION-MONITOR-STATE-EXPLICIT-003",
+          "T-ACTION-MONITOR-FINAL-FULL-003"
+        ],
+        "step": "action-clarity-final-review-full-verification",
+        "timestamp": "2026-08-03T08:50:22+09:00"
+      }
+    },
+    {
+      "id": "EDGE-132",
+      "source": "E-ACTION-MONITOR-FINAL-NOTE-003",
+      "type": "supports",
+      "target": "G-ACTION-SEPARATION-001",
+      "provenance": {
+        "sources": [
+          "E-ACTION-MONITOR-FINAL-NOTE-003",
+          "G-ACTION-SEPARATION-001"
+        ],
+        "step": "action-clarity-final-fresh-note-verification",
+        "timestamp": "2026-08-03T08:50:22+09:00"
+      }
+    },
+    {
+      "id": "EDGE-133",
+      "source": "E-ACTION-MONITOR-FINAL-NOTE-003",
+      "type": "supports",
+      "target": "C-ACTION-MONITOR-STATE-EXPLICIT-003",
+      "provenance": {
+        "sources": [
+          "E-ACTION-MONITOR-FINAL-NOTE-003",
+          "C-ACTION-MONITOR-STATE-EXPLICIT-003"
+        ],
+        "step": "action-clarity-final-fresh-note-verification",
+        "timestamp": "2026-08-03T08:50:22+09:00"
       }
     }
   ]

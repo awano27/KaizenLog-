@@ -1050,7 +1050,7 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 
 - `C:\develop\obsidian\2026\01 Daily Notes\2026-08-03.md` を、親repoの読み取り専用 `kaizenlog.toml`、既存Memory、statsから `render_actions_section` で純粋に再描画した。最終managed ACTIONSは `KZN-20260801-001` を今日やること1件、`KZN-20260727-002` をcheckboxなしの効果モニタリング、日次目標を未設定として表示し、`extract_section` とrendererの本文一致を確認した。
 - controller承認後の外側baselineは `sha256(raw[:start] + raw[end:]) = 601394f3b98424ba339ca502d497fb2415bbd92f4c62a78e8b6a9443d4efa616`。最終日誌全文SHA-256は `38296d3291b2a9173f37789a46e2a133fe08675ff527cc994ba8f41c2d1e0eca`、改行は `0 CRLF / 210 LF` で、最終marker内置換の前後で外側hashは不変だった。
-- 当初briefの `d0ecbc...` は同じ外側式の監査値と一致せず、旧実日誌は `full=b2e126...` / `external=9153a097...` だった。初回 `apply_patch` が混在EOLを全LFへ正規化して旧raw外側を復元不能にしたため、controllerが現行 `601394f3...` を新baselineとして明示承認した。この失敗と緩和はGraphの `F-ACTION-MONITOR-MARKER-BASELINE-DISCREPANCY-001` にprovenance付きで記録する。
+- 当初briefの `d0ecbc...` は同じ外側式の監査値と一致せず、旧実日誌は `full=b2e126...` / `external=9153a097...` だった。初回 `apply_patch` は混在EOLを全LFへ正規化した。旧値は履歴provenanceとして保持し、controllerが当時の `601394f3...` を新baselineとして明示承認した。この失敗と緩和はGraphの `F-ACTION-MONITOR-MARKER-BASELINE-DISCREPANCY-001` にprovenance付きで記録する。
 - renderer互換修正 `16155295b91c82b97725eb39991a83291560224d` を含む最終revisionでfocused regressionは `101 passed in 2.82s`、full pytestは `1077 passed in 90.23s`。focused対象はRound 50/40/45、display cap、UX13、verdict stage、rehumanizeである。
 - ActivityWatch、screenpipe、LLM、`generate`、`advise`、`morning`、`done`、fetch、push、GitHub ActionsはTask 4で実行しない。repository側はGraph/PLANの証拠だけをcommitし、実Vaultはcommitしない。
 
@@ -1059,3 +1059,10 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 - `f4676d2` のpost-commit検証中、外部自動更新が日誌を `08:30:03 JST` に書き換えた。全文SHA-256は `38296d...` から `03806bb2739ed44274072c1e345f6613057bc18df02ae2d86188b2d3eeeec5ba` へ、marker外SHA-256は `601394...` から `5da2f29758164463ebaff253e99ef63737051aea95d409deb6cd62b0a807570b` へ変化し、legacy ACTIONS layoutへ戻った。controllerはこの最新外側hash（`0 CRLF / 205 LF`）を新baselineとして明示承認した。
 - 最新のMemory/statsと `1615529` rendererからACTIONS本文だけを再描画した。最終全文SHA-256は `d2a4fe3fd7f7138537d186b996280697f543be22103206c78d6e94aafab54c7c`、marker外SHA-256は新baselineの `5da2f297...` と一致、改行は `0 CRLF / 216 LF`。`extract_section` はrenderer出力と一致し、今日やることはcheckbox 1件の `KZN-20260801-001:`、`KZN-20260727-002` はcheckboxなしの効果モニタリングである。
 - 外部変動はGraphの `F-ACTION-MONITOR-EXTERNAL-NOTE-DRIFT-001`、最新実日誌とmarker保護は `E-ACTION-MONITOR-REAL-NOTE-REBASELINE-002` / `E-ACTION-MONITOR-MARKER-PRESERVED-002` にprovenance付きで記録する。`f4676d2` 上のpost-commit full pytestは `1077 passed in 87.25s` だった。
+
+### Task 4 — reviewer fix後の最終証拠（2026-08-03 08:50 JST）
+
+- reviewer fix `67c1bd20a6471b4f9beb933658db2b8c378874f5` は、観測値なしのconfirmed PASSを効果モニタリングから隠さず、`最新: 測定値なし（未判定）` と実行ログ/確定PASSの限界を表示する。status要約も過去PASS件数ではなく、最新の達成・未達・未判定数を表示する。
+- controllerによる独立full pytestは同commitで `1078 passed in 83.06s`、`compileall` と `git diff --check` は成功した。
+- reviewer fix後のfresh renderer検証では、実日誌のmanaged ACTIONSはすでにrenderer出力と完全一致したため再置換しなかった。現在の全文SHA-256は `d2a4fe3fd7f7138537d186b996280697f543be22103206c78d6e94aafab54c7c`、marker外SHA-256は現行baselineの `5da2f29758164463ebaff253e99ef63737051aea95d409deb6cd62b0a807570b`、改行は `0 CRLF / 216 LF`。
+- 現行baselineだけを今後のmarker外保護に用い、過去のSHA値は外部状態遷移のprovenanceとしてGraphへ保持する。最終fix、テスト、日誌検証は `C-ACTION-MONITOR-STATE-EXPLICIT-003`、`T-ACTION-MONITOR-FINAL-FULL-003`、`E-ACTION-MONITOR-FINAL-NOTE-003` に記録する。
