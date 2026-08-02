@@ -126,6 +126,22 @@ def test_confirmed_pass_is_monitoring_not_action_candidate():
     assert checked_monitoring == []
 
 
+def test_today_default_excludes_confirmed_pass_but_all_keeps_it(tmp_path, capsys):
+    cfg = _config_with_entries(tmp_path, [_active_entry(), _achieved_entry()])
+    day = date(2026, 8, 3)
+
+    assert cmd_today(cfg, day, no_sync=True) == 0
+    default_out = capsys.readouterr().out
+    assert "今日の候補 1件" in default_out
+    assert "KZN-20260802-001" in default_out
+    assert "KZN-20260727-002" not in default_out
+    assert "効果モニタリング 1件" in default_out
+
+    assert cmd_today(cfg, day, no_sync=True, show_all=True) == 0
+    all_out = capsys.readouterr().out
+    assert "KZN-20260727-002" in all_out
+
+
 def test_post_verdict_trajectory_keeps_operator_and_latest_state():
     entry = MemoryEntry(
         id="KZN-20260727-002",

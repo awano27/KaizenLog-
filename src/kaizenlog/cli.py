@@ -1981,17 +1981,17 @@ def cmd_today(
                 print(format_today_action_line(e))
         return 0
 
-    # 既定: display_cap + 表示順（📌 主面と揃える。TODAY_CANDIDATE_CAP は上限ガード）
-    from .memory import order_still_open_for_display, resolve_display_cap
+    # 既定: actionable候補だけを表示（📌 主面と同じ分離契約。TODAY_CANDIDATE_CAP は上限ガード）
+    from .memory import resolve_display_cap, split_action_candidates
 
-    ordered = order_still_open_for_display(list(buckets.recent))
+    actionable, monitoring = split_action_candidates(list(buckets.recent), set())
     display_n = min(
         resolve_display_cap(stats),
         TODAY_CANDIDATE_CAP,
-        len(ordered),
+        len(actionable),
     )
-    candidates = ordered[:display_n]
-    rest_recent = max(0, len(buckets.recent) - len(candidates))
+    candidates = actionable[:display_n]
+    rest_recent = max(0, len(actionable) - len(candidates))
     if candidates:
         print(f"今日の候補 {len(candidates)}件")
         for e in candidates:
@@ -2012,6 +2012,8 @@ def cmd_today(
             f" / 31日以上 {len(buckets.older)}件"
         )
         print("全件表示: `kaizenlog today --all`")
+    if monitoring:
+        print(f"効果モニタリング {len(monitoring)}件（今日の候補ではありません）")
     return 0
 
 
