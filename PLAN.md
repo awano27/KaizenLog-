@@ -920,3 +920,70 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 - [x] `settings={"notify": True}` では通知関数が呼ばれる。
 - [x] TOMLの `[guard] notify = false` は通知だけを抑止し、`enabled = true` の検知は維持する。
 - [x] 既存のguardテストおよび設定テストが全PASSする（32 passed）。全体回帰も902 passed、compileall・diff checkも成功。
+
+## 2026-08-02 — 実用化 Graph Engineering（Codex Subscription / Karpathy Loop）
+
+### Goal breakdown
+
+- 現行の合成fixture・rendering関数・プロンプト契約だけを使い、日誌から30秒以内に「ムダ上位・AI作業の質・明日のフォーカス」を読めるか監査する。
+- アドバイスを1〜3件、5〜15分、根拠IDと機械判定可能なPASS/FAILへ強く結び付ける。既存の証拠ゲート、当日計測可能指標、暫定/確定判定、プライバシー、マーカー外・手書き保護は変更しない。
+- `generate → critique → revise` を全体2回以内で回し、Gap・Evidence・DesignDecision・CodeChange・TestResult・Failureを `.kaizenlog/improvement_graph.json` に永続化する。
+- 実ActivityWatch、実Vault、実LLM、通知、スケジューラ、リモート、commit/pushは使用しない。既存サンプルと一時ディレクトリだけで評価する。
+
+### Dependencies and parallelizable work
+
+- **Primary / architecture and integration:** dirty baseline、優先Gap、停止条件、実装境界、最終差分、全検証を所有する。
+- **Journal audit (read-only):** `src/kaizenlog/report.py`、`src/kaizenlog/nippou.py`、`src/kaizenlog/digest.py` と日誌系テストから、30秒導線の現在値と欠落を返す。dirtyな `nippou.py` / `digest.py` は変更しない。
+- **Advice audit (read-only):** `src/kaizenlog/advisor.py`、`src/kaizenlog/advice_format.py`、`src/kaizenlog/memory.py`、日次プロンプトと助言系テストから、根拠・時間・PASS/FAIL・上限の現在値と欠落を返す。dirtyなプロンプトは変更しない。
+- **Regression audit (read-only):** marker、checkbox、最大3件、confirmed-only、privacy、履歴中央値の既存契約と最小検証コマンドを返す。
+- 読み取りトラックだけを並列化する。共有ファイルの実装は直列TDDとし、他作業の差分を上書きしない。
+
+### Strong loop and graph gates
+
+1. ベースラインをコードと合成fixtureで生成し、重要な発見をGap/Evidenceノードとしてグラフへ保存してから設計へ進む。
+2. 上位Gapごとに最大3案を比較し、採用案・却下理由・期待トリプル・リスクをDesignDecision/Failureノードへ保存する。
+3. 観測可能な失敗テストを先に追加してREDを確認し、最小実装でGREENにする。実装前にCodeChangeノード、実行直後にTestResultノードを保存する。
+4. 同じ合成fixtureで再評価する。成功条件を満たさない場合だけ1回reviseし、全体のcritique-revise回数は2回を超えない。
+5. 全テスト、`compileall`、`git diff --check`、dirty baseline比較、独立した最終レビューを通し、評価トリプルを確定する。
+
+### Expected file boundary
+
+- Create: `.kaizenlog/improvement_graph.json`（型、provenance、評価トリプル、ループ回数を持つ永続JSON）。
+- Create or modify after RED only: `tests/test_graph_engineering_journal_advice.py`。
+- Modify only if current Gap is confirmed and the file is clean: `src/kaizenlog/report.py`、`src/kaizenlog/advisor.py`、`src/kaizenlog/advice_format.py`、`src/kaizenlog/memory.py`。
+- Preserve without edits: current dirty files (`src/kaizenlog/nippou.py`、`src/kaizenlog/stats.py`、`src/kaizenlog/prompts/daily_advisor.md` など)、untracked `.grok/`、`scripts/self_improve_graph.py`、Round 49 artifacts。
+
+### Risks and mitigations
+
+- **既存改善との重複:** HEADのRound 48 / ACTION-UX P0/P1と未コミットRound 49を先に監査し、既に満たす要件はEvidenceとして記録するだけで再実装しない。
+- **見栄え改善が意味契約を壊す:** 出力文字列ではなく、選択件数、根拠ID、時間境界、PASS構文、checkbox同期、marker外bytes、confirmed-only消費を挙動テストする。
+- **グラフが会話ログ化する:** 各ノードに安定ID・型・status・claim・provenanceを、各edgeにsource/type/target/provenanceを必須化し、評価は存在するトリプルだけで行う。
+- **dirty tree混入:** 開始時のstatus/numstatをEvidenceへ固定し、今回対象ファイルだけをdiffで確認する。`git add -A`、commit、pushは行わない。
+- **テストが実環境を触る:** `tmp_path` と既存合成fixtureだけを使い、書き込み系CLIを呼ばない。実環境経路は未確認として分離する。
+
+### Acceptance criteria and tests
+
+- `.kaizenlog/improvement_graph.json` が有効JSONで、全node/edgeにprovenanceがあり、dangling edge、重複ID、未知typeがない。
+- 合成された日誌の冒頭だけで「ムダ上位・AI質・明日のフォーカス」が明示され、長いタイムラインや詳細を読まなくても判断できる。
+- 助言は1〜3件で、各件に既存Evidence ID、5〜15分の行動、当日計測可能な単一PASS条件があり、無根拠・時間外・測定不能案は保存境界で拒否されるか候補から除外される。
+- 既存の証拠ゲート、PASS契約、privacy filter、手書き/marker外保護、最大3件、checkbox同期、provisional/confirmed境界の関連テストがPASSする。
+- focused RED→GREEN、全pytest、`python -m compileall -q src`、`git diff --check` がfreshに成功する。fixture検証と未実施の実ActivityWatch/Vault/LLM検証を混同しない。
+
+### 実行時のscope改訂と完了証拠
+
+- 監査中に開始時dirtyだったRound 49が `3c0ef2a` へ確定したため、グラフの `D-DIRTY-INTEGRATION-001` / `D-HEAD-RESYNC-001` に従い、実経路の `digest.py` と同梱prompt 2件を既存hunkを保持した最小差分で変更対象へ加えた。
+- 並行タスクの `e202742` が共有worktreeから `advice_format.py` の `estimated_minutes` 検証・表示を、続く `8f9ff5a` が初期digest洞察差分をcommitして `origin/main` へ反映した。本ワークフロー自身はcommit/pushしておらず、巻き戻しもしていない。
+- [x] critique-revise は上限どおり `2/2`。最終グラフは有効JSON、既知typeのみ、dangling edgeなし。
+- [x] 合成fixtureは日誌4行にムダ上位・AI摩擦代理指標・明日のフォーカスを表示し、助言1件は共有F-ID、目安10分、機械PASSを保持した。
+- [x] 独立reviewのprivacy schema、未来日focus、semantic graph test、負値fail-closedの4 Findingを限定TDDで修正し、再reviewは新規Critical/Importantなし・working-tree `ship`。
+- [x] 安定した `HEAD=8f9ff5a` と今回差分で全pytest `1061 passed in 86.85s`。開始・終了のHEAD/tracked/status/graph hashも一致した。
+- [x] `python -m compileall -q src`、Graph Engineering 21件、worktree全体の `git diff --check` は成功した。
+- [ ] `origin/main=8f9ff5a` は `estimated_minutes` validatorを含む一方、prompt/fixture migrationが未コミットでclean checkoutがRED。再reviewのremote-release verdictは `fix-first`。明示許可のないcommit/pushは実行しない。
+- [ ] 人による30秒読了計測と実ActivityWatch/Vault/LLMは、明示制約どおり未実施。4行fixtureを構造的proxyとして扱う。
+
+### 2026-08-03 release authorization
+
+- ユーザーの「pushしてください」を、上記remote非atomic状態を解消するためのmainへのcommit/push承認として受領した。
+- `git fetch --prune origin` 後、`HEAD` と `origin/main` はともに `8f9ff5a`。今回所有するGraph Engineering差分だけを明示stageする。
+- `.grok/` と `scripts/self_improve_graph.py` は非所有artifactとしてstage・commit対象外のまま保護する。
+- commit後に全pytest、clean revision、remote SHAを確認し、release evidenceを永続グラフへ追記する。

@@ -47,6 +47,7 @@ def _valid_data(**overrides):
                 "fact_ids": ["F3"],
                 "trigger": "始業の直後",
                 "action": "集中枠を予定へ一件入れる",
+                "estimated_minutes": 10,
                 "pass": "focus_blocks >= 2",
                 "fail": "1回以下",
                 "mechanism": "枠を先に置くと開始が遅れにくいと考える",
@@ -56,6 +57,7 @@ def _valid_data(**overrides):
                 "fact_ids": ["F9"],
                 "trigger": "調査を始める前",
                 "action": "リンクを三件まとめる",
+                "estimated_minutes": 10,
                 "pass": "context_switches <= 40",
                 "fail": "41回以上",
                 "mechanism": "まとめ開きで切替が減ると考える",
@@ -282,6 +284,7 @@ def test_render_golden():
                 "fact_ids": ["F3"],
                 "trigger": "朝いちばんに",
                 "action": "行動する",
+                "estimated_minutes": 10,
                 "pass": "focus_blocks >= 1",
                 "fail": "0回",
                 "mechanism": "朝の着手を早くすると枠が取れると考える",
@@ -298,7 +301,7 @@ def test_render_golden():
         "1. 解釈文。提案文。翌日見る指標: 指標名\n"
         "\n"
         "### 明日の最小アクション\n"
-        "- [ ] 朝いちばんに→行動する｜PASS: focus_blocks >= 1（集中ブロック数）｜FAIL: 0回\n"
+        "- [ ] 朝いちばんに→行動する（目安10分）｜PASS: focus_blocks >= 1（集中ブロック数）｜FAIL: 0回\n"
         "    - なぜ効くと考えるか: 朝の着手を早くすると枠が取れると考える\n"
         "    - 効かなかったと分かる条件: focus_blocks がゼロの日が続いた場合\n"
         "\n"

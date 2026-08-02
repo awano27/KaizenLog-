@@ -1173,6 +1173,7 @@ def _single_tool_error_action(pass_value: str) -> dict:
     data["proposals"] = data["proposals"][:1]
     data["actions"] = [{
         "fact_ids": ["F3"], "trigger": "始業の直後", "action": "試す",
+        "estimated_minutes": 10,
         "pass": pass_value, "fail": "201",
         "mechanism": "小さな一歩が継続を助けると考える",
         "falsifier": "指標が目標を外れた場合",

@@ -1,0 +1,2383 @@
+{
+  "schema_version": "1.0.0",
+  "graph_id": "kaizenlog-practical-journal-advice-2026-08-02",
+  "goal": "日誌を30秒で判断でき、アドバイスを1〜3件の証拠に紐づく5〜15分のPASS/FAILマイクロアクションにする",
+  "created_at": "2026-08-02T23:01:07+09:00",
+  "updated_at": "2026-08-03T00:08:50+09:00",
+  "loop": {
+    "pattern": "generate-critique-revise",
+    "critique_revise_limit": 2,
+    "critique_revise_used": 2,
+    "stop_conditions": [
+      "journal_fixture_exposes_waste_ai_quality_tomorrow_focus",
+      "advice_fixture_contains_1_to_3_evidence_linked_actions",
+      "every_action_is_5_to_15_minutes_with_measurable_pass_fail",
+      "focused_and_full_regressions_pass"
+    ]
+  },
+  "allowed_node_types": [
+    "Gap",
+    "Insight",
+    "DesignDecision",
+    "CodeChange",
+    "TestResult",
+    "Evidence",
+    "Failure"
+  ],
+  "allowed_edge_types": [
+    "causes",
+    "improves",
+    "supports",
+    "contradicts",
+    "implements",
+    "evaluated-as",
+    "derived-from"
+  ],
+  "nodes": [
+    {
+      "id": "E-BASELINE-001",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "対象は C:/develop/KaizenLog/KaizenLog- の main で、開始時HEADは82025d4239a217a393e78f5f0029f8b71105df95、origin/mainと一致する一方、16個のtracked fileと複数のuntracked artifactを含むdirty treeである。",
+      "data": {
+        "branch": "main",
+        "head": "82025d4239a217a393e78f5f0029f8b71105df95",
+        "upstream": "origin/main",
+        "tracked_dirty_count": 16,
+        "protected_untracked": [
+          ".grok/",
+          "scripts/self_improve_graph.py",
+          "tests/test_round49_goal_achievement_ai_io.py"
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "git status --short --branch",
+          "git rev-parse HEAD",
+          "git diff --numstat"
+        ],
+        "step": "phase1-baseline",
+        "timestamp": "2026-08-02T23:01:07+09:00"
+      }
+    },
+    {
+      "id": "E-GRAPH-ABSENT-001",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "開始時点では .kaizenlog/improvement_graph.json も docs/improvement_graph.md も存在せず、改善判断を次セッションへ渡す指定形式の永続グラフがなかった。",
+      "data": {
+        "observed_paths": [
+          ".kaizenlog/improvement_graph.json",
+          "docs/improvement_graph.md"
+        ],
+        "exists_before_loop": false
+      },
+      "provenance": {
+        "sources": [
+          "Test-Path .kaizenlog/improvement_graph.json",
+          "Test-Path docs/improvement_graph.md",
+          "rg --files .kaizenlog docs"
+        ],
+        "step": "phase1-baseline",
+        "timestamp": "2026-08-02T23:01:07+09:00"
+      }
+    },
+    {
+      "id": "G-PERSISTENCE-001",
+      "type": "Gap",
+      "status": "selected",
+      "claim": "重要な発見・設計判断・評価結果をtyped nodes and edgesとして再利用する永続層が欠けている。",
+      "priority": 1,
+      "acceptance": "有効JSON、全要素のprovenance、既知typeだけ、dangling edgeなし、critique-revise使用数を永続化する。",
+      "provenance": {
+        "sources": [
+          "E-GRAPH-ABSENT-001"
+        ],
+        "step": "phase1-gap-registration",
+        "timestamp": "2026-08-02T23:01:07+09:00"
+      }
+    },
+    {
+      "id": "D-SCOPE-001",
+      "type": "DesignDecision",
+      "status": "revised",
+      "claim": "未コミットRound 49と未追跡self-improvement実験を保護し、監査は全現行コードを読むが、実装候補はcleanな表示・助言境界と新規回帰テストに限定する。",
+      "alternatives": [
+        {
+          "option": "dirtyな日誌生成・stats・promptを直接変更する",
+          "decision": "rejected",
+          "reason": "ユーザー所有差分との混在とRound 49契約破壊の危険が高い"
+        },
+        {
+          "option": "別worktreeでHEADだけを改善する",
+          "decision": "rejected",
+          "reason": "未コミットRound 49を含む現在の実用状態を評価できず、統合差分も複雑になる"
+        },
+        {
+          "option": "cleanな境界へ最小TDD差分を入れる",
+          "decision": "accepted",
+          "reason": "現在値を保ったままatomicに検証できる"
+        }
+      ],
+      "provenance": {
+        "sources": [
+          "E-BASELINE-001",
+          "PLAN.md#2026-08-02---実用化-Graph-Engineering"
+        ],
+        "step": "phase1-scope-decision",
+        "timestamp": "2026-08-02T23:01:07+09:00"
+      }
+    },
+    {
+      "id": "C-GRAPH-001",
+      "type": "CodeChange",
+      "status": "implemented",
+      "claim": "永続共有グラフの初期JSONを作成し、loop budget、type vocabulary、baseline evidence、scope decisionを保存した。",
+      "files": [
+        ".kaizenlog/improvement_graph.json"
+      ],
+      "provenance": {
+        "sources": [
+          "G-PERSISTENCE-001",
+          "D-SCOPE-001"
+        ],
+        "step": "phase1-persist-first",
+        "timestamp": "2026-08-02T23:01:07+09:00"
+      }
+    },
+    {
+      "id": "E-JOURNAL-BASELINE-001",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "verified合成statsにAI作業60分、エンタメ35分、同日KZNアクションを与えた現行30秒サマリは稼働と『今日の1手』だけを出し、ムダ、AI作業の質、明日のフォーカスの明示ラベルを出さなかった。",
+      "data": {
+        "fixture": {
+          "total_minutes": 180.0,
+          "ai_minutes": 60.0,
+          "entertainment_minutes": 35.0,
+          "action_date_equals_journal_date": true
+        },
+        "observed": {
+          "has_waste_label": false,
+          "has_ai_quality_label": false,
+          "has_tomorrow_focus": false
+        }
+      },
+      "provenance": {
+        "sources": [
+          "src/kaizenlog/digest.py:100",
+          "src/kaizenlog/digest.py:131",
+          "src/kaizenlog/digest.py:233",
+          "src/kaizenlog/digest.py:253",
+          "inline pure-function fixture using build_digest"
+        ],
+        "step": "phase1-generate-baseline",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "G-JOURNAL-30SEC-001",
+      "type": "Gap",
+      "status": "addressed-fixture",
+      "priority": 1,
+      "claim": "冒頭30秒領域が、直接計測できたムダ候補、AI品質の測定状態、助言後の明日のフォーカスを一目で区別できない。",
+      "acceptance": "同じ合成fixtureの冒頭に3ラベルが現れ、ブラウジングを娯楽と誤認せず、same-day actionだけを明日のフォーカスとする。",
+      "provenance": {
+        "sources": [
+          "E-JOURNAL-BASELINE-001"
+        ],
+        "step": "phase1-gap-registration",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "E-ADVICE-BASELINE-001",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "現行validatorは件数、F-ID対応、機械PASSと計測可否を強制するが、所要時間フィールドが無いactionをエラー無しで受理した。daily promptの15分以内は保存ゲートではない。",
+      "data": {
+        "validated_without_duration": true,
+        "validation_errors": [],
+        "already_enforced": [
+          "proposals/actions 1-3",
+          "action/proposal fact-id overlap",
+          "measurable machine PASS"
+        ],
+        "missing": "typed 5-15 minute duration"
+      },
+      "provenance": {
+        "sources": [
+          "src/kaizenlog/advice_format.py:324",
+          "src/kaizenlog/advice_format.py:336",
+          "src/kaizenlog/advice_format.py:369",
+          "src/kaizenlog/advice_format.py:400",
+          "src/kaizenlog/prompts/daily_advisor.md:71",
+          "inline pure-function fixture using validate_advice"
+        ],
+        "step": "phase1-generate-baseline",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "G-ADVICE-DURATION-001",
+      "type": "Gap",
+      "status": "addressed-fixture",
+      "priority": 1,
+      "claim": "1〜3件、Evidence ID、機械PASSを満たしていても、5分未満・15分超・所要不明のアクションを保存できる。",
+      "acceptance": "各actionのestimated_minutesを整数5〜15として必須検証し、MarkdownとMemory actionへ所要を明示する。",
+      "provenance": {
+        "sources": [
+          "E-ADVICE-BASELINE-001"
+        ],
+        "step": "phase1-gap-registration",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "I-LOOP-HYPOTHESIS-001",
+      "type": "Insight",
+      "status": "critiqued",
+      "claim": "digestへ3つの固定ラベルを足し、action自由文から分数を正規表現で抽出して5〜15分を検査すれば最小差分で両Gapを閉じられる。",
+      "provenance": {
+        "sources": [
+          "G-JOURNAL-30SEC-001",
+          "G-ADVICE-DURATION-001"
+        ],
+        "step": "phase1-hypothesis-generate",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "F-LOOP-CRITIQUE-001",
+      "type": "Failure",
+      "status": "mitigated",
+      "claim": "初期仮説は、action自由文の表記ゆれで時間抽出を誤り、朝の既存アクションまで『明日のフォーカス』と誤表示し、ブラウジングをムダ扱いする危険がある。またdigestとpromptには保護対象のRound49差分がある。",
+      "mitigation": "typed estimated_minutesを追加し、todayとentry.dateで今日/明日を切替え、ムダ候補は直接計測のエンタメカテゴリだけに限定し、dirtyファイルは既存hunk外へ小さく追記する。",
+      "provenance": {
+        "sources": [
+          "I-LOOP-HYPOTHESIS-001",
+          "git diff -- src/kaizenlog/digest.py",
+          "git diff -- src/kaizenlog/prompts/daily_advisor.md",
+          "src/kaizenlog/advice_evidence.py:956"
+        ],
+        "step": "phase1-critique",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "D-PRACTICAL-LOOP-001",
+      "type": "DesignDecision",
+      "status": "accepted",
+      "claim": "30秒サマリは直接計測のムダ候補、AI品質の測定状態、日付依存の今日/明日フォーカスを決定論で表示する。助言JSONはestimated_minutes整数5〜15を必須化し、レンダラが行動本文へ所要を付ける。",
+      "alternatives": [
+        {
+          "option": "プロンプトだけで5〜15分を指示する",
+          "decision": "rejected",
+          "reason": "現行baselineのとおり保存ゲートを通過できる"
+        },
+        {
+          "option": "action自由文から分数を推定する",
+          "decision": "rejected",
+          "reason": "表記ゆれと行動内の別の数値を区別できない"
+        },
+        {
+          "option": "estimated_minutesをtyped fieldとして検証・表示する",
+          "decision": "accepted",
+          "reason": "境界値をTDDで固定でき、Memory既存形式にも所要表示を自然に残せる"
+        }
+      ],
+      "provenance": {
+        "sources": [
+          "F-LOOP-CRITIQUE-001",
+          "G-JOURNAL-30SEC-001",
+          "G-ADVICE-DURATION-001"
+        ],
+        "step": "phase1-revise-1",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "C-PRACTICAL-LOOP-001",
+      "type": "CodeChange",
+      "status": "working-tree-ship-remote-incomplete",
+      "claim": "合成fixtureのREDを先に固定し、digestの3洞察ラベル、有限値のfail-closed処理、advice estimated_minutes保存ゲートと表示を最小差分で実装した。",
+      "files": [
+        "tests/test_graph_engineering_journal_advice.py",
+        "tests/test_advice_format.py",
+        "src/kaizenlog/digest.py",
+        "src/kaizenlog/advice_format.py",
+        "src/kaizenlog/prompts/daily_advisor.md",
+        "src/kaizenlog/prompts/privacy_safe.md"
+      ],
+      "interfaces": {
+        "advice_input": "actions[i].estimated_minutes: int",
+        "accepted_range": "5 <= estimated_minutes <= 15",
+        "journal_output": [
+          "ムダ上位",
+          "AI作業の質",
+          "今日の1手 or 明日のフォーカス"
+        ]
+      },
+      "integration_state": {
+        "committed_by_concurrent_task": [
+          "src/kaizenlog/advice_format.py in e202742",
+          "initial src/kaizenlog/digest.py insight changes in 8f9ff5a"
+        ],
+        "commits": [
+          "e202742b08591fdef8d905ce6c180573b623b087",
+          "8f9ff5a03fa6fccc3428863bec10c6c8d4e6eefd"
+        ],
+        "remaining_uncommitted_scope": [
+          "src/kaizenlog/digest.py negative-value and future-date review fixes",
+          "src/kaizenlog/prompts/daily_advisor.md",
+          "src/kaizenlog/prompts/privacy_safe.md",
+          "tests/test_graph_engineering_journal_advice.py",
+          ".kaizenlog/improvement_graph.json"
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "D-PRACTICAL-LOOP-001",
+          "PLAN.md#2026-08-02---実用化-Graph-Engineering"
+        ],
+        "step": "phase2-pre-implementation-record",
+        "timestamp": "2026-08-02T23:08:26+09:00"
+      }
+    },
+    {
+      "id": "E-ADVICE-REMAINDER-001",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "F-IDは生成時に実在性とproposal/action共有が検証されるが、Markdownからassign_action_idsで作るMemoryEntryはaction本文だけを保持する。また人が当日確認する具体手段はprompt-onlyである。",
+      "data": {
+        "generation_evidence_link": "enforced",
+        "memory_evidence_fact_ids": "not_stored_as_typed_field",
+        "human_verification_method": "prompt-only"
+      },
+      "provenance": {
+        "sources": [
+          "src/kaizenlog/advice_format.py:369",
+          "src/kaizenlog/advice_format.py:400",
+          "src/kaizenlog/memory.py:154",
+          "src/kaizenlog/memory.py:227",
+          "src/kaizenlog/prompts/daily_advisor.md:102"
+        ],
+        "step": "phase1-secondary-gap-audit",
+        "timestamp": "2026-08-02T23:10:28+09:00"
+      }
+    },
+    {
+      "id": "G-ADVICE-TRACE-001",
+      "type": "Gap",
+      "status": "deferred",
+      "priority": 2,
+      "claim": "保存後のKZNから元のF-IDをtypedに逆引きできず、長期監査では生成時の強い根拠リンクを直接再検証できない。",
+      "acceptance": "後方互換なMemory schemaとID付与経路でevidence_fact_idsを保持し、読者ノートには内部IDを露出しない。",
+      "deferred_reason": "Markdown→Memory境界とdirty CLIを跨ぐため、今回の5〜15分・30秒サマリのatomic差分から分離する。",
+      "provenance": {
+        "sources": [
+          "E-ADVICE-REMAINDER-001"
+        ],
+        "step": "phase1-secondary-gap-registration",
+        "timestamp": "2026-08-02T23:10:28+09:00"
+      }
+    },
+    {
+      "id": "G-ADVICE-VERIFY-METHOD-001",
+      "type": "Gap",
+      "status": "deferred",
+      "priority": 2,
+      "claim": "翌日自動PASSは強制されるが、action本文に人が当日確認する具体手段があることは保存ゲートで構造検証されない。",
+      "acceptance": "verificationフィールドまたは同等のtyped contractを追加し、空・抽象的な確認方法を拒否する。",
+      "deferred_reason": "duration fieldと同時に複数schema軸を変えると修復失敗原因が増えるため、1 strong loopの範囲外とする。",
+      "provenance": {
+        "sources": [
+          "E-ADVICE-REMAINDER-001"
+        ],
+        "step": "phase1-secondary-gap-registration",
+        "timestamp": "2026-08-02T23:10:28+09:00"
+      }
+    },
+    {
+      "id": "D-DIRTY-INTEGRATION-001",
+      "type": "DesignDecision",
+      "status": "accepted",
+      "claim": "機能を実経路へ接続するため、dirtyなdigestとbundled promptsは開始diffを証拠化したうえで既存hunk外だけを編集し、最終diffでRound49変更の残存を再確認する。",
+      "alternatives": [
+        {
+          "option": "cleanな新規helperだけ作り実経路へ接続しない",
+          "decision": "rejected",
+          "reason": "ユーザーが要求する実装差分にならない"
+        },
+        {
+          "option": "dirtyファイルを丸ごと置換する",
+          "decision": "rejected",
+          "reason": "Round49のユーザー所有差分を失う"
+        },
+        {
+          "option": "既存diffを保持して非重複hunkを小さく追加する",
+          "decision": "accepted",
+          "reason": "現在の統合状態を保ったまま実経路をTDDできる"
+        }
+      ],
+      "provenance": {
+        "sources": [
+          "E-BASELINE-001",
+          "F-LOOP-CRITIQUE-001",
+          "git diff -- src/kaizenlog/digest.py",
+          "git diff -- src/kaizenlog/prompts/daily_advisor.md",
+          "git diff -- src/kaizenlog/prompts/privacy_safe.md"
+        ],
+        "step": "phase2-dirty-integration-decision",
+        "timestamp": "2026-08-02T23:10:28+09:00"
+      }
+    },
+    {
+      "id": "E-CONCURRENT-HEAD-001",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "実装中の23:06:51 JSTに、開始時のdirtyなRound 49差分がcommit 3c0ef2afd57b30605148873d7ed0fe72d9b89cbbとしてHEADへ取り込まれ、開始HEAD 82025d4239a217a393e78f5f0029f8b71105df95の直接子になった。現在の未コミット差分はこの新HEAD上にある。",
+      "data": {
+        "before_head": "82025d4239a217a393e78f5f0029f8b71105df95",
+        "current_head": "3c0ef2afd57b30605148873d7ed0fe72d9b89cbb",
+        "commit_subject": "feat: fix stats fingerprint drift and add goal achievement + AI I/O (round 49)",
+        "observed_commit_time": "2026-08-02T23:06:51+09:00"
+      },
+      "provenance": {
+        "sources": [
+          "git reflog -3 --date=iso",
+          "git show -1 --no-patch",
+          "git status --short"
+        ],
+        "step": "phase2-concurrent-head-audit",
+        "timestamp": "2026-08-02T23:17:20+09:00"
+      }
+    },
+    {
+      "id": "D-HEAD-RESYNC-001",
+      "type": "DesignDecision",
+      "status": "accepted",
+      "claim": "Round 49 commitを巻き戻さず現在HEADを統合基準とし、Graph Engineering差分と全テストを3c0ef2上で再評価する。",
+      "alternatives": [
+        {
+          "option": "開始HEADへ戻す",
+          "decision": "rejected",
+          "reason": "並行して確定したRound 49成果を破壊する"
+        },
+        {
+          "option": "現在HEAD上で差分と回帰を再検証する",
+          "decision": "accepted",
+          "reason": "既存成果を保持し、実際の統合状態を評価できる"
+        }
+      ],
+      "provenance": {
+        "sources": [
+          "E-CONCURRENT-HEAD-001"
+        ],
+        "step": "phase2-concurrent-head-decision",
+        "timestamp": "2026-08-02T23:17:20+09:00"
+      }
+    },
+    {
+      "id": "F-LOOP-CRITIQUE-002",
+      "type": "Failure",
+      "status": "mitigated",
+      "claim": "初回実装案ではsession_digestsが非空でも全friction_scoreが0ならAI作業の質行が消える。またエンタメ値のboolまたは非有限数を直接計測値として誤表示し得る。30秒領域は測定状態を必ず示し、無効値はfail-closedにすべきである。",
+      "mitigation": "AIセッション非空時は大きな摩擦なしという限定的な代理指標を必ず表示し、エンタメ値はboolを除く有限実数だけを採用する。境界fixtureをREDから追加する。",
+      "provenance": {
+        "sources": [
+          "src/kaizenlog/digest.py working-tree diff",
+          "src/kaizenlog/insights.py top_friction_sessions",
+          "tests/test_graph_engineering_journal_advice.py"
+        ],
+        "step": "phase3-critique-2",
+        "timestamp": "2026-08-02T23:17:20+09:00"
+      }
+    },
+    {
+      "id": "D-PRACTICAL-LOOP-002",
+      "type": "DesignDecision",
+      "status": "accepted",
+      "claim": "第2回・最終reviseでは、AI作業の質を『摩擦の代理指標』として全分岐で明示し、直接計測のムダ値は有限・非boolのみ許可する。以後は新たな設計反復を行わず、契約実装と検証に限定する。",
+      "provenance": {
+        "sources": [
+          "F-LOOP-CRITIQUE-002",
+          "D-PRACTICAL-LOOP-001"
+        ],
+        "step": "phase3-revise-2",
+        "timestamp": "2026-08-02T23:17:20+09:00"
+      }
+    },
+    {
+      "id": "T-TDD-RED-001",
+      "type": "TestResult",
+      "status": "expected-failure",
+      "claim": "最終reviseの境界fixtureは実装前に5 failed, 13 passedとなり、ゼロ摩擦時のAI行欠落、bool/NaN/Infの誤分類または例外を再現した。",
+      "data": {
+        "command": ".venv/Scripts/python.exe -m pytest -q -p no:cacheprovider tests/test_graph_engineering_journal_advice.py",
+        "failed": 5,
+        "passed": 13,
+        "expected_red": true
+      },
+      "provenance": {
+        "sources": [
+          "pytest RED output from tdd_practical_loop",
+          "tests/test_graph_engineering_journal_advice.py"
+        ],
+        "step": "phase3-tdd-red",
+        "timestamp": "2026-08-02T23:20:07+09:00"
+      }
+    },
+    {
+      "id": "T-TDD-GREEN-001",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "最終revise後はGraph Engineering契約18件と関連digest回帰127件がすべてPASSした。",
+      "data": {
+        "graph_contract_tests": "18 passed in 0.53s",
+        "related_digest_tests": "127 passed in 2.07s",
+        "diff_check_exit": 0
+      },
+      "provenance": {
+        "sources": [
+          "pytest GREEN output from tdd_practical_loop",
+          "git diff --check"
+        ],
+        "step": "phase3-tdd-green",
+        "timestamp": "2026-08-02T23:20:07+09:00"
+      }
+    },
+    {
+      "id": "T-LEGACY-ADVICE-001",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "旧advice validator・calibration・verdict・UXの独立回帰103件が現HEADと実装差分上でPASSした。",
+      "data": {
+        "passed": 103,
+        "duration_seconds": 56.33,
+        "scope": [
+          "test_round9",
+          "test_round10",
+          "test_round13_calibration",
+          "test_round13_w1_w2",
+          "test_round17_pass_machine",
+          "test_round38_lifecycle_digest_outcome",
+          "test_verdict",
+          "test_ux_round8"
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "root pytest output: 103 passed in 56.33s"
+        ],
+        "step": "phase3-independent-focused-regression",
+        "timestamp": "2026-08-02T23:20:07+09:00"
+      }
+    },
+    {
+      "id": "E-FIXTURE-OUTPUT-001",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "verified合成fixtureから、稼働、直接計測のムダ上位、AI摩擦代理指標、同日action由来の明日のフォーカスが4行で生成され、助言は共有F3、目安10分、機械PASSを同時に保持した。",
+      "data": {
+        "digest_build_ms": 0.281,
+        "journal_lines": [
+          "稼働 3h00m（AI作業 1h00m・33%）",
+          "ムダ上位: エンタメ 35m（直接計測）",
+          "AI作業の質: 大きな摩擦なし（摩擦の代理指標）",
+          "明日のフォーカス: KZN-20260802-001 始業の直後 → 集中枠を予定へ一件入れる（目安10分）"
+        ],
+        "advice_action": "始業の直後→集中枠を予定へ一件入れる（目安10分）｜PASS: focus_blocks >= 2｜FAIL: 1回以下",
+        "proposal_fact_ids": [
+          "F3"
+        ],
+        "action_fact_ids": [
+          "F3"
+        ],
+        "human_30_second_reading_test": "not-run; four-line structural proxy only"
+      },
+      "provenance": {
+        "sources": [
+          "inline pure-function fixture using build_digest",
+          "inline pure-function fixture using validate_advice and render_advice_markdown"
+        ],
+        "step": "phase3-grounded-fixture-evaluation",
+        "timestamp": "2026-08-02T23:21:52+09:00"
+      }
+    },
+    {
+      "id": "T-OBJECTIVE-FIXTURE-001",
+      "type": "TestResult",
+      "status": "passed-with-limitation",
+      "claim": "合成fixtureは3つの日誌洞察ラベル、1件の根拠共有action、5〜15分内の10分、機械PASSを満たした。30秒は4行構造で評価し、人による時間計測は外部実行制約により未実施である。",
+      "data": {
+        "journal_required_labels": 3,
+        "journal_required_labels_found": 3,
+        "summary_bullet_lines": 4,
+        "actions": 1,
+        "estimated_minutes": 10,
+        "fact_id_overlap": true,
+        "machine_pass": "focus_blocks >= 2",
+        "external_services_started": false
+      },
+      "provenance": {
+        "sources": [
+          "E-FIXTURE-OUTPUT-001",
+          "tests/test_graph_engineering_journal_advice.py:73"
+        ],
+        "step": "phase3-grounded-fixture-evaluation",
+        "timestamp": "2026-08-02T23:21:52+09:00"
+      }
+    },
+    {
+      "id": "T-FULL-REGRESSION-001",
+      "type": "TestResult",
+      "status": "passed-before-concurrent-mutation",
+      "claim": "Round 49を含むHEAD 3c0ef2と23:24時点のGraph Engineering差分の全pytestスイート1045件がPASSしたが、その直後に同一worktreeの別差分が更新されたため、現在状態の最終証拠としては再検証が必要である。",
+      "data": {
+        "command": ".venv/Scripts/python.exe -m pytest -q -p no:cacheprovider --basetemp <OS_TEMP>",
+        "passed": 1045,
+        "failed": 0,
+        "duration_seconds": 92.2,
+        "base_head": "3c0ef2afd57b30605148873d7ed0fe72d9b89cbb",
+        "external_services_started": false
+      },
+      "provenance": {
+        "sources": [
+          "root pytest output: 1045 passed in 92.20s",
+          "E-CONCURRENT-HEAD-001"
+        ],
+        "step": "phase4-full-regression",
+        "timestamp": "2026-08-02T23:24:36+09:00"
+      }
+    },
+    {
+      "id": "E-CONCURRENT-MUTATION-002",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "全回帰完了後、advice_evidence.py、aiwork.py、cli.py、memory.py、vault.py等の今回非所有ファイルと新規Round 50文書がdirtyへ加わり、advice_format.pyの最終更新時刻が23:25:10へ進んだ。HEAD自体は3c0ef2のままである。",
+      "data": {
+        "head_unchanged": true,
+        "advice_format_last_write": "2026-08-02T23:25:10+09:00",
+        "newly_observed_dirty_files": [
+          "src/kaizenlog/advice_evidence.py",
+          "src/kaizenlog/aiwork.py",
+          "src/kaizenlog/aiwork_codex.py",
+          "src/kaizenlog/cli.py",
+          "src/kaizenlog/memory.py",
+          "src/kaizenlog/vault.py",
+          "docs/codex-prompts/0802_Codex_第49弾レビュー残件修正指示プロンプト_第50弾.md"
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "git status --short --branch at 2026-08-02T23:25:13+09:00",
+          "Get-Item src/kaizenlog/advice_format.py",
+          "git reflog -3"
+        ],
+        "step": "phase4-concurrent-mutation-audit",
+        "timestamp": "2026-08-02T23:25:13+09:00"
+      }
+    },
+    {
+      "id": "F-TRANSIENT-IMPORT-001",
+      "type": "Failure",
+      "status": "mitigated",
+      "claim": "全回帰直後のfocused再検証で3件が name '_pass_range_error' is not defined により失敗した一方、読み直した現行advice_format.pyには同関数定義が存在した。テスト中に非atomicな並行書込みを読んだ可能性が高いが、これは時刻・差分からの推論である。",
+      "data": {
+        "failed": 3,
+        "passed": 15,
+        "error": "name '_pass_range_error' is not defined",
+        "function_present_after_failure": true,
+        "inference": "concurrent partial-file observation"
+      },
+      "provenance": {
+        "sources": [
+          "focused pytest output: 3 failed, 15 passed",
+          "rg -n _pass_range_error src/kaizenlog/advice_format.py",
+          "E-CONCURRENT-MUTATION-002"
+        ],
+        "step": "phase4-transient-failure-diagnosis",
+        "timestamp": "2026-08-02T23:25:13+09:00"
+      }
+    },
+    {
+      "id": "D-STABILITY-GATE-001",
+      "type": "DesignDecision",
+      "status": "insufficient-window",
+      "claim": "他者差分を巻き戻さず、対象ファイル群のhashとstatusが短い観測窓で安定したことを確認してからfocused/full回帰を再実行する。",
+      "alternatives": [
+        {
+          "option": "他者差分をresetする",
+          "decision": "rejected",
+          "reason": "ユーザー所有・並行作業を破壊する"
+        },
+        {
+          "option": "失敗を無視して23:24の結果を最終証拠にする",
+          "decision": "rejected",
+          "reason": "現在treeと一致しない"
+        },
+        {
+          "option": "安定観測後に現在treeを再検証する",
+          "decision": "accepted",
+          "reason": "変更を保護しつつ最新統合状態を確認できる"
+        }
+      ],
+      "provenance": {
+        "sources": [
+          "F-TRANSIENT-IMPORT-001",
+          "E-CONCURRENT-MUTATION-002"
+        ],
+        "step": "phase4-stability-decision",
+        "timestamp": "2026-08-02T23:25:13+09:00"
+      }
+    },
+    {
+      "id": "T-STABILITY-RECOVERY-001",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "3秒観測窓でtracked diff、status、graph、Graph Engineering testの各hashが一致し、その直後のfocused契約18件がPASSして一過性NameErrorは再現しなかった。",
+      "data": {
+        "observation_seconds": 3,
+        "tracked_diff_stable": true,
+        "status_stable": true,
+        "graph_stable": true,
+        "test_file_stable": true,
+        "focused_tests": "18 passed in 0.38s",
+        "tracked_diff_hash": "3ea836c6cb0ad35efa10efaf498dd1facc136fc6",
+        "status_hash": "7e6c40c0dd679c401d20b4c833f5fb55a2c62899"
+      },
+      "provenance": {
+        "sources": [
+          "git diff --binary | git hash-object --stdin twice",
+          "git status --porcelain=v1 -uall | git hash-object --stdin twice",
+          "Get-FileHash twice",
+          "focused pytest output: 18 passed in 0.38s"
+        ],
+        "step": "phase4-stability-gate-evaluation",
+        "timestamp": "2026-08-02T23:26:06+09:00"
+      }
+    },
+    {
+      "id": "E-MUTATION-DURING-FULL-001",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "2回目の全回帰中にtracked diff hashが3ea836c6から7500332fへ、status hashがfc99710fから5b8ae92aへ変化し、HANDOFF、stats、weekly_context、Round 50 testsなど今回非所有の差分が追加された。",
+      "data": {
+        "tracked_hash_before": "3ea836c6cb0ad35efa10efaf498dd1facc136fc6",
+        "tracked_hash_after": "7500332f9c748318ac211f32c8115ac405955e8d",
+        "status_hash_before": "fc99710fd089db4c8310cec946120c5c22d5a90a",
+        "status_hash_after": "5b8ae92a2d5e59b735fc30f3f039153ff36fa094",
+        "graph_hash_unchanged": true,
+        "newly_observed_scope": [
+          "docs/HANDOFF.md",
+          "src/kaizenlog/stats.py",
+          "src/kaizenlog/weekly_context.py",
+          "tests/test_action_ux_remaining.py",
+          "tests/test_round38_lifecycle_digest_outcome.py",
+          "tests/test_round40_round38_residuals.py"
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "pre/post git diff --binary hashes",
+          "pre/post git status hashes",
+          "git status --short at 2026-08-02T23:28:51+09:00"
+        ],
+        "step": "phase4-full-regression-race-audit",
+        "timestamp": "2026-08-02T23:28:51+09:00"
+      }
+    },
+    {
+      "id": "T-FULL-REGRESSION-002",
+      "type": "TestResult",
+      "status": "invalidated-by-concurrent-write",
+      "claim": "2回目の全pytestは22 failed, 1028 passedだったが、実行中にtree hashが変わり、traceback source表示も異なる中間版を混在させたため、単一revisionの品質判定として無効である。",
+      "data": {
+        "failed": 22,
+        "passed": 1028,
+        "duration_seconds": 87.63,
+        "dominant_failure": "weekly_context.load_entries UnboundLocalError",
+        "other_failures": [
+          "suppressed metric error ordering",
+          "retired age boundary"
+        ],
+        "single_revision_evidence": false
+      },
+      "provenance": {
+        "sources": [
+          "root pytest output: 22 failed, 1028 passed in 87.63s",
+          "E-MUTATION-DURING-FULL-001"
+        ],
+        "step": "phase4-full-regression-race-audit",
+        "timestamp": "2026-08-02T23:28:51+09:00"
+      }
+    },
+    {
+      "id": "F-CONCURRENT-VERIFICATION-002",
+      "type": "Failure",
+      "status": "mitigated",
+      "claim": "短い安定観測窓の後に別タスクが再開し、pytestが複数の中間版をimportした。Graph Engineering focused 18件は安定時にPASSし、今回の22件はweekly/lifecycle/新規Round 50契約へ集中している。",
+      "root_cause_options": [
+        {
+          "option": "Graph Engineering差分の直接回帰",
+          "assessment": "unlikely",
+          "evidence": "owned focused 18件PASS、失敗は非所有weekly/lifecycle中心"
+        },
+        {
+          "option": "pytest一時ディレクトリ衝突",
+          "assessment": "rejected",
+          "evidence": "一意のOS basetempを使用"
+        },
+        {
+          "option": "stale pycache",
+          "assessment": "unlikely",
+          "evidence": "新規pytest processと直前focused PASS"
+        },
+        {
+          "option": "完成済みRound 50の独立バグ",
+          "assessment": "possible-after-settle",
+          "evidence": "suppression順序とretire境界は現在diff自体にも要確認点がある"
+        },
+        {
+          "option": "非atomicな並行書込み",
+          "assessment": "confirmed-immediate-cause",
+          "evidence": "全回帰中にtracked/status hashが変化"
+        }
+      ],
+      "mitigation": "他者差分を修正・巻き戻しせず、書込み完了後の安定revisionか、HEAD+Graph Engineering差分だけの隔離snapshotで検証する。",
+      "provenance": {
+        "sources": [
+          "E-MUTATION-DURING-FULL-001",
+          "T-FULL-REGRESSION-002",
+          "T-STABILITY-RECOVERY-001"
+        ],
+        "step": "phase4-error-recovery-research",
+        "timestamp": "2026-08-02T23:28:51+09:00"
+      }
+    },
+    {
+      "id": "D-VERIFICATION-SNAPSHOT-001",
+      "type": "DesignDecision",
+      "status": "accepted",
+      "claim": "最終判定は、他者のRound 50実装へ介入せず、安定した共有treeの再検証またはHEAD 3c0ef2に今回差分だけを載せた隔離snapshotの証拠に限定する。",
+      "provenance": {
+        "sources": [
+          "F-CONCURRENT-VERIFICATION-002",
+          "D-STABILITY-GATE-001"
+        ],
+        "step": "phase4-verification-snapshot-decision",
+        "timestamp": "2026-08-02T23:28:51+09:00"
+      }
+    },
+    {
+      "id": "T-STABILITY-RECOVERY-002",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "並行側の修正後、直前の代表3失敗がPASSし、その後12秒間tracked/status hashが不変だったため、最終全回帰を開始できる安定条件を満たした。",
+      "data": {
+        "representative_tests": "3 passed in 1.99s",
+        "observation_seconds": 12,
+        "tracked_hash": "cbd9c895c1d5a7e79fd6cbde20b7af74d1bffd8c",
+        "status_hash": "ccaab61c90620142f5314070a732e6904cea01d5",
+        "tracked_stable": true,
+        "status_stable": true
+      },
+      "provenance": {
+        "sources": [
+          "focused pytest: causal suppression, weekly context, retire boundary",
+          "12-second pre/post git diff and status hashes"
+        ],
+        "step": "phase4-final-stability-gate",
+        "timestamp": "2026-08-02T23:31:25+09:00"
+      }
+    },
+    {
+      "id": "E-CONCURRENT-COMMIT-002",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "並行タスクがcommit e202742b08591fdef8d905ce6c180573b623b087を作成してorigin/mainまで進め、そのcommitは今回実装したadvice_format.pyのestimated_minutesゲートと目安表示も共有worktreeから取り込んだ。Graph Engineering実行主体はcommitもpushも行っていない。",
+      "data": {
+        "head": "e202742b08591fdef8d905ce6c180573b623b087",
+        "origin_main": "e202742b08591fdef8d905ce6c180573b623b087",
+        "commit_subject": "feat: finish action quality backlog (atomic retry, retire, active cap, range)",
+        "graph_change_in_commit": "src/kaizenlog/advice_format.py estimated_minutes validation and rendering",
+        "commit_or_push_performed_by_this_workflow": false
+      },
+      "provenance": {
+        "sources": [
+          "git rev-parse HEAD",
+          "git rev-parse origin/main",
+          "git show --stat e202742",
+          "git show e202742 -- src/kaizenlog/advice_format.py"
+        ],
+        "step": "phase4-concurrent-commit-audit",
+        "timestamp": "2026-08-02T23:34:14+09:00"
+      }
+    },
+    {
+      "id": "T-FULL-REGRESSION-003",
+      "type": "TestResult",
+      "status": "passed-working-tree",
+      "claim": "確定後HEAD e202742と残る未コミットGraph Engineering差分を合わせた全pytest 1058件がPASSし、実行開始・終了のtracked/status/graph hashはすべて一致した。clean origin/main単体の証拠ではない。",
+      "data": {
+        "command": ".venv/Scripts/python.exe -m pytest -q -p no:cacheprovider --basetemp <OS_TEMP>",
+        "passed": 1058,
+        "failed": 0,
+        "duration_seconds": 85.23,
+        "head": "e202742b08591fdef8d905ce6c180573b623b087",
+        "tracked_hash_start_end": "cbd9c895c1d5a7e79fd6cbde20b7af74d1bffd8c",
+        "status_hash_start_end": "ccaab61c90620142f5314070a732e6904cea01d5",
+        "graph_hash_start_end": "1A5BE05ABCD2D32EB6B813E195310B6EA4E42DB3A84543D9D53F35CFD74547DE",
+        "external_services_started": false
+      },
+      "provenance": {
+        "sources": [
+          "root pytest output: 1058 passed in 85.23s",
+          "pre/post tracked, status, and graph hashes",
+          "E-CONCURRENT-COMMIT-002"
+        ],
+        "step": "phase4-final-full-regression",
+        "timestamp": "2026-08-02T23:34:14+09:00"
+      }
+    },
+    {
+      "id": "T-STATIC-DIFF-001",
+      "type": "TestResult",
+      "status": "passed-with-unrelated-limitation",
+      "claim": "src compileallと今回所有ファイル限定のgit diff --checkはPASSした。全体diff checkは今回非所有のtests/test_round49_goal_achievement_ai_io.py末尾空行を検出したため、保護して未修正とした。",
+      "data": {
+        "compileall": "passed",
+        "owned_diff_check": "passed",
+        "whole_tree_diff_check": "failed: tests/test_round49_goal_achievement_ai_io.py:940 new blank line at EOF",
+        "unrelated_file_modified_by_this_workflow": false
+      },
+      "provenance": {
+        "sources": [
+          ".venv/Scripts/python.exe -m compileall -q src",
+          "git diff --check -- <Graph Engineering owned files>",
+          "git diff --check"
+        ],
+        "step": "phase4-static-and-diff-verification",
+        "timestamp": "2026-08-02T23:34:14+09:00"
+      }
+    },
+    {
+      "id": "T-GRAPH-CLOSURE-001",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "最終評価前の永続グラフは39 nodes、46 edges、未知type 0、dangling 0、重複ID 0、loop 2/2で、必須のimproves/supports/evaluated-asトリプル5件がすべて存在した。Graph Engineering契約18件もPASSした。",
+      "data": {
+        "validated_nodes": 39,
+        "validated_edges": 46,
+        "bad_nodes": 0,
+        "bad_edges": 0,
+        "critique_revise": "2/2",
+        "focused_tests": "18 passed in 0.41s",
+        "required_triples_found": 5,
+        "required_triples_checked": 5
+      },
+      "provenance": {
+        "sources": [
+          "tests/test_graph_engineering_journal_advice.py",
+          "PowerShell graph closure and exact triple checks"
+        ],
+        "step": "phase4-final-graph-evaluation",
+        "timestamp": "2026-08-02T23:35:38+09:00"
+      }
+    },
+    {
+      "id": "E-CLEAN-HEAD-RED-001",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "クリーンな一時worktreeでorigin/main=e202742のtest_advice_format.pyとtest_advice_evidence.pyを実行すると37 failed, 37 passedとなった。estimated_minutes必須化はcommit済みだが、既存fixtureとbundled prompt更新は未コミットのためである。",
+      "data": {
+        "revision": "e202742b08591fdef8d905ce6c180573b623b087",
+        "command": "pytest -q tests/test_advice_format.py tests/test_advice_evidence.py",
+        "failed": 37,
+        "passed": 37,
+        "representative_error": "actions[1].estimated_minutes は5〜15の整数にしてください",
+        "temporary_worktree_removed": true
+      },
+      "provenance": {
+        "sources": [
+          "clean detached worktree at e202742",
+          "clean-head pytest output: 37 failed, 37 passed",
+          "git show --stat e202742"
+        ],
+        "step": "phase4-clean-head-atomicity-evaluation",
+        "timestamp": "2026-08-02T23:39:38+09:00"
+      }
+    },
+    {
+      "id": "F-ATOMICITY-001",
+      "type": "Failure",
+      "status": "authorized-remediation-in-progress",
+      "claim": "共有worktreeの並行commitがproduction validatorだけを先にorigin/mainへ取り込み、必要なfixture、prompt、digest、graphを未コミットに残したため、remote revision単体はテスト可能なatomic changeではない。現在worktreeの統合状態はGREENである。",
+      "mitigation": "2026-08-03の明示的push指示に基づき、非所有dirty artifactを除外してGraph Engineering所有差分だけをcommit/pushし、remote SHAとclean revisionを再検証する。",
+      "provenance": {
+        "sources": [
+          "E-CLEAN-HEAD-RED-001",
+          "E-CONCURRENT-COMMIT-002",
+          "T-FULL-REGRESSION-003"
+        ],
+        "step": "phase4-release-atomicity-failure",
+        "timestamp": "2026-08-02T23:39:38+09:00"
+      }
+    },
+    {
+      "id": "D-RELEASE-BOUNDARY-001",
+      "type": "DesignDecision",
+      "status": "superseded-by-authorization",
+      "claim": "remote mainの非atomic状態を明示する一方、明示許可のないcommit/pushや他者commitの巻き戻しは行わず、GREENな残差分と正確な検証証拠を引き渡す。",
+      "alternatives": [
+        {
+          "option": "残差分を無断commit/pushする",
+          "decision": "rejected",
+          "reason": "ユーザーの明示許可がなく、非所有dirty差分も同居する"
+        },
+        {
+          "option": "e202742を巻き戻す",
+          "decision": "rejected",
+          "reason": "並行タスクの確定成果とremote historyを破壊する"
+        },
+        {
+          "option": "現在GREEN差分を未コミットで保持しrelease境界を報告する",
+          "decision": "accepted",
+          "reason": "データを破壊せず、次の明示承認でatomicに収束できる"
+        }
+      ],
+      "provenance": {
+        "sources": [
+          "F-ATOMICITY-001",
+          "git status --short",
+          "repository change authorization boundary"
+        ],
+        "step": "phase4-release-boundary-decision",
+        "timestamp": "2026-08-02T23:39:38+09:00"
+      }
+    },
+    {
+      "id": "T-INDEPENDENT-REVIEW-001",
+      "type": "TestResult",
+      "status": "fix-first",
+      "claim": "独立read-only reviewerは、remote非atomic、privacy_safe schema欠落、未来日focus混入、グラフsemantic evaluator不足をImportant、負のエンタメ値をMinorとして再現し、verdictをfix-firstとした。",
+      "data": {
+        "verdict": "fix-first",
+        "important_findings": 4,
+        "minor_findings": 1,
+        "review_mode": "read-only independent"
+      },
+      "provenance": {
+        "sources": [
+          "final_graph_review independent reviewer output"
+        ],
+        "step": "phase4-independent-review",
+        "timestamp": "2026-08-02T23:40:40+09:00"
+      }
+    },
+    {
+      "id": "F-PRIVACY-PROMPT-001",
+      "type": "Failure",
+      "status": "mitigated",
+      "claim": "privacy_safe.mdのaction例と規則はvalidator必須のmechanism/falsifierを欠き、例示JSONを入力するとactions[1].mechanism非空エラーになる。",
+      "mitigation": "privacy-safe例と規則へ両field、文字数、mechanismの数値禁止を追加し、両bundled promptの完全action keyをtestで固定する。",
+      "provenance": {
+        "sources": [
+          "src/kaizenlog/prompts/privacy_safe.md:53",
+          "src/kaizenlog/advice_format.py:490",
+          "T-INDEPENDENT-REVIEW-001"
+        ],
+        "step": "phase4-review-finding-registration",
+        "timestamp": "2026-08-02T23:40:40+09:00"
+      }
+    },
+    {
+      "id": "F-FUTURE-FOCUS-001",
+      "type": "Failure",
+      "status": "mitigated",
+      "claim": "digestは全proposedから最大IDを選ぶため、journal日より未来のactionが過去日digestの今日の1手として表示され得る。",
+      "mitigation": "focus候補をentry.date <= todayに限定し、現在日と未来日の混在・未来日のみのfixtureを追加する。",
+      "provenance": {
+        "sources": [
+          "src/kaizenlog/digest.py:279",
+          "T-INDEPENDENT-REVIEW-001 direct probe"
+        ],
+        "step": "phase4-review-finding-registration",
+        "timestamp": "2026-08-02T23:40:40+09:00"
+      }
+    },
+    {
+      "id": "F-GRAPH-EVALUATOR-001",
+      "type": "Failure",
+      "status": "mitigated",
+      "claim": "graph contract testは空nodes/edgesでも通り、評価で主張する必須improves/supports/evaluated-asトリプルの存在をtestとして要求しない。",
+      "mitigation": "nonempty nodes/edgesと必須5トリプルのsubsetをtestで直接assertする。",
+      "provenance": {
+        "sources": [
+          "tests/test_graph_engineering_journal_advice.py:175",
+          "T-INDEPENDENT-REVIEW-001"
+        ],
+        "step": "phase4-review-finding-registration",
+        "timestamp": "2026-08-02T23:40:40+09:00"
+      }
+    },
+    {
+      "id": "F-NEGATIVE-ENTERTAINMENT-001",
+      "type": "Failure",
+      "status": "mitigated",
+      "claim": "有限だが負のエンタメ分は現在valid扱いされ、測定不能ではなく直接計測なしと表示される。",
+      "mitigation": "直接計測値を有限・非bool・0以上へ狭め、負値fixtureをinvalid集合へ追加する。",
+      "provenance": {
+        "sources": [
+          "src/kaizenlog/digest.py:206",
+          "T-INDEPENDENT-REVIEW-001"
+        ],
+        "step": "phase4-review-finding-registration",
+        "timestamp": "2026-08-02T23:40:40+09:00"
+      }
+    },
+    {
+      "id": "D-REVIEW-REMEDIATION-001",
+      "type": "DesignDecision",
+      "status": "evaluated",
+      "claim": "critique-revise上限2/2は維持し、独立reviewが再現した4つの実装契約バグだけをRED fixtureから修正する。remote atomicityは権限境界として別管理する。",
+      "provenance": {
+        "sources": [
+          "T-INDEPENDENT-REVIEW-001",
+          "F-PRIVACY-PROMPT-001",
+          "F-FUTURE-FOCUS-001",
+          "F-GRAPH-EVALUATOR-001",
+          "F-NEGATIVE-ENTERTAINMENT-001",
+          "F-ATOMICITY-001"
+        ],
+        "step": "phase4-review-remediation-decision",
+        "timestamp": "2026-08-02T23:40:40+09:00"
+      }
+    },
+    {
+      "id": "C-REVIEW-REMEDIATION-001",
+      "type": "CodeChange",
+      "status": "working-tree-ship",
+      "claim": "独立reviewの再現済み契約バグに限定し、future proposed除外、負のエンタメ値fail-closed、privacy-safe完全action schema、nonempty graphと必須5トリプルassertを実装した。",
+      "files": [
+        "src/kaizenlog/digest.py",
+        "src/kaizenlog/prompts/privacy_safe.md",
+        "tests/test_graph_engineering_journal_advice.py"
+      ],
+      "provenance": {
+        "sources": [
+          "D-REVIEW-REMEDIATION-001",
+          "T-INDEPENDENT-REVIEW-001"
+        ],
+        "step": "phase4-review-remediation-implementation",
+        "timestamp": "2026-08-02T23:42:50+09:00"
+      }
+    },
+    {
+      "id": "T-REVIEW-REMEDIATION-RED-001",
+      "type": "TestResult",
+      "status": "expected-failure",
+      "claim": "remediation fixtureは修正前に3 failed, 18 passedとなり、負値のfail-open、未来KZN混入、privacy-safe必須field欠落を再現した。graph semantic assertは現artifactが正しいためRED中もPASSした。",
+      "data": {
+        "command": "pytest -q tests/test_graph_engineering_journal_advice.py",
+        "failed": 3,
+        "passed": 18,
+        "graph_test_red_applicable": false
+      },
+      "provenance": {
+        "sources": [
+          "pytest RED output from tdd_practical_loop"
+        ],
+        "step": "phase4-review-remediation-red",
+        "timestamp": "2026-08-02T23:42:50+09:00"
+      }
+    },
+    {
+      "id": "T-REVIEW-REMEDIATION-GREEN-001",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "remediation後はGraph Engineering 21件と関連privacy/prompt/digest回帰120件がすべてPASSし、対象diff checkもPASSした。",
+      "data": {
+        "graph_engineering_tests": "21 passed in 0.38s",
+        "related_regression_tests": "120 passed in 4.47s",
+        "diff_check": "passed"
+      },
+      "provenance": {
+        "sources": [
+          "pytest GREEN output from tdd_practical_loop",
+          "git diff --check"
+        ],
+        "step": "phase4-review-remediation-green",
+        "timestamp": "2026-08-02T23:42:50+09:00"
+      }
+    },
+    {
+      "id": "E-CONCURRENT-COMMIT-003",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "並行タスクは23:39:51 JSTに8f9ff5a03fa6fccc3428863bec10c6c8d4e6eefdをorigin/mainへ進め、初期Graph Engineering digestのムダ・AI摩擦代理・humanize・明日focus差分も共有worktreeから取り込んだ。review後の負値・未来日fixは未コミットで残る。",
+      "data": {
+        "head": "8f9ff5a03fa6fccc3428863bec10c6c8d4e6eefd",
+        "origin_main": "8f9ff5a03fa6fccc3428863bec10c6c8d4e6eefd",
+        "parent": "e202742b08591fdef8d905ce6c180573b623b087",
+        "commit_subject": "fix: close round-49 review residuals for privacy and I/O digests (round 50)",
+        "commit_or_push_performed_by_this_workflow": false
+      },
+      "provenance": {
+        "sources": [
+          "git reflog -3",
+          "git show --stat 8f9ff5a",
+          "git show 8f9ff5a -- src/kaizenlog/digest.py",
+          "git rev-parse origin/main"
+        ],
+        "step": "phase4-concurrent-commit-audit-2",
+        "timestamp": "2026-08-02T23:45:51+09:00"
+      }
+    },
+    {
+      "id": "T-FULL-REGRESSION-004",
+      "type": "TestResult",
+      "status": "passed-working-tree",
+      "claim": "独立review remediation後、HEAD 8f9ff5aと残るGraph Engineering差分を合わせた全pytest 1061件がPASSし、開始・終了のHEAD、tracked/status/graph hashはすべて一致した。",
+      "data": {
+        "command": ".venv/Scripts/python.exe -m pytest -q -p no:cacheprovider --basetemp <OS_TEMP>",
+        "passed": 1061,
+        "failed": 0,
+        "duration_seconds": 86.85,
+        "head_start_end": "8f9ff5a03fa6fccc3428863bec10c6c8d4e6eefd",
+        "tracked_hash_start_end": "942cd69171dc59374b47099717a8a854eaa14511",
+        "status_hash_start_end": "3ac6c58a02006bedfe85263feadba0cd7ad556f3",
+        "graph_hash_start_end": "A0324CAE0E1A3F05DA607A4BC1B0D9EFC713B95FB1AA6CC2DCB8C1C41C528211",
+        "external_services_started": false
+      },
+      "provenance": {
+        "sources": [
+          "root pytest output: 1061 passed in 86.85s",
+          "pre/post HEAD, tracked, status, and graph hashes",
+          "E-CONCURRENT-COMMIT-003"
+        ],
+        "step": "phase4-post-review-full-regression",
+        "timestamp": "2026-08-02T23:45:51+09:00"
+      }
+    },
+    {
+      "id": "T-STATIC-DIFF-002",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "review remediationと最終グラフ追記後、compileall、Graph Engineering 21件、worktree全体のgit diff --checkがすべてPASSした。",
+      "data": {
+        "compileall": "passed",
+        "graph_engineering_tests": "21 passed in 0.38s",
+        "whole_tree_diff_check": "passed"
+      },
+      "provenance": {
+        "sources": [
+          ".venv/Scripts/python.exe -m compileall -q src",
+          "pytest tests/test_graph_engineering_journal_advice.py",
+          "git diff --check"
+        ],
+        "step": "phase4-post-review-static-verification",
+        "timestamp": "2026-08-02T23:46:43+09:00"
+      }
+    },
+    {
+      "id": "T-INDEPENDENT-REVIEW-002",
+      "type": "TestResult",
+      "status": "working-tree-ship-remote-fix-first",
+      "claim": "独立re-reviewは4つの非release Findingがすべて解消し、新規Critical/Importantなし、working-tree verdict shipと判定した。origin/mainは必須fieldのprompt/fixture migration未反映のためremote-release verdict fix-firstを維持した。",
+      "data": {
+        "working_tree_findings": 0,
+        "working_tree_verdict": "ship",
+        "remote_release_verdict": "fix-first",
+        "resolved_prior_findings": 4,
+        "reviewer_focused_tests": "21 passed in 0.42s"
+      },
+      "provenance": {
+        "sources": [
+          "final_graph_review second independent read-only review",
+          "T-INDEPENDENT-REVIEW-001",
+          "T-FULL-REGRESSION-004"
+        ],
+        "step": "phase4-independent-re-review",
+        "timestamp": "2026-08-02T23:48:41+09:00"
+      }
+    },
+    {
+      "id": "D-RELEASE-AUTHORIZATION-001",
+      "type": "DesignDecision",
+      "status": "accepted",
+      "claim": "ユーザーの『pushしてください』を、直前に報告したorigin/main非atomic状態を解消するため、現在mainへGraph Engineering所有差分だけをcommit/pushする明示承認として扱う。",
+      "scope": {
+        "include": [
+          "PLAN.md",
+          "src/kaizenlog/digest.py",
+          "src/kaizenlog/prompts/daily_advisor.md",
+          "src/kaizenlog/prompts/privacy_safe.md",
+          "tests/test_advice_evidence.py",
+          "tests/test_advice_format.py",
+          "tests/test_round16_journal_value.py",
+          "tests/test_round35_journal_information_design.py",
+          "tests/test_round37_proposal_quality.py",
+          "tests/test_round39_metric_actionability.py",
+          "tests/test_round44_rehumanize.py",
+          "tests/test_graph_engineering_journal_advice.py",
+          ".kaizenlog/improvement_graph.json"
+        ],
+        "exclude": [
+          ".grok/",
+          "scripts/self_improve_graph.py"
+        ],
+        "target": "origin/main"
+      },
+      "provenance": {
+        "sources": [
+          "user instruction: pushしてください",
+          "git fetch --prune origin",
+          "HEAD and origin/main both 8f9ff5a03fa6fccc3428863bec10c6c8d4e6eefd",
+          "github:yeet publish workflow"
+        ],
+        "step": "phase5-release-authorization",
+        "timestamp": "2026-08-03T00:08:50+09:00"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "EDGE-001",
+      "source": "G-PERSISTENCE-001",
+      "type": "derived-from",
+      "target": "E-GRAPH-ABSENT-001",
+      "provenance": {
+        "sources": [
+          "G-PERSISTENCE-001",
+          "E-GRAPH-ABSENT-001"
+        ],
+        "step": "phase1-gap-registration",
+        "timestamp": "2026-08-02T23:01:07+09:00"
+      }
+    },
+    {
+      "id": "EDGE-002",
+      "source": "E-BASELINE-001",
+      "type": "supports",
+      "target": "D-SCOPE-001",
+      "provenance": {
+        "sources": [
+          "E-BASELINE-001",
+          "D-SCOPE-001"
+        ],
+        "step": "phase1-scope-decision",
+        "timestamp": "2026-08-02T23:01:07+09:00"
+      }
+    },
+    {
+      "id": "EDGE-003",
+      "source": "C-GRAPH-001",
+      "type": "implements",
+      "target": "G-PERSISTENCE-001",
+      "provenance": {
+        "sources": [
+          "C-GRAPH-001",
+          "G-PERSISTENCE-001"
+        ],
+        "step": "phase1-persist-first",
+        "timestamp": "2026-08-02T23:01:07+09:00"
+      }
+    },
+    {
+      "id": "EDGE-004",
+      "source": "G-JOURNAL-30SEC-001",
+      "type": "derived-from",
+      "target": "E-JOURNAL-BASELINE-001",
+      "provenance": {
+        "sources": [
+          "G-JOURNAL-30SEC-001",
+          "E-JOURNAL-BASELINE-001"
+        ],
+        "step": "phase1-gap-registration",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-005",
+      "source": "G-ADVICE-DURATION-001",
+      "type": "derived-from",
+      "target": "E-ADVICE-BASELINE-001",
+      "provenance": {
+        "sources": [
+          "G-ADVICE-DURATION-001",
+          "E-ADVICE-BASELINE-001"
+        ],
+        "step": "phase1-gap-registration",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-006",
+      "source": "I-LOOP-HYPOTHESIS-001",
+      "type": "derived-from",
+      "target": "G-JOURNAL-30SEC-001",
+      "provenance": {
+        "sources": [
+          "I-LOOP-HYPOTHESIS-001",
+          "G-JOURNAL-30SEC-001"
+        ],
+        "step": "phase1-hypothesis-generate",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-007",
+      "source": "I-LOOP-HYPOTHESIS-001",
+      "type": "derived-from",
+      "target": "G-ADVICE-DURATION-001",
+      "provenance": {
+        "sources": [
+          "I-LOOP-HYPOTHESIS-001",
+          "G-ADVICE-DURATION-001"
+        ],
+        "step": "phase1-hypothesis-generate",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-008",
+      "source": "F-LOOP-CRITIQUE-001",
+      "type": "contradicts",
+      "target": "I-LOOP-HYPOTHESIS-001",
+      "provenance": {
+        "sources": [
+          "F-LOOP-CRITIQUE-001",
+          "I-LOOP-HYPOTHESIS-001"
+        ],
+        "step": "phase1-critique",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-009",
+      "source": "D-PRACTICAL-LOOP-001",
+      "type": "derived-from",
+      "target": "F-LOOP-CRITIQUE-001",
+      "provenance": {
+        "sources": [
+          "D-PRACTICAL-LOOP-001",
+          "F-LOOP-CRITIQUE-001"
+        ],
+        "step": "phase1-revise-1",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-010",
+      "source": "D-PRACTICAL-LOOP-001",
+      "type": "improves",
+      "target": "G-JOURNAL-30SEC-001",
+      "provenance": {
+        "sources": [
+          "D-PRACTICAL-LOOP-001",
+          "G-JOURNAL-30SEC-001"
+        ],
+        "step": "phase1-revise-1",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-011",
+      "source": "D-PRACTICAL-LOOP-001",
+      "type": "improves",
+      "target": "G-ADVICE-DURATION-001",
+      "provenance": {
+        "sources": [
+          "D-PRACTICAL-LOOP-001",
+          "G-ADVICE-DURATION-001"
+        ],
+        "step": "phase1-revise-1",
+        "timestamp": "2026-08-02T23:06:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-012",
+      "source": "C-PRACTICAL-LOOP-001",
+      "type": "implements",
+      "target": "D-PRACTICAL-LOOP-001",
+      "provenance": {
+        "sources": [
+          "C-PRACTICAL-LOOP-001",
+          "D-PRACTICAL-LOOP-001"
+        ],
+        "step": "phase2-pre-implementation-record",
+        "timestamp": "2026-08-02T23:08:26+09:00"
+      }
+    },
+    {
+      "id": "EDGE-013",
+      "source": "G-ADVICE-TRACE-001",
+      "type": "derived-from",
+      "target": "E-ADVICE-REMAINDER-001",
+      "provenance": {
+        "sources": [
+          "G-ADVICE-TRACE-001",
+          "E-ADVICE-REMAINDER-001"
+        ],
+        "step": "phase1-secondary-gap-registration",
+        "timestamp": "2026-08-02T23:10:28+09:00"
+      }
+    },
+    {
+      "id": "EDGE-014",
+      "source": "G-ADVICE-VERIFY-METHOD-001",
+      "type": "derived-from",
+      "target": "E-ADVICE-REMAINDER-001",
+      "provenance": {
+        "sources": [
+          "G-ADVICE-VERIFY-METHOD-001",
+          "E-ADVICE-REMAINDER-001"
+        ],
+        "step": "phase1-secondary-gap-registration",
+        "timestamp": "2026-08-02T23:10:28+09:00"
+      }
+    },
+    {
+      "id": "EDGE-015",
+      "source": "D-DIRTY-INTEGRATION-001",
+      "type": "supports",
+      "target": "C-PRACTICAL-LOOP-001",
+      "provenance": {
+        "sources": [
+          "D-DIRTY-INTEGRATION-001",
+          "C-PRACTICAL-LOOP-001"
+        ],
+        "step": "phase2-dirty-integration-decision",
+        "timestamp": "2026-08-02T23:10:28+09:00"
+      }
+    },
+    {
+      "id": "EDGE-016",
+      "source": "E-CONCURRENT-HEAD-001",
+      "type": "supports",
+      "target": "D-HEAD-RESYNC-001",
+      "provenance": {
+        "sources": [
+          "E-CONCURRENT-HEAD-001",
+          "D-HEAD-RESYNC-001"
+        ],
+        "step": "phase2-concurrent-head-decision",
+        "timestamp": "2026-08-02T23:17:20+09:00"
+      }
+    },
+    {
+      "id": "EDGE-017",
+      "source": "D-HEAD-RESYNC-001",
+      "type": "supports",
+      "target": "C-PRACTICAL-LOOP-001",
+      "provenance": {
+        "sources": [
+          "D-HEAD-RESYNC-001",
+          "C-PRACTICAL-LOOP-001"
+        ],
+        "step": "phase2-concurrent-head-decision",
+        "timestamp": "2026-08-02T23:17:20+09:00"
+      }
+    },
+    {
+      "id": "EDGE-018",
+      "source": "F-LOOP-CRITIQUE-002",
+      "type": "contradicts",
+      "target": "C-PRACTICAL-LOOP-001",
+      "provenance": {
+        "sources": [
+          "F-LOOP-CRITIQUE-002",
+          "C-PRACTICAL-LOOP-001"
+        ],
+        "step": "phase3-critique-2",
+        "timestamp": "2026-08-02T23:17:20+09:00"
+      }
+    },
+    {
+      "id": "EDGE-019",
+      "source": "D-PRACTICAL-LOOP-002",
+      "type": "derived-from",
+      "target": "F-LOOP-CRITIQUE-002",
+      "provenance": {
+        "sources": [
+          "D-PRACTICAL-LOOP-002",
+          "F-LOOP-CRITIQUE-002"
+        ],
+        "step": "phase3-revise-2",
+        "timestamp": "2026-08-02T23:17:20+09:00"
+      }
+    },
+    {
+      "id": "EDGE-020",
+      "source": "D-PRACTICAL-LOOP-002",
+      "type": "improves",
+      "target": "G-JOURNAL-30SEC-001",
+      "provenance": {
+        "sources": [
+          "D-PRACTICAL-LOOP-002",
+          "G-JOURNAL-30SEC-001"
+        ],
+        "step": "phase3-revise-2",
+        "timestamp": "2026-08-02T23:17:20+09:00"
+      }
+    },
+    {
+      "id": "EDGE-021",
+      "source": "T-TDD-RED-001",
+      "type": "supports",
+      "target": "F-LOOP-CRITIQUE-002",
+      "provenance": {
+        "sources": [
+          "T-TDD-RED-001",
+          "F-LOOP-CRITIQUE-002"
+        ],
+        "step": "phase3-tdd-red",
+        "timestamp": "2026-08-02T23:20:07+09:00"
+      }
+    },
+    {
+      "id": "EDGE-022",
+      "source": "C-PRACTICAL-LOOP-001",
+      "type": "implements",
+      "target": "D-PRACTICAL-LOOP-002",
+      "provenance": {
+        "sources": [
+          "C-PRACTICAL-LOOP-001",
+          "D-PRACTICAL-LOOP-002"
+        ],
+        "step": "phase3-tdd-green",
+        "timestamp": "2026-08-02T23:20:07+09:00"
+      }
+    },
+    {
+      "id": "EDGE-023",
+      "source": "C-PRACTICAL-LOOP-001",
+      "type": "evaluated-as",
+      "target": "T-TDD-GREEN-001",
+      "provenance": {
+        "sources": [
+          "C-PRACTICAL-LOOP-001",
+          "T-TDD-GREEN-001"
+        ],
+        "step": "phase3-tdd-green",
+        "timestamp": "2026-08-02T23:20:07+09:00"
+      }
+    },
+    {
+      "id": "EDGE-024",
+      "source": "T-LEGACY-ADVICE-001",
+      "type": "supports",
+      "target": "C-PRACTICAL-LOOP-001",
+      "provenance": {
+        "sources": [
+          "T-LEGACY-ADVICE-001",
+          "C-PRACTICAL-LOOP-001"
+        ],
+        "step": "phase3-independent-focused-regression",
+        "timestamp": "2026-08-02T23:20:07+09:00"
+      }
+    },
+    {
+      "id": "EDGE-025",
+      "source": "E-FIXTURE-OUTPUT-001",
+      "type": "supports",
+      "target": "T-OBJECTIVE-FIXTURE-001",
+      "provenance": {
+        "sources": [
+          "E-FIXTURE-OUTPUT-001",
+          "T-OBJECTIVE-FIXTURE-001"
+        ],
+        "step": "phase3-grounded-fixture-evaluation",
+        "timestamp": "2026-08-02T23:21:52+09:00"
+      }
+    },
+    {
+      "id": "EDGE-026",
+      "source": "C-PRACTICAL-LOOP-001",
+      "type": "evaluated-as",
+      "target": "T-OBJECTIVE-FIXTURE-001",
+      "provenance": {
+        "sources": [
+          "C-PRACTICAL-LOOP-001",
+          "T-OBJECTIVE-FIXTURE-001"
+        ],
+        "step": "phase3-grounded-fixture-evaluation",
+        "timestamp": "2026-08-02T23:21:52+09:00"
+      }
+    },
+    {
+      "id": "EDGE-027",
+      "source": "E-FIXTURE-OUTPUT-001",
+      "type": "supports",
+      "target": "G-JOURNAL-30SEC-001",
+      "provenance": {
+        "sources": [
+          "E-FIXTURE-OUTPUT-001",
+          "G-JOURNAL-30SEC-001"
+        ],
+        "step": "phase3-grounded-fixture-evaluation",
+        "timestamp": "2026-08-02T23:21:52+09:00"
+      }
+    },
+    {
+      "id": "EDGE-028",
+      "source": "E-FIXTURE-OUTPUT-001",
+      "type": "supports",
+      "target": "G-ADVICE-DURATION-001",
+      "provenance": {
+        "sources": [
+          "E-FIXTURE-OUTPUT-001",
+          "G-ADVICE-DURATION-001"
+        ],
+        "step": "phase3-grounded-fixture-evaluation",
+        "timestamp": "2026-08-02T23:21:52+09:00"
+      }
+    },
+    {
+      "id": "EDGE-029",
+      "source": "T-FULL-REGRESSION-001",
+      "type": "supports",
+      "target": "C-PRACTICAL-LOOP-001",
+      "provenance": {
+        "sources": [
+          "T-FULL-REGRESSION-001",
+          "C-PRACTICAL-LOOP-001"
+        ],
+        "step": "phase4-full-regression",
+        "timestamp": "2026-08-02T23:24:36+09:00"
+      }
+    },
+    {
+      "id": "EDGE-030",
+      "source": "T-FULL-REGRESSION-001",
+      "type": "supports",
+      "target": "D-HEAD-RESYNC-001",
+      "provenance": {
+        "sources": [
+          "T-FULL-REGRESSION-001",
+          "D-HEAD-RESYNC-001"
+        ],
+        "step": "phase4-full-regression",
+        "timestamp": "2026-08-02T23:24:36+09:00"
+      }
+    },
+    {
+      "id": "EDGE-031",
+      "source": "E-CONCURRENT-MUTATION-002",
+      "type": "contradicts",
+      "target": "T-FULL-REGRESSION-001",
+      "provenance": {
+        "sources": [
+          "E-CONCURRENT-MUTATION-002",
+          "T-FULL-REGRESSION-001"
+        ],
+        "step": "phase4-concurrent-mutation-audit",
+        "timestamp": "2026-08-02T23:25:13+09:00"
+      }
+    },
+    {
+      "id": "EDGE-032",
+      "source": "F-TRANSIENT-IMPORT-001",
+      "type": "derived-from",
+      "target": "E-CONCURRENT-MUTATION-002",
+      "provenance": {
+        "sources": [
+          "F-TRANSIENT-IMPORT-001",
+          "E-CONCURRENT-MUTATION-002"
+        ],
+        "step": "phase4-transient-failure-diagnosis",
+        "timestamp": "2026-08-02T23:25:13+09:00"
+      }
+    },
+    {
+      "id": "EDGE-033",
+      "source": "D-STABILITY-GATE-001",
+      "type": "derived-from",
+      "target": "F-TRANSIENT-IMPORT-001",
+      "provenance": {
+        "sources": [
+          "D-STABILITY-GATE-001",
+          "F-TRANSIENT-IMPORT-001"
+        ],
+        "step": "phase4-stability-decision",
+        "timestamp": "2026-08-02T23:25:13+09:00"
+      }
+    },
+    {
+      "id": "EDGE-034",
+      "source": "T-STABILITY-RECOVERY-001",
+      "type": "supports",
+      "target": "D-STABILITY-GATE-001",
+      "provenance": {
+        "sources": [
+          "T-STABILITY-RECOVERY-001",
+          "D-STABILITY-GATE-001"
+        ],
+        "step": "phase4-stability-gate-evaluation",
+        "timestamp": "2026-08-02T23:26:06+09:00"
+      }
+    },
+    {
+      "id": "EDGE-035",
+      "source": "T-STABILITY-RECOVERY-001",
+      "type": "contradicts",
+      "target": "F-TRANSIENT-IMPORT-001",
+      "provenance": {
+        "sources": [
+          "T-STABILITY-RECOVERY-001",
+          "F-TRANSIENT-IMPORT-001"
+        ],
+        "step": "phase4-stability-gate-evaluation",
+        "timestamp": "2026-08-02T23:26:06+09:00"
+      }
+    },
+    {
+      "id": "EDGE-036",
+      "source": "E-MUTATION-DURING-FULL-001",
+      "type": "causes",
+      "target": "F-CONCURRENT-VERIFICATION-002",
+      "provenance": {
+        "sources": [
+          "E-MUTATION-DURING-FULL-001",
+          "F-CONCURRENT-VERIFICATION-002"
+        ],
+        "step": "phase4-error-recovery-research",
+        "timestamp": "2026-08-02T23:28:51+09:00"
+      }
+    },
+    {
+      "id": "EDGE-037",
+      "source": "T-FULL-REGRESSION-002",
+      "type": "derived-from",
+      "target": "E-MUTATION-DURING-FULL-001",
+      "provenance": {
+        "sources": [
+          "T-FULL-REGRESSION-002",
+          "E-MUTATION-DURING-FULL-001"
+        ],
+        "step": "phase4-full-regression-race-audit",
+        "timestamp": "2026-08-02T23:28:51+09:00"
+      }
+    },
+    {
+      "id": "EDGE-038",
+      "source": "T-FULL-REGRESSION-002",
+      "type": "contradicts",
+      "target": "T-STABILITY-RECOVERY-001",
+      "provenance": {
+        "sources": [
+          "T-FULL-REGRESSION-002",
+          "T-STABILITY-RECOVERY-001"
+        ],
+        "step": "phase4-full-regression-race-audit",
+        "timestamp": "2026-08-02T23:28:51+09:00"
+      }
+    },
+    {
+      "id": "EDGE-039",
+      "source": "D-VERIFICATION-SNAPSHOT-001",
+      "type": "derived-from",
+      "target": "F-CONCURRENT-VERIFICATION-002",
+      "provenance": {
+        "sources": [
+          "D-VERIFICATION-SNAPSHOT-001",
+          "F-CONCURRENT-VERIFICATION-002"
+        ],
+        "step": "phase4-verification-snapshot-decision",
+        "timestamp": "2026-08-02T23:28:51+09:00"
+      }
+    },
+    {
+      "id": "EDGE-040",
+      "source": "T-STABILITY-RECOVERY-002",
+      "type": "supports",
+      "target": "D-VERIFICATION-SNAPSHOT-001",
+      "provenance": {
+        "sources": [
+          "T-STABILITY-RECOVERY-002",
+          "D-VERIFICATION-SNAPSHOT-001"
+        ],
+        "step": "phase4-final-stability-gate",
+        "timestamp": "2026-08-02T23:31:25+09:00"
+      }
+    },
+    {
+      "id": "EDGE-041",
+      "source": "T-STABILITY-RECOVERY-002",
+      "type": "contradicts",
+      "target": "T-FULL-REGRESSION-002",
+      "provenance": {
+        "sources": [
+          "T-STABILITY-RECOVERY-002",
+          "T-FULL-REGRESSION-002"
+        ],
+        "step": "phase4-final-stability-gate",
+        "timestamp": "2026-08-02T23:31:25+09:00"
+      }
+    },
+    {
+      "id": "EDGE-042",
+      "source": "E-CONCURRENT-COMMIT-002",
+      "type": "supports",
+      "target": "D-VERIFICATION-SNAPSHOT-001",
+      "provenance": {
+        "sources": [
+          "E-CONCURRENT-COMMIT-002",
+          "D-VERIFICATION-SNAPSHOT-001"
+        ],
+        "step": "phase4-concurrent-commit-audit",
+        "timestamp": "2026-08-02T23:34:14+09:00"
+      }
+    },
+    {
+      "id": "EDGE-043",
+      "source": "C-PRACTICAL-LOOP-001",
+      "type": "evaluated-as",
+      "target": "T-FULL-REGRESSION-003",
+      "provenance": {
+        "sources": [
+          "C-PRACTICAL-LOOP-001",
+          "T-FULL-REGRESSION-003"
+        ],
+        "step": "phase4-final-full-regression",
+        "timestamp": "2026-08-02T23:34:14+09:00"
+      }
+    },
+    {
+      "id": "EDGE-044",
+      "source": "T-FULL-REGRESSION-003",
+      "type": "supports",
+      "target": "C-PRACTICAL-LOOP-001",
+      "provenance": {
+        "sources": [
+          "T-FULL-REGRESSION-003",
+          "C-PRACTICAL-LOOP-001"
+        ],
+        "step": "phase4-final-full-regression",
+        "timestamp": "2026-08-02T23:34:14+09:00"
+      }
+    },
+    {
+      "id": "EDGE-045",
+      "source": "T-FULL-REGRESSION-003",
+      "type": "contradicts",
+      "target": "T-FULL-REGRESSION-002",
+      "provenance": {
+        "sources": [
+          "T-FULL-REGRESSION-003",
+          "T-FULL-REGRESSION-002"
+        ],
+        "step": "phase4-final-full-regression",
+        "timestamp": "2026-08-02T23:34:14+09:00"
+      }
+    },
+    {
+      "id": "EDGE-046",
+      "source": "T-STATIC-DIFF-001",
+      "type": "supports",
+      "target": "C-PRACTICAL-LOOP-001",
+      "provenance": {
+        "sources": [
+          "T-STATIC-DIFF-001",
+          "C-PRACTICAL-LOOP-001"
+        ],
+        "step": "phase4-static-and-diff-verification",
+        "timestamp": "2026-08-02T23:34:14+09:00"
+      }
+    },
+    {
+      "id": "EDGE-047",
+      "source": "T-GRAPH-CLOSURE-001",
+      "type": "supports",
+      "target": "C-GRAPH-001",
+      "provenance": {
+        "sources": [
+          "T-GRAPH-CLOSURE-001",
+          "C-GRAPH-001"
+        ],
+        "step": "phase4-final-graph-evaluation",
+        "timestamp": "2026-08-02T23:35:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-048",
+      "source": "E-CLEAN-HEAD-RED-001",
+      "type": "supports",
+      "target": "F-ATOMICITY-001",
+      "provenance": {
+        "sources": [
+          "E-CLEAN-HEAD-RED-001",
+          "F-ATOMICITY-001"
+        ],
+        "step": "phase4-release-atomicity-failure",
+        "timestamp": "2026-08-02T23:39:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-049",
+      "source": "E-CLEAN-HEAD-RED-001",
+      "type": "derived-from",
+      "target": "E-CONCURRENT-COMMIT-002",
+      "provenance": {
+        "sources": [
+          "E-CLEAN-HEAD-RED-001",
+          "E-CONCURRENT-COMMIT-002"
+        ],
+        "step": "phase4-clean-head-atomicity-evaluation",
+        "timestamp": "2026-08-02T23:39:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-050",
+      "source": "T-FULL-REGRESSION-003",
+      "type": "contradicts",
+      "target": "F-ATOMICITY-001",
+      "provenance": {
+        "sources": [
+          "T-FULL-REGRESSION-003",
+          "F-ATOMICITY-001"
+        ],
+        "step": "phase4-working-tree-vs-clean-head",
+        "timestamp": "2026-08-02T23:39:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-051",
+      "source": "D-RELEASE-BOUNDARY-001",
+      "type": "derived-from",
+      "target": "F-ATOMICITY-001",
+      "provenance": {
+        "sources": [
+          "D-RELEASE-BOUNDARY-001",
+          "F-ATOMICITY-001"
+        ],
+        "step": "phase4-release-boundary-decision",
+        "timestamp": "2026-08-02T23:39:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-052",
+      "source": "T-INDEPENDENT-REVIEW-001",
+      "type": "supports",
+      "target": "F-ATOMICITY-001",
+      "provenance": {
+        "sources": [
+          "T-INDEPENDENT-REVIEW-001",
+          "F-ATOMICITY-001"
+        ],
+        "step": "phase4-independent-review",
+        "timestamp": "2026-08-02T23:40:40+09:00"
+      }
+    },
+    {
+      "id": "EDGE-053",
+      "source": "T-INDEPENDENT-REVIEW-001",
+      "type": "supports",
+      "target": "F-PRIVACY-PROMPT-001",
+      "provenance": {
+        "sources": [
+          "T-INDEPENDENT-REVIEW-001",
+          "F-PRIVACY-PROMPT-001"
+        ],
+        "step": "phase4-independent-review",
+        "timestamp": "2026-08-02T23:40:40+09:00"
+      }
+    },
+    {
+      "id": "EDGE-054",
+      "source": "T-INDEPENDENT-REVIEW-001",
+      "type": "supports",
+      "target": "F-FUTURE-FOCUS-001",
+      "provenance": {
+        "sources": [
+          "T-INDEPENDENT-REVIEW-001",
+          "F-FUTURE-FOCUS-001"
+        ],
+        "step": "phase4-independent-review",
+        "timestamp": "2026-08-02T23:40:40+09:00"
+      }
+    },
+    {
+      "id": "EDGE-055",
+      "source": "T-INDEPENDENT-REVIEW-001",
+      "type": "supports",
+      "target": "F-GRAPH-EVALUATOR-001",
+      "provenance": {
+        "sources": [
+          "T-INDEPENDENT-REVIEW-001",
+          "F-GRAPH-EVALUATOR-001"
+        ],
+        "step": "phase4-independent-review",
+        "timestamp": "2026-08-02T23:40:40+09:00"
+      }
+    },
+    {
+      "id": "EDGE-056",
+      "source": "T-INDEPENDENT-REVIEW-001",
+      "type": "supports",
+      "target": "F-NEGATIVE-ENTERTAINMENT-001",
+      "provenance": {
+        "sources": [
+          "T-INDEPENDENT-REVIEW-001",
+          "F-NEGATIVE-ENTERTAINMENT-001"
+        ],
+        "step": "phase4-independent-review",
+        "timestamp": "2026-08-02T23:40:40+09:00"
+      }
+    },
+    {
+      "id": "EDGE-057",
+      "source": "D-REVIEW-REMEDIATION-001",
+      "type": "derived-from",
+      "target": "T-INDEPENDENT-REVIEW-001",
+      "provenance": {
+        "sources": [
+          "D-REVIEW-REMEDIATION-001",
+          "T-INDEPENDENT-REVIEW-001"
+        ],
+        "step": "phase4-review-remediation-decision",
+        "timestamp": "2026-08-02T23:40:40+09:00"
+      }
+    },
+    {
+      "id": "EDGE-058",
+      "source": "C-REVIEW-REMEDIATION-001",
+      "type": "implements",
+      "target": "D-REVIEW-REMEDIATION-001",
+      "provenance": {
+        "sources": [
+          "C-REVIEW-REMEDIATION-001",
+          "D-REVIEW-REMEDIATION-001"
+        ],
+        "step": "phase4-review-remediation-implementation",
+        "timestamp": "2026-08-02T23:42:50+09:00"
+      }
+    },
+    {
+      "id": "EDGE-059",
+      "source": "T-REVIEW-REMEDIATION-RED-001",
+      "type": "supports",
+      "target": "T-INDEPENDENT-REVIEW-001",
+      "provenance": {
+        "sources": [
+          "T-REVIEW-REMEDIATION-RED-001",
+          "T-INDEPENDENT-REVIEW-001"
+        ],
+        "step": "phase4-review-remediation-red",
+        "timestamp": "2026-08-02T23:42:50+09:00"
+      }
+    },
+    {
+      "id": "EDGE-060",
+      "source": "C-REVIEW-REMEDIATION-001",
+      "type": "evaluated-as",
+      "target": "T-REVIEW-REMEDIATION-GREEN-001",
+      "provenance": {
+        "sources": [
+          "C-REVIEW-REMEDIATION-001",
+          "T-REVIEW-REMEDIATION-GREEN-001"
+        ],
+        "step": "phase4-review-remediation-green",
+        "timestamp": "2026-08-02T23:42:50+09:00"
+      }
+    },
+    {
+      "id": "EDGE-061",
+      "source": "C-REVIEW-REMEDIATION-001",
+      "type": "improves",
+      "target": "F-PRIVACY-PROMPT-001",
+      "provenance": {
+        "sources": [
+          "C-REVIEW-REMEDIATION-001",
+          "F-PRIVACY-PROMPT-001"
+        ],
+        "step": "phase4-review-remediation-green",
+        "timestamp": "2026-08-02T23:42:50+09:00"
+      }
+    },
+    {
+      "id": "EDGE-062",
+      "source": "C-REVIEW-REMEDIATION-001",
+      "type": "improves",
+      "target": "F-FUTURE-FOCUS-001",
+      "provenance": {
+        "sources": [
+          "C-REVIEW-REMEDIATION-001",
+          "F-FUTURE-FOCUS-001"
+        ],
+        "step": "phase4-review-remediation-green",
+        "timestamp": "2026-08-02T23:42:50+09:00"
+      }
+    },
+    {
+      "id": "EDGE-063",
+      "source": "C-REVIEW-REMEDIATION-001",
+      "type": "improves",
+      "target": "F-GRAPH-EVALUATOR-001",
+      "provenance": {
+        "sources": [
+          "C-REVIEW-REMEDIATION-001",
+          "F-GRAPH-EVALUATOR-001"
+        ],
+        "step": "phase4-review-remediation-green",
+        "timestamp": "2026-08-02T23:42:50+09:00"
+      }
+    },
+    {
+      "id": "EDGE-064",
+      "source": "C-REVIEW-REMEDIATION-001",
+      "type": "improves",
+      "target": "F-NEGATIVE-ENTERTAINMENT-001",
+      "provenance": {
+        "sources": [
+          "C-REVIEW-REMEDIATION-001",
+          "F-NEGATIVE-ENTERTAINMENT-001"
+        ],
+        "step": "phase4-review-remediation-green",
+        "timestamp": "2026-08-02T23:42:50+09:00"
+      }
+    },
+    {
+      "id": "EDGE-065",
+      "source": "E-CONCURRENT-COMMIT-003",
+      "type": "derived-from",
+      "target": "E-CONCURRENT-COMMIT-002",
+      "provenance": {
+        "sources": [
+          "E-CONCURRENT-COMMIT-003",
+          "E-CONCURRENT-COMMIT-002"
+        ],
+        "step": "phase4-concurrent-commit-audit-2",
+        "timestamp": "2026-08-02T23:45:51+09:00"
+      }
+    },
+    {
+      "id": "EDGE-066",
+      "source": "C-REVIEW-REMEDIATION-001",
+      "type": "evaluated-as",
+      "target": "T-FULL-REGRESSION-004",
+      "provenance": {
+        "sources": [
+          "C-REVIEW-REMEDIATION-001",
+          "T-FULL-REGRESSION-004"
+        ],
+        "step": "phase4-post-review-full-regression",
+        "timestamp": "2026-08-02T23:45:51+09:00"
+      }
+    },
+    {
+      "id": "EDGE-067",
+      "source": "T-FULL-REGRESSION-004",
+      "type": "supports",
+      "target": "C-PRACTICAL-LOOP-001",
+      "provenance": {
+        "sources": [
+          "T-FULL-REGRESSION-004",
+          "C-PRACTICAL-LOOP-001"
+        ],
+        "step": "phase4-post-review-full-regression",
+        "timestamp": "2026-08-02T23:45:51+09:00"
+      }
+    },
+    {
+      "id": "EDGE-068",
+      "source": "T-FULL-REGRESSION-004",
+      "type": "supports",
+      "target": "C-REVIEW-REMEDIATION-001",
+      "provenance": {
+        "sources": [
+          "T-FULL-REGRESSION-004",
+          "C-REVIEW-REMEDIATION-001"
+        ],
+        "step": "phase4-post-review-full-regression",
+        "timestamp": "2026-08-02T23:45:51+09:00"
+      }
+    },
+    {
+      "id": "EDGE-069",
+      "source": "T-STATIC-DIFF-002",
+      "type": "supports",
+      "target": "C-REVIEW-REMEDIATION-001",
+      "provenance": {
+        "sources": [
+          "T-STATIC-DIFF-002",
+          "C-REVIEW-REMEDIATION-001"
+        ],
+        "step": "phase4-post-review-static-verification",
+        "timestamp": "2026-08-02T23:46:43+09:00"
+      }
+    },
+    {
+      "id": "EDGE-070",
+      "source": "C-REVIEW-REMEDIATION-001",
+      "type": "evaluated-as",
+      "target": "T-INDEPENDENT-REVIEW-002",
+      "provenance": {
+        "sources": [
+          "C-REVIEW-REMEDIATION-001",
+          "T-INDEPENDENT-REVIEW-002"
+        ],
+        "step": "phase4-independent-re-review",
+        "timestamp": "2026-08-02T23:48:41+09:00"
+      }
+    },
+    {
+      "id": "EDGE-071",
+      "source": "T-INDEPENDENT-REVIEW-002",
+      "type": "supports",
+      "target": "C-PRACTICAL-LOOP-001",
+      "provenance": {
+        "sources": [
+          "T-INDEPENDENT-REVIEW-002",
+          "C-PRACTICAL-LOOP-001"
+        ],
+        "step": "phase4-independent-re-review",
+        "timestamp": "2026-08-02T23:48:41+09:00"
+      }
+    },
+    {
+      "id": "EDGE-072",
+      "source": "T-INDEPENDENT-REVIEW-002",
+      "type": "supports",
+      "target": "F-ATOMICITY-001",
+      "provenance": {
+        "sources": [
+          "T-INDEPENDENT-REVIEW-002",
+          "F-ATOMICITY-001"
+        ],
+        "step": "phase4-independent-re-review",
+        "timestamp": "2026-08-02T23:48:41+09:00"
+      }
+    },
+    {
+      "id": "EDGE-073",
+      "source": "D-RELEASE-AUTHORIZATION-001",
+      "type": "derived-from",
+      "target": "D-RELEASE-BOUNDARY-001",
+      "provenance": {
+        "sources": [
+          "D-RELEASE-AUTHORIZATION-001",
+          "D-RELEASE-BOUNDARY-001"
+        ],
+        "step": "phase5-release-authorization",
+        "timestamp": "2026-08-03T00:08:50+09:00"
+      }
+    },
+    {
+      "id": "EDGE-074",
+      "source": "D-RELEASE-AUTHORIZATION-001",
+      "type": "improves",
+      "target": "F-ATOMICITY-001",
+      "provenance": {
+        "sources": [
+          "D-RELEASE-AUTHORIZATION-001",
+          "F-ATOMICITY-001"
+        ],
+        "step": "phase5-release-authorization",
+        "timestamp": "2026-08-03T00:08:50+09:00"
+      }
+    }
+  ]
+}

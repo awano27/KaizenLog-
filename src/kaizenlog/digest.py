@@ -207,6 +207,7 @@ def build_digest(
             not isinstance(entertainment, bool)
             and isinstance(entertainment, (int, float))
             and math.isfinite(float(entertainment))
+            and float(entertainment) >= 0
         )
         if "エンタメ" in by_cat and not entertainment_is_finite_number:
             lines.append("- ムダ上位: 測定不能（エンタメカテゴリ値が不正）")
@@ -276,7 +277,11 @@ def build_digest(
         lines.append("- AI作業の質: 測定不能（AI作業時間・構造化AIログなし）")
 
     # 今日の1手（1件・自由文のため redactor 必須）
-    open_entries = [e for e in entries if e.status == "proposed"]
+    open_entries = [
+        e
+        for e in entries
+        if e.status == "proposed" and e.date <= today_s
+    ]
     if open_entries and redactor is not None:
         latest = sorted(open_entries, key=lambda e: e.id, reverse=True)[0]
         body = " ".join(humanize_action_body(latest.action or "").split())

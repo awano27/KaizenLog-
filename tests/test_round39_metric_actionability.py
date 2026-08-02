@@ -381,7 +381,7 @@ def test_c1_c2_digest_order_and_goal_with_kaizen_word():
     assert "稼働" in body
     # 第48弾: 成果行は「手を動かした先」に統合
     assert "手を動かした先" in body and "KaizenLog-" in body
-    assert "今日の1手: KZN-20260801-001" in body
+    assert "明日のフォーカス: KZN-20260801-001" in body
     assert "…" in body
     assert "retired one" not in body
     i_work = body.index("稼働")

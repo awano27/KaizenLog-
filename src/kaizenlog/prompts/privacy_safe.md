@@ -55,8 +55,11 @@
       "fact_ids": ["F2"],
       "trigger": "朝いちばんに",
       "action": "15分以内に始める行動",
+      "estimated_minutes": 10,
       "pass": "context_switches <= 40",
-      "fail": "41回以上"
+      "fail": "41回以上",
+      "mechanism": "開始手順を固定すると着手しやすいと考える",
+      "falsifier": "翌日も同じ指標が悪化した場合"
     }
   ],
   "ai_review": [
@@ -74,6 +77,9 @@
 - proposals[i] と actions[i] は根拠IDを共有。ai_review は F4 または F5 を含む
 - `interpretation` / `ai_review.text` に算用数字を書かない
 - `trigger` 必須（if-then の合図。実在の日課・時刻か「朝いちばんに」等）
+- `estimated_minutes` 必須（整数の 5〜15。例: `10`。文字列・小数・範囲外は禁止）
+- `mechanism` 必須（非空・改行なし・50字以内・算用数字なし）。なぜ効くと考えるかを短く書く
+- `falsifier` 必須（非空・改行なし・50字以内）。効かなかったと分かる条件を書く
 - `pass` は**必ず**機械構文 `指標 演算子 数値`（例: `context_switches <= 40`）。
   自由文 PASS は契約違反。`当日使用可能なPASS指標`だけを使う
 

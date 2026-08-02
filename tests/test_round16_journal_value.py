@@ -25,6 +25,7 @@ def _action(pass_v: str, fail_v: str = "fail") -> dict:
             "fact_ids": ["F3"],
             "trigger": "始業の直後",
             "action": "試す",
+            "estimated_minutes": 10,
             "pass": pass_v,
             "fail": fail_v,
             "mechanism": "小さな一歩が継続を助けると考える",

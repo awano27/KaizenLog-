@@ -346,9 +346,9 @@ def test_g3_digest_snippet_boundary():
     d39 = _digest(body39)
     d40 = _digest(body40)
     d41 = _digest(body41)
-    line39 = next(ln for ln in d39.splitlines() if "今日の1手" in ln)
-    line40 = next(ln for ln in d40.splitlines() if "今日の1手" in ln)
-    line41 = next(ln for ln in d41.splitlines() if "今日の1手" in ln)
+    line39 = next(ln for ln in d39.splitlines() if "明日のフォーカス" in ln)
+    line40 = next(ln for ln in d40.splitlines() if "明日のフォーカス" in ln)
+    line41 = next(ln for ln in d41.splitlines() if "明日のフォーカス" in ln)
     # 本文部分（ID の後）
     sn39 = line39.split("KZN-20260801-001 ", 1)[1]
     sn40 = line40.split("KZN-20260801-001 ", 1)[1]
