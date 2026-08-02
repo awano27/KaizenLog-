@@ -1045,3 +1045,11 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 - ユーザーは書面仕様を2026-08-03に承認した。
 - TDD実装計画は `docs/superpowers/plans/2026-08-03-action-monitoring-clarity.md`。4 Taskで候補状態、Markdown、CLI、実日誌/Graph/pushを順に完結させる。
 - サブスク制約と共有dirty treeのため、実行方式は最小並列のinline executionを推奨し、実装方式の確認後にproduction codeへ着手する。
+
+### Task 4 — 実日誌・Graph統合証拠（2026-08-03 JST）
+
+- `C:\develop\obsidian\2026\01 Daily Notes\2026-08-03.md` を、親repoの読み取り専用 `kaizenlog.toml`、既存Memory、statsから `render_actions_section` で純粋に再描画した。最終managed ACTIONSは `KZN-20260801-001` を今日やること1件、`KZN-20260727-002` をcheckboxなしの効果モニタリング、日次目標を未設定として表示し、`extract_section` とrendererの本文一致を確認した。
+- controller承認後の外側baselineは `sha256(raw[:start] + raw[end:]) = 601394f3b98424ba339ca502d497fb2415bbd92f4c62a78e8b6a9443d4efa616`。最終日誌全文SHA-256は `38296d3291b2a9173f37789a46e2a133fe08675ff527cc994ba8f41c2d1e0eca`、改行は `0 CRLF / 210 LF` で、最終marker内置換の前後で外側hashは不変だった。
+- 当初briefの `d0ecbc...` は同じ外側式の監査値と一致せず、旧実日誌は `full=b2e126...` / `external=9153a097...` だった。初回 `apply_patch` が混在EOLを全LFへ正規化して旧raw外側を復元不能にしたため、controllerが現行 `601394f3...` を新baselineとして明示承認した。この失敗と緩和はGraphの `F-ACTION-MONITOR-MARKER-BASELINE-DISCREPANCY-001` にprovenance付きで記録する。
+- renderer互換修正 `16155295b91c82b97725eb39991a83291560224d` を含む最終revisionでfocused regressionは `101 passed in 2.82s`、full pytestは `1077 passed in 90.23s`。focused対象はRound 50/40/45、display cap、UX13、verdict stage、rehumanizeである。
+- ActivityWatch、screenpipe、LLM、`generate`、`advise`、`morning`、`done`、fetch、push、GitHub ActionsはTask 4で実行しない。repository側はGraph/PLANの証拠だけをcommitし、実Vaultはcommitしない。

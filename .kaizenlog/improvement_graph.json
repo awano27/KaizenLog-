@@ -3,7 +3,7 @@
   "graph_id": "kaizenlog-practical-journal-advice-2026-08-02",
   "goal": "日誌を30秒で判断でき、アドバイスを1〜3件の証拠に紐づく5〜15分のPASS/FAILマイクロアクションにする",
   "created_at": "2026-08-02T23:01:07+09:00",
-  "updated_at": "2026-08-03T00:48:32+09:00",
+  "updated_at": "2026-08-03T08:29:55+09:00",
   "loop": {
     "pattern": "generate-critique-revise",
     "critique_revise_limit": 2,
@@ -1979,6 +1979,148 @@
         "step": "action-clarity-implementation-plan",
         "timestamp": "2026-08-03T07:29:59+09:00"
       }
+    },
+    {
+      "id": "C-ACTION-MONITOR-IMPLEMENTATION-001",
+      "type": "CodeChange",
+      "status": "implemented",
+      "claim": "承認済みの候補分離・3主ブロック・today整合を dbb34e4、fc972a6、8112b8c、f0ff360 で実装し、1615529 で既存ACTIONS reader契約との互換表現を復元した。最終rendererは実日誌へ純粋関数出力として反映した。",
+      "data": {
+        "commits": [
+          "dbb34e4 refactor: structure action monitoring state",
+          "fc972a6 feat: separate actions from effect monitoring",
+          "8112b8c fix: clarify monitoring unknown states",
+          "f0ff360 fix: align today with actionable candidates",
+          "16155295b91c82b97725eb39991a83291560224d fix: restore legacy action renderer contracts"
+        ],
+        "renderer": "kaizenlog.memory.render_actions_section",
+        "real_note": "C:/develop/obsidian/2026/01 Daily Notes/2026-08-03.md",
+        "primary_action_id": "KZN-20260801-001",
+        "monitoring_id": "KZN-20260727-002"
+      },
+      "provenance": {
+        "sources": [
+          "git log --oneline dbb34e4..1615529",
+          "src/kaizenlog/memory.py",
+          "src/kaizenlog/cli.py",
+          "task-1-report.md through task-3-report.md"
+        ],
+        "step": "action-clarity-phase4-implementation",
+        "timestamp": "2026-08-03T08:29:55+09:00"
+      }
+    },
+    {
+      "id": "E-ACTION-MONITOR-REAL-NOTE-001",
+      "type": "Evidence",
+      "status": "verified",
+      "claim": "実日誌2026-08-03のACTIONS区間は、今日やることをKZN-20260801-001のcheckbox 1件として表示し、KZN-20260727-002をcheckboxなしの効果モニタリングへ分離した。日次目標は未設定として明示し、純粋renderer出力と完全一致する。",
+      "data": {
+        "journal": "C:/develop/obsidian/2026/01 Daily Notes/2026-08-03.md",
+        "full_sha256": "38296d3291b2a9173f37789a46e2a133fe08675ff527cc994ba8f41c2d1e0eca",
+        "primary_action_id": "KZN-20260801-001",
+        "monitoring_id": "KZN-20260727-002",
+        "latest_monitoring_observation": "8/2 3.2 PASS",
+        "daily_goal_state": "unset",
+        "renderer_section_exact_match": true
+      },
+      "provenance": {
+        "sources": [
+          "kaizenlog.config.load_config(C:/develop/KaizenLog/KaizenLog-/kaizenlog.toml)",
+          "kaizenlog.memory.load_entries",
+          "kaizenlog.stats.load_stats",
+          "kaizenlog.memory.render_actions_section",
+          "kaizenlog.vault.extract_section"
+        ],
+        "step": "action-clarity-phase4-real-note-render",
+        "timestamp": "2026-08-03T08:29:55+09:00"
+      }
+    },
+    {
+      "id": "F-ACTION-MONITOR-MARKER-BASELINE-DISCREPANCY-001",
+      "type": "Failure",
+      "status": "mitigated-by-controller-rebaseline",
+      "claim": "Task 4 briefのmarker-external値d0ecbc...は実際の式と一致しなかった。初回body-only apply_patchは混在EOLの実日誌全体をLFへ正規化し、旧raw外側9153a097...は復元不能になった。controllerは現行all-LF外側601394f3...を新しい保護baselineとして承認した。",
+      "data": {
+        "brief_marker_external_sha256": "d0ecbc8590a83208175d600a4802886ecc93a3f36da50e67c6b32a90520caf3a",
+        "pre_patch_full_sha256": "b2e1260ad54df7a119e6bc5a11d590f48d28f0e8ec84bcf46ee000e7da67ab27",
+        "pre_patch_marker_external_sha256": "9153a09796ee1d066f187d24d8d1ef6a6921d90b38203abadd046a903e45e985",
+        "rebaseline_marker_external_sha256": "601394f3b98424ba339ca502d497fb2415bbd92f4c62a78e8b6a9443d4efa616",
+        "final_full_sha256": "38296d3291b2a9173f37789a46e2a133fe08675ff527cc994ba8f41c2d1e0eca",
+        "final_line_endings": "0 CRLF / 210 LF"
+      },
+      "provenance": {
+        "sources": [
+          "Task 4 preflight SHA-256 scripts",
+          "apply_patch postcondition SHA-256 script",
+          "controller rebaseline instruction",
+          "C:/develop/obsidian/2026/01 Daily Notes/2026-08-03.md"
+        ],
+        "step": "action-clarity-phase4-marker-baseline-recovery",
+        "timestamp": "2026-08-03T08:29:55+09:00"
+      }
+    },
+    {
+      "id": "E-ACTION-MONITOR-MARKER-PRESERVED-001",
+      "type": "Evidence",
+      "status": "verified",
+      "claim": "controller承認後のall-LF baselineに対し、最終ACTIONS反映前後でstart markerより前とend markerより後を連結したSHA-256は601394f3...で不変だった。変更はmanaged marker bodyに限定された。",
+      "data": {
+        "marker_external_sha256_before": "601394f3b98424ba339ca502d497fb2415bbd92f4c62a78e8b6a9443d4efa616",
+        "marker_external_sha256_after": "601394f3b98424ba339ca502d497fb2415bbd92f4c62a78e8b6a9443d4efa616",
+        "final_full_sha256": "38296d3291b2a9173f37789a46e2a133fe08675ff527cc994ba8f41c2d1e0eca",
+        "line_endings": "0 CRLF / 210 LF",
+        "marker_pair_count": 1
+      },
+      "provenance": {
+        "sources": [
+          "SHA-256(raw[:start] + raw[end:]) before final apply_patch",
+          "SHA-256(raw[:start] + raw[end:]) after final apply_patch",
+          "kaizenlog.vault.extract_section"
+        ],
+        "step": "action-clarity-phase4-marker-preservation",
+        "timestamp": "2026-08-03T08:29:55+09:00"
+      }
+    },
+    {
+      "id": "T-ACTION-MONITOR-FOCUSED-001",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "ACTIONS state split、three-block renderer、today alignment、display cap、verdict stage、re-humanizeのfocused regressionが成功した。",
+      "data": {
+        "command": "C:/develop/KaizenLog/KaizenLog-/.venv/Scripts/python.exe -m pytest tests/test_round50_action_monitoring_clarity.py tests/test_round40_review_residuals.py tests/test_round45_reader_ux.py tests/test_action_ux_display_cap.py tests/test_ux_round13.py tests/test_round36_verdict_stage.py tests/test_round44_rehumanize.py --basetemp <OS-temp> -q",
+        "passed": 101,
+        "failed": 0,
+        "exit_code": 0,
+        "duration_seconds": 2.82
+      },
+      "provenance": {
+        "sources": [
+          "focused pytest output on commit 16155295b91c82b97725eb39991a83291560224d"
+        ],
+        "step": "action-clarity-phase4-focused-verification",
+        "timestamp": "2026-08-03T08:29:55+09:00"
+      }
+    },
+    {
+      "id": "T-ACTION-MONITOR-FULL-001",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "全pytestはACTIONS legacy compatibility修正を含む最終renderer revisionで成功した。",
+      "data": {
+        "command": "C:/develop/KaizenLog/KaizenLog-/.venv/Scripts/python.exe -m pytest --basetemp <OS-temp> -q",
+        "passed": 1077,
+        "failed": 0,
+        "exit_code": 0,
+        "duration_seconds": 90.23,
+        "revision": "16155295b91c82b97725eb39991a83291560224d"
+      },
+      "provenance": {
+        "sources": [
+          "full pytest output on commit 16155295b91c82b97725eb39991a83291560224d"
+        ],
+        "step": "action-clarity-phase4-full-verification",
+        "timestamp": "2026-08-03T08:29:55+09:00"
+      }
     }
   ],
   "edges": [
@@ -3618,6 +3760,90 @@
         ],
         "step": "action-clarity-implementation-plan",
         "timestamp": "2026-08-03T07:29:59+09:00"
+      }
+    },
+    {
+      "id": "EDGE-118",
+      "source": "C-ACTION-MONITOR-IMPLEMENTATION-001",
+      "type": "implements",
+      "target": "D-ACTION-MONITOR-SPLIT-001",
+      "provenance": {
+        "sources": [
+          "C-ACTION-MONITOR-IMPLEMENTATION-001",
+          "D-ACTION-MONITOR-SPLIT-001"
+        ],
+        "step": "action-clarity-phase4-implementation",
+        "timestamp": "2026-08-03T08:29:55+09:00"
+      }
+    },
+    {
+      "id": "EDGE-119",
+      "source": "T-ACTION-MONITOR-FOCUSED-001",
+      "type": "supports",
+      "target": "C-ACTION-MONITOR-IMPLEMENTATION-001",
+      "provenance": {
+        "sources": [
+          "T-ACTION-MONITOR-FOCUSED-001",
+          "C-ACTION-MONITOR-IMPLEMENTATION-001"
+        ],
+        "step": "action-clarity-phase4-focused-verification",
+        "timestamp": "2026-08-03T08:29:55+09:00"
+      }
+    },
+    {
+      "id": "EDGE-120",
+      "source": "T-ACTION-MONITOR-FULL-001",
+      "type": "supports",
+      "target": "C-ACTION-MONITOR-IMPLEMENTATION-001",
+      "provenance": {
+        "sources": [
+          "T-ACTION-MONITOR-FULL-001",
+          "C-ACTION-MONITOR-IMPLEMENTATION-001"
+        ],
+        "step": "action-clarity-phase4-full-verification",
+        "timestamp": "2026-08-03T08:29:55+09:00"
+      }
+    },
+    {
+      "id": "EDGE-121",
+      "source": "E-ACTION-MONITOR-REAL-NOTE-001",
+      "type": "supports",
+      "target": "G-ACTION-SEPARATION-001",
+      "provenance": {
+        "sources": [
+          "E-ACTION-MONITOR-REAL-NOTE-001",
+          "G-ACTION-SEPARATION-001"
+        ],
+        "step": "action-clarity-phase4-real-note-render",
+        "timestamp": "2026-08-03T08:29:55+09:00"
+      }
+    },
+    {
+      "id": "EDGE-122",
+      "source": "E-ACTION-MONITOR-MARKER-PRESERVED-001",
+      "type": "supports",
+      "target": "C-ACTION-MONITOR-IMPLEMENTATION-001",
+      "provenance": {
+        "sources": [
+          "E-ACTION-MONITOR-MARKER-PRESERVED-001",
+          "C-ACTION-MONITOR-IMPLEMENTATION-001"
+        ],
+        "step": "action-clarity-phase4-marker-preservation",
+        "timestamp": "2026-08-03T08:29:55+09:00"
+      }
+    },
+    {
+      "id": "EDGE-123",
+      "source": "C-ACTION-MONITOR-IMPLEMENTATION-001",
+      "type": "evaluated-as",
+      "target": "T-ACTION-MONITOR-FULL-001",
+      "provenance": {
+        "sources": [
+          "C-ACTION-MONITOR-IMPLEMENTATION-001",
+          "T-ACTION-MONITOR-FULL-001"
+        ],
+        "step": "action-clarity-phase4-full-verification",
+        "timestamp": "2026-08-03T08:29:55+09:00"
       }
     }
   ]
