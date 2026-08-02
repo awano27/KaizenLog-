@@ -60,6 +60,7 @@ def build_stats(
     loop_tax_summary: LoopTaxSummary | None = None,
     outcome_git: list[dict] | None = None,
     screenpipe: Mapping[str, Any] | None = None,
+    effort: Mapping[str, Any] | None = None,
 ) -> dict:
     projects: dict[str, dict] = {}
     for s in cc_sessions:
@@ -259,6 +260,8 @@ def build_stats(
             "queried_blocks": int(screenpipe.get("queried_blocks") or 0),
             "filled_blocks": int(screenpipe.get("filled_blocks") or 0),
         }
+    if effort is not None:
+        stats["effort"] = dict(effort)
     # 今日の目標（redact 適用後の文言のみ保存。generate がノートから読む）
     if goal_text:
         stats["goal_text"] = str(goal_text)
@@ -284,6 +287,7 @@ def write_stats(
     loop_tax_summary: LoopTaxSummary | None = None,
     outcome_git: list[dict] | None = None,
     screenpipe: Mapping[str, Any] | None = None,
+    effort: Mapping[str, Any] | None = None,
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
@@ -306,6 +310,7 @@ def write_stats(
                 loop_tax_summary=loop_tax_summary,
                 outcome_git=outcome_git,
                 screenpipe=screenpipe,
+                effort=effort,
             ),
             ensure_ascii=False,
             indent=1,

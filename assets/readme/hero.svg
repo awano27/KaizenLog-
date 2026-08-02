@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
-  <title id="title">KaizenLog — AIとの仕事を、実測で調教する</title>
-  <desc id="desc">AIとのやり直しを測り、実測した教訓を次のAIへ渡し、変更前後の効果を確かめる閉ループ。</desc>
+  <title id="title">KaizenLog — PCの作業を日誌に残し、AIのやり直しを測って次に活かす</title>
+  <desc id="desc">PC作業を日誌にし、やり直しのムダを測り、学びを次のAIへ渡し、効いたかを確かめる。</desc>
   <defs>
     <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#75CFA3" stroke-opacity=".055"/></pattern>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#75CFA3"/></marker>
@@ -8,34 +8,35 @@
   <rect width="1200" height="620" rx="30" fill="#0B1211"/>
   <rect width="1200" height="620" rx="30" fill="url(#grid)"/>
   <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Yu Gothic UI', sans-serif">
-    <text x="60" y="68" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="20" font-weight="800" letter-spacing="3">KAIZENLOG / AI WORK LEDGER</text>
-    <text x="60" y="145" fill="#F4F0E8" font-size="54" font-weight="800">AIとの仕事を、実測で調教する。</text>
-    <text x="62" y="198" fill="#B7C6BE" font-size="30" font-weight="600">リトライのムダを測り、教訓を戻し、本当に効いたか確かめる。</text>
-    <path d="M60 234H1140" stroke="#315244" stroke-width="2"/>
-    <path d="M390 413H426" fill="none" stroke="#75CFA3" stroke-width="5" marker-end="url(#arrow)"/>
-    <path d="M774 413H810" fill="none" stroke="#75CFA3" stroke-width="5" marker-end="url(#arrow)"/>
-    <g transform="translate(60 286)">
+    <text x="60" y="68" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="20" font-weight="800" letter-spacing="3">KAIZENLOG / DAILY WORK LEDGER</text>
+    <text x="60" y="130" fill="#F4F0E8" font-size="42" font-weight="800">PCの作業を日誌に残し、</text>
+    <text x="60" y="185" fill="#F4F0E8" font-size="42" font-weight="800">AIのやり直しを測って次に活かす。</text>
+    <text x="62" y="230" fill="#B7C6BE" font-size="26" font-weight="600">記録して測る。学びを次へ渡し、効いたか確かめる。</text>
+    <path d="M60 258H1140" stroke="#315244" stroke-width="2"/>
+    <path d="M390 430H426" fill="none" stroke="#75CFA3" stroke-width="5" marker-end="url(#arrow)"/>
+    <path d="M774 430H810" fill="none" stroke="#75CFA3" stroke-width="5" marker-end="url(#arrow)"/>
+    <g transform="translate(60 300)">
       <rect width="330" height="218" rx="20" fill="#111D1A" stroke="#75CFA3" stroke-width="3"/>
       <text x="28" y="45" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800">01 MEASURE</text>
       <text x="28" y="96" fill="#F4F0E8" font-size="35" font-weight="800">Loop Tax</text>
       <text x="28" y="132" fill="#D7E2DC" font-size="25" font-weight="700">Prompt ROI</text>
       <text x="28" y="180" fill="#81958C" font-size="20" font-weight="600">やり直しのコストを記録</text>
     </g>
-    <g transform="translate(444 286)">
+    <g transform="translate(444 300)">
       <rect width="330" height="218" rx="20" fill="#17150F" stroke="#F0B667" stroke-width="3"/>
       <text x="28" y="45" fill="#F0B667" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800">02 TEACH</text>
       <text x="28" y="96" fill="#F4F0E8" font-size="35" font-weight="800">handoff</text>
       <text x="28" y="132" fill="#F0B667" font-size="25" font-weight="700">coach</text>
       <text x="28" y="180" fill="#B7A782" font-size="20" font-weight="600">次のAIへ教訓を渡す</text>
     </g>
-    <g transform="translate(828 286)">
+    <g transform="translate(828 300)">
       <rect width="312" height="218" rx="20" fill="#111D1A" stroke="#D7E2DC" stroke-width="3"/>
       <text x="28" y="45" fill="#F4F0E8" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800">03 VERIFY</text>
       <text x="28" y="96" fill="#75CFA3" font-size="30" font-weight="800">predict</text>
       <text x="28" y="132" fill="#F0B667" font-size="25" font-weight="700">felt / measured</text>
       <text x="28" y="171" fill="#B7C6BE" font-size="18" font-weight="600">効果を予測・体感・</text>
-      <text x="28" y="197" fill="#B7C6BE" font-size="18" font-weight="600">実測で確認</text>
+      <text x="28" y="197" fill="#B7C6BE" font-size="18" font-weight="600">数字で確認</text>
     </g>
-    <text x="60" y="567" fill="#B7C6BE" font-family="ui-monospace, Consolas, monospace" font-size="20" font-weight="700">Windows · ActivityWatch · Obsidian · AI work</text>
+    <text x="60" y="575" fill="#B7C6BE" font-family="ui-monospace, Consolas, monospace" font-size="20" font-weight="700">Windows · ActivityWatch · Obsidian · journal first</text>
   </g>
 </svg>

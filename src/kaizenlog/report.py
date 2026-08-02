@@ -285,6 +285,7 @@ class SessionSpan:
     end: datetime
     tool_class: str  # claude / codex / chatgpt / gemini / …
     label: str  # redact 済み「project: title」
+    project: str = ""  # 工数帰属用（未 redact の project 名）
 
 
 def source_to_tool_class(source: str | None) -> str:
@@ -333,6 +334,7 @@ def build_session_spans(
                 end=end,
                 tool_class=source_to_tool_class(getattr(s, "source", None)),
                 label=raw,
+                project=project,
             )
         )
     return out

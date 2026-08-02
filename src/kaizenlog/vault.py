@@ -72,6 +72,8 @@ WEEKLY_CONTEXT_MARKER = "kaizenlog:weekly-context"  # 週次スコアカード�
 AGENT_CONTEXT_MARKER = "kaizenlog:agent-context"  # handoff が CLAUDE.md/AGENTS.md へ注入
 COACH_MARKER = "kaizenlog:coach"  # coach --apply が追記する調教区間
 DIGEST_MARKER = "kaizenlog:digest"  # 冒頭30秒サマリ（決定論・advise が所有）
+EFFORT_MARKER = "kaizenlog:effort"  # 工数のつけ先（決定論・generate が所有）
+MONTHLY_MARKER = "kaizenlog:monthly"  # 月次実績（決定論・monthly が所有）
 
 
 def _start_tag(marker: str) -> str:

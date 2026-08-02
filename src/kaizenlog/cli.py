@@ -406,6 +406,35 @@ def cmd_generate(
         screen_fills=screen_fills or None,
     )
 
+    effort_payload: dict | None = None
+    effort_cfg = getattr(cfg, "effort", None)
+    if effort_cfg is not None and bool(getattr(effort_cfg, "enabled", True)):
+        from .effort import allocate_effort, render_effort_markdown
+        from .vault import EFFORT_MARKER
+
+        effort_report = allocate_effort(
+            summary.blocks,
+            session_spans,
+            tz=tz,
+            project_roots=list(getattr(effort_cfg, "project_roots", None) or []),
+            private_categories=list(
+                getattr(effort_cfg, "private_categories", None) or ["エンタメ"]
+            ),
+            # つけ先名（プロジェクト／リポジトリ名）も他の日誌出力と同じ秘匿を通す
+            redactor=title_redactor,
+        )
+        effort_payload = effort_report.to_stats_dict()
+        effort_md = render_effort_markdown(
+            effort_report,
+            min_display_minutes=float(
+                getattr(effort_cfg, "min_display_minutes", 1.0) or 1.0
+            ),
+        )
+        # Activity Log 本体とは別マーカー区間として直後に書く（後で write）
+        # section には含めず、ACTIVITY 書き込み後に EFFORT を書く
+    else:
+        effort_md = None
+
     if cfg.aiwork.enabled:
         try:
             from .guard import count_live_breaker_fires
@@ -489,6 +518,7 @@ def cmd_generate(
         loop_tax_summary=loop_tax,
         outcome_git=outcome_git_payload,
         screenpipe=screenpipe_stats,
+        effort=effort_payload,
     )
     previous_day = (day - timedelta(days=1)).isoformat()
     previous_stats = next(
@@ -509,6 +539,11 @@ def cmd_generate(
     print(f"   合計 {summary.total_minutes:.0f}分 / {len(summary.blocks)}ブロック"
           f" / AI関連画面ブロック {summary.ai_activity_blocks}回"
           f" / AIセッション {len(ai_sessions)}回")
+    if effort_md:
+        from .vault import EFFORT_MARKER
+
+        store.write_section(day, EFFORT_MARKER, effort_md)
+        print("   ⏱ 工数のつけ先を書き込みました")
 
     # 空転ブレーカー状態掃除（7日超過）
     try:
@@ -545,6 +580,7 @@ def cmd_generate(
         loop_tax_summary=loop_tax,
         outcome_git=outcome_git_payload,
         screenpipe=screenpipe_stats,
+        effort=effort_payload,
     )
 
     # 実験の実測追記: running 全件 + adopted（deadline から30日以内のみ）
@@ -1806,6 +1842,47 @@ def _open_kzn_for_nippou(cfg: Config, day: date, content: str) -> list[tuple[str
     for e in open_list[:2]:
         out.append((e.id, humanize_action_body(e.action)))
     return out
+
+
+def cmd_monthly(
+    cfg: Config,
+    *,
+    month: str | None = None,
+    write: bool = False,
+    as_of: date | None = None,
+) -> int:
+    """月次実績（effort 合算）。既定は stdout プレビュー。"""
+    from .memory import load_entries
+    from .monthly import (
+        aggregate_monthly,
+        load_month_stats,
+        render_monthly_markdown,
+        write_monthly,
+    )
+
+    tz = ZoneInfo(cfg.timezone)
+    today = as_of or datetime.now(tz).date()
+    if month:
+        try:
+            y_s, m_s = month.strip().split("-", 1)
+            year, mon = int(y_s), int(m_s)
+        except ValueError as e:
+            raise SystemExit(f"--month は YYYY-MM 形式で指定してください: {month}") from e
+        if not 1 <= mon <= 12 or not 1970 <= year <= 9999:
+            raise SystemExit(f"--month の値が不正です（月は 1〜12）: {month}")
+    else:
+        year, mon = today.year, today.month
+
+    stats_list = load_month_stats(cfg.stats_path, year, mon)
+    entries = load_entries(cfg.memory_path)
+    rep = aggregate_monthly(stats_list, entries, year=year, month=mon)
+    body = render_monthly_markdown(rep)
+    print(body)
+    if not write:
+        return 0
+    path = write_monthly(cfg.monthly_path, year, mon, body)
+    print(f"\n✅ 月次レポートを書き込みました: {path}")
+    return 0
 
 
 def cmd_screenpipe_probe(
@@ -3162,6 +3239,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     spp.add_argument("--minutes", type=int, default=30, help="直近N分（既定30）")
     spp.add_argument("--app", help="アプリ名フィルタ（例: ChatGPT）")
+    mon = sub.add_parser("monthly", help="月次の工数・成果サマリ（決定論）")
+    mon.add_argument("--month", help="対象月 YYYY-MM（省略時は当月）")
+    mon.add_argument(
+        "--write",
+        action="store_true",
+        help="vault の monthly_dir へ書き込む（未指定時はプレビューのみ）",
+    )
     sub.add_parser("status", help="実行履歴の確認")
     sub.add_parser("doctor", help="セットアップ診断")
     sk = sub.add_parser("skill", help="Claude Codeスキルの管理")
@@ -3599,6 +3683,13 @@ def main(argv: list[str] | None = None) -> int:
             cfg,
             minutes=int(getattr(args, "minutes", 30) or 30),
             app=getattr(args, "app", None),
+        )
+
+    if args.command == "monthly":
+        return cmd_monthly(
+            cfg,
+            month=getattr(args, "month", None),
+            write=bool(getattr(args, "write", False)),
         )
 
     if args.command == "status":

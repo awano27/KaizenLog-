@@ -18,7 +18,7 @@ def _local_targets(text: str) -> list[str]:
 def test_readme_tells_the_current_improvement_loop_story():
     text = README.read_text(encoding="utf-8")
     for required in (
-        "AIとの仕事を、実測で調教する。",
+        "PCの作業を日誌に残し、AIのやり直しを測って次に活かす。",
         "やり直しのムダを測る",
         "効果の高い依頼方法を見つける",
         "学んだルールを次のAIへ渡す",
@@ -33,6 +33,7 @@ def test_readme_tells_the_current_improvement_loop_story():
     ):
         assert required in text
     assert "Local Preview" not in text
+    assert "実測で調教" not in text
 
 
 def test_readme_local_targets_exist():

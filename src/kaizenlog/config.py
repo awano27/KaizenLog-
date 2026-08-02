@@ -163,6 +163,16 @@ class ScreenpipeConfig:
 
 
 @dataclass
+class EffortConfig:
+    """工数のつけ先配分（決定論・既定 ON）。"""
+
+    enabled: bool = True
+    project_roots: list[str] = field(default_factory=lambda: ["C:/develop"])
+    private_categories: list[str] = field(default_factory=lambda: ["エンタメ"])
+    min_display_minutes: float = 1.0
+
+
+@dataclass
 class HandoffConfig:
     """kaizenlog handoff の注入先（CLAUDE.md / AGENTS.md 等）。"""
 
@@ -194,6 +204,7 @@ class Config:
     stats_dir: str = ".kaizenlog/stats"
     logs_dir: str = ".kaizenlog/logs"
     memory_dir: str = "Kaizen/Memory"
+    monthly_dir: str = "04 Monthly"  # 月次レポート
     auto_backfill_days: int = 3  # 直近N日の欠損を毎晩自動補完（0で無効）
     log_retention_days: int = 90
     notify_on_failure: bool = True  # 失敗時にWindows通知を出す
@@ -201,6 +212,7 @@ class Config:
     aiwork: AIWorkConfig = field(default_factory=AIWorkConfig)
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     screenpipe: ScreenpipeConfig = field(default_factory=ScreenpipeConfig)
+    effort: EffortConfig = field(default_factory=EffortConfig)
     handoff: HandoffConfig = field(default_factory=HandoffConfig)
     guard: GuardConfig = field(default_factory=GuardConfig)
     min_block_minutes: float = 3.0  # タイムラインに載せる最小ブロック長
@@ -229,6 +241,10 @@ class Config:
     @property
     def memory_path(self) -> Path:
         return Path(self.vault_dir).expanduser() / self.memory_dir
+
+    @property
+    def monthly_path(self) -> Path:
+        return Path(self.vault_dir).expanduser() / self.monthly_dir
 
 
 def default_config_path() -> Path:
@@ -322,6 +338,7 @@ experiments_dir = "03 Areas/Kaizen Experiments"   # カイゼン実験ノート�
 stats_dir = ".kaizenlog/stats"   # パターン検出用の日次統計JSON（ドットフォルダ=Obsidian非表示）
 logs_dir = ".kaizenlog/logs"     # 実行ログ（kaizenlog status で確認）
 memory_dir = "Kaizen/Memory"     # 提案の記録（Kaizen Memory、重複提案の防止に使用）
+monthly_dir = "04 Monthly"       # 月次レポート
 auto_backfill_days = 3      # 毎晩の実行時に直近N日の欠損を自動補完（0で無効）
 log_retention_days = 90     # 実行ログの保持日数
 min_block_minutes = 3.0     # タイムラインに載せる最小ブロック長（分）
@@ -371,6 +388,13 @@ session_titles = true
 # timeout_seconds = 3.0
 # max_lines = 3
 # max_excerpt_chars = 120
+
+# [effort]
+# 工数のつけ先（決定論・既定 ON）
+# enabled = true
+# project_roots = ["C:/develop"]
+# private_categories = ["エンタメ"]
+# min_display_minutes = 1.0
 
 # [handoff]
 # targets = ["C:/develop/myrepo/CLAUDE.md"]
@@ -485,6 +509,8 @@ def load_config(path: str | None = None) -> Config:
     cfg.log_retention_days = _coerce(int, general.get("log_retention_days", cfg.log_retention_days), "general.log_retention_days")
 
     cfg.memory_dir = general.get("memory_dir", cfg.memory_dir)
+    if "monthly_dir" in general:
+        cfg.monthly_dir = str(general.get("monthly_dir") or cfg.monthly_dir)
 
     notifications = data.get("notifications", {})
     cfg.notify_on_failure = bool(notifications.get("on_failure", cfg.notify_on_failure))
@@ -580,6 +606,27 @@ def load_config(path: str | None = None) -> Config:
                 stacklevel=2,
             )
             cfg.screenpipe.enabled = False
+
+    effort = data.get("effort", {})
+    if isinstance(effort, dict):
+        if "enabled" in effort:
+            cfg.effort.enabled = bool(effort.get("enabled"))
+        if "project_roots" in effort:
+            roots = effort.get("project_roots")
+            if isinstance(roots, list):
+                cfg.effort.project_roots = [str(x) for x in roots]
+            elif roots is None:
+                cfg.effort.project_roots = []
+        if "private_categories" in effort:
+            cats = effort.get("private_categories")
+            if isinstance(cats, list):
+                cfg.effort.private_categories = [str(x) for x in cats]
+        if "min_display_minutes" in effort and effort.get("min_display_minutes") is not None:
+            cfg.effort.min_display_minutes = _coerce(
+                float,
+                effort.get("min_display_minutes"),
+                "effort.min_display_minutes",
+            )
 
     handoff = data.get("handoff", {})
     if isinstance(handoff, dict):
