@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, tzinfo
 from math import isfinite
+from typing import Any
 
 from .classifier import ClassifiedEvent
 from .focus import FOCUS_MIN_MINUTES, InputStats
@@ -232,6 +233,13 @@ def render_change_table(today: Mapping, prev: Mapping | None) -> str:
     """前日との差を欠損値を補わずに表示する。"""
     if prev is None:
         return ""
+    # §E6: 前日が薄い日は表を出さない
+    prev_total = _nested_stat(prev, "total_minutes")
+    if prev_total is not None and prev_total < 60:
+        return (
+            f"※ 前日は計測が薄い（合計{_fmt_minutes(prev_total)}）ため、"
+            "前日比は表示しません。"
+        )
     metrics = (
         ("ツールエラー", ("ai", "tool_errors"), False),
         ("リトライ連鎖", ("ai", "retry_chains"), False),
@@ -269,12 +277,111 @@ def render_change_table(today: Mapping, prev: Mapping | None) -> str:
     )
 
 
+@dataclass(frozen=True)
+class SessionSpan:
+    """タイムライン突合用の AI セッション時間帯。"""
+
+    start: datetime
+    end: datetime
+    tool_class: str  # claude / codex / chatgpt / gemini / …
+    label: str  # redact 済み「project: title」
+
+
+def source_to_tool_class(source: str | None) -> str:
+    """AISession.source → Block.tool 相当のツールクラス。"""
+    s = (source or "").strip().lower()
+    if not s:
+        return "unknown"
+    if s in ("claude-code", "claude-web") or s.startswith("claude"):
+        return "claude"
+    if s == "codex" or s.startswith("codex"):
+        return "codex"
+    if "chatgpt" in s or s in ("openai-web",):
+        return "chatgpt"
+    if "gemini" in s:
+        return "gemini"
+    if "cursor" in s:
+        return "cursor"
+    if s.endswith("-web"):
+        return s[: -len("-web")] or "web"
+    return s
+
+
+def build_session_spans(
+    sessions: Sequence[Any],
+    *,
+    redactor: Callable[[str], str] | None = None,
+    title_max: int = 60,
+) -> list[SessionSpan]:
+    """AISession 群からタイムライン突合用スパンを作る。"""
+    out: list[SessionSpan] = []
+    for s in sessions:
+        start = getattr(s, "start", None)
+        end = getattr(s, "end", None)
+        if start is None or end is None:
+            continue
+        project = str(getattr(s, "project", None) or "—")
+        title = str(getattr(s, "title", None) or "")
+        raw = f"{project}: {title}" if title else project
+        if redactor is not None:
+            raw = redactor(raw)
+        if len(raw) > title_max:
+            raw = raw[: title_max - 3] + "..."
+        out.append(
+            SessionSpan(
+                start=start,
+                end=end,
+                tool_class=source_to_tool_class(getattr(s, "source", None)),
+                label=raw,
+            )
+        )
+    return out
+
+
+def _overlap_minutes(
+    a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime
+) -> float:
+    start = max(a_start, b_start)
+    end = min(a_end, b_end)
+    if end <= start:
+        return 0.0
+    return (end - start).total_seconds() / 60.0
+
+
+def _tool_class_matches(block_tool: str | None, span_tool: str) -> bool:
+    """Block.tool とセッション tool_class の適合。tool 空なら任意可。"""
+    if not block_tool or not str(block_tool).strip():
+        return True
+    return str(block_tool).strip().lower() == span_tool.strip().lower()
+
+
+def _best_session_label(
+    block: Block,
+    spans: Sequence[SessionSpan],
+) -> str | None:
+    """AI ブロックに重なる最良スパンの label。無ければ None。"""
+    if not spans or not block.ai:
+        return None
+    thr = min(2.0, float(block.minutes) * 0.5)
+    best: tuple[float, str] | None = None
+    for sp in spans:
+        if not _tool_class_matches(block.tool, sp.tool_class):
+            continue
+        ov = _overlap_minutes(block.start, block.end, sp.start, sp.end)
+        if ov < thr:
+            continue
+        if best is None or ov > best[0]:
+            best = (ov, sp.label)
+    return best[1] if best else None
+
+
 def render_markdown(
     summary: DailySummary,
     tz: tzinfo,
     min_block_minutes: float = 3.0,
     max_timeline_rows: int = 60,
     input_stats: InputStats | None = None,
+    session_spans: Sequence[SessionSpan] | None = None,
 ) -> str:
     """デイリーノートに埋め込むアクティビティログのMarkdownを生成する。"""
     lines: list[str] = []
@@ -347,9 +454,10 @@ def render_markdown(
             )
         lines.append("")
 
-    # タイムライン（主要ブロックのみ）— 件数は実配列から決定論的に算出
+    # タイムライン（主要ブロック + 細切れ1時間バケット）— 件数は実配列から決定論
     total_blocks = len(summary.blocks)
     eligible = [b for b in summary.blocks if b.minutes >= min_block_minutes]
+    under_blocks = [b for b in summary.blocks if b.minutes < min_block_minutes]
     eligible_blocks = len(eligible)
     min_label = (
         f"{int(min_block_minutes)}分"
@@ -370,7 +478,37 @@ def render_markdown(
         rows.sort(key=lambda b: b.start)
         overflow_omitted = eligible_blocks - max_timeline_rows
     shown_blocks = len(rows)
-    if rows or under_lines:
+
+    # §A1: 細切れを1時間バケット行として時刻順にマージ
+    frag_rows = _fragment_bucket_rows(under_blocks, tz=tz)
+    # eligible 行は max_timeline_rows のみ。細切れは落とさない
+    table_entries: list[tuple[datetime, str, float]] = []
+    # (sort_key, markdown_row, minutes)
+    spans = list(session_spans or ())
+    for b in rows:
+        title = b.titles[0] if b.titles else ""
+        if len(title) > 60:
+            title = title[:57] + "..."
+        # §B1: AI ブロックのみセッション突合（非AI・細切れは不変）
+        if b.ai:
+            matched = _best_session_label(b, spans)
+            if matched is not None:
+                title = matched
+            else:
+                title = f"{title}（ログなし）" if title else "（ログなし）"
+        md = (
+            f"| {_fmt_time(b.start, tz)}-{_fmt_time(b.end, tz)} "
+            f"| {_fmt_minutes(b.minutes)} "
+            f"| {_markdown_table_cell(b.category)} "
+            f"| {_markdown_table_cell(b.app)} "
+            f"| {_markdown_table_cell(title)} |"
+        )
+        table_entries.append((b.start.astimezone(tz), md, float(b.minutes)))
+    for sort_key, md, mins in frag_rows:
+        table_entries.append((sort_key, md, mins))
+    table_entries.sort(key=lambda x: x[0])
+
+    if table_entries or under_lines:
         lines.append("### タイムライン")
         lines.append("")
         if rows:
@@ -382,21 +520,72 @@ def render_markdown(
                 f"長時間の上位{shown_blocks}件を時刻順に表示し、"
                 f"対象内の{overflow_omitted}件を省略しています。"
             )
-        if rows:
+        if table_entries:
             lines.append("")
             lines.append("| 時刻 | 時間 | カテゴリ | アプリ | 内容 |")
             lines.append("| --- | ---: | --- | --- | --- |")
-            for b in rows:
-                title = b.titles[0] if b.titles else ""
-                if len(title) > 60:
-                    title = title[:57] + "..."
-                lines.append(
-                    f"| {_fmt_time(b.start, tz)}-{_fmt_time(b.end, tz)} "
-                    f"| {_fmt_minutes(b.minutes)} "
-                    f"| {_markdown_table_cell(b.category)} "
-                    f"| {_markdown_table_cell(b.app)} "
-                    f"| {_markdown_table_cell(title)} |"
-                )
+            table_sum = 0.0
+            for _sk, md, mins in table_entries:
+                lines.append(md)
+                table_sum += mins
             lines.append("")
+            # §A2: 被覆率
+            if summary.total_minutes > 0:
+                pct = int(round(table_sum / summary.total_minutes * 100))
+                if abs(table_sum - summary.total_minutes) > 1.0 and pct == 100:
+                    lines.append(
+                        f"この表は合計 {_fmt_minutes(summary.total_minutes)} の "
+                        f"{pct}%（表計 {_fmt_minutes(table_sum)}）を説明しています。"
+                    )
+                else:
+                    lines.append(
+                        f"この表は合計 {_fmt_minutes(summary.total_minutes)} の "
+                        f"{pct}% を説明しています。"
+                    )
 
     return "\n".join(lines)
+
+
+def _fragment_bucket_rows(
+    under: list[Block],
+    *,
+    tz: tzinfo,
+) -> list[tuple[datetime, str, float]]:
+    """細切れブロックを1時間バケットの表行へ。戻り値: (sort_key, md行, 分数)。"""
+    if not under:
+        return []
+    # hour_key -> (minutes, count, category minutes)
+    buckets: dict[tuple[date, int], dict] = {}
+    for block in under:
+        local = block.start.astimezone(tz)
+        key = (local.date(), local.hour)
+        bucket = buckets.setdefault(
+            key, {"minutes": 0.0, "count": 0, "cats": defaultdict(float)}
+        )
+        bucket["minutes"] += float(block.minutes)
+        bucket["count"] += 1
+        bucket["cats"][block.category] += float(block.minutes)
+
+    out: list[tuple[datetime, str, float]] = []
+    for (d, hour), data in sorted(buckets.items()):
+        start = datetime(d.year, d.month, d.day, hour, 0, tzinfo=tz)
+        end_label = f"{hour:02d}:59"
+        start_label = f"{hour:02d}:00"
+        cats_sorted = sorted(
+            data["cats"].items(), key=lambda x: (-x[1], x[0])
+        )
+        top = cats_sorted[:3]
+        bits = [
+            f"{cat} {_fmt_under_threshold_minutes(mins)}"
+            for cat, mins in top
+        ]
+        if len(cats_sorted) > 3:
+            bits.append("ほか")
+        content = " / ".join(bits) + f"（{data['count']}件）"
+        md = (
+            f"| {start_label}-{end_label} "
+            f"| {_fmt_minutes(data['minutes'])} "
+            f"| 細切れ | — | {_markdown_table_cell(content)} |"
+        )
+        out.append((start, md, float(data["minutes"])))
+    return out

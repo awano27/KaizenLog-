@@ -68,10 +68,10 @@ KaizenLog が決定論的に組み立てます。
       "fact_ids": ["F2"],
       "trigger": "朝一のメール確認の後",
       "action": "15分以内に始める行動",
-      "pass": "context_switches <= 40",
-      "fail": "41回以上",
+      "pass": "context_switches_per_hour <= 65",
+      "fail": "66以上",
       "mechanism": "切り替え回数を減らすと集中が途切れにくいと考える",
-      "falsifier": "context_switches が前日より増え続けた場合"
+      "falsifier": "context_switches_per_hour が前日より増え続けた場合"
     }
   ],
   "ai_review": [
@@ -98,9 +98,11 @@ KaizenLog が決定論的に組み立てます。
 - `trigger` は必須。実行意図（if-then）の合図。当日ログや Today's Focus に実在する
   行動・時刻をアンカーにする（例: 「朝一のメール確認の後」）。見つからなければ
   「朝いちばんに」等の汎用でよい。改行禁止・短い文（目安15字）
-- `pass` は**必ず**機械構文 `指標 演算子 数値`（例: `context_switches <= 40`）。
+- `pass` は**必ず**機械構文 `指標 演算子 数値`（例: `context_switches_per_hour <= 65`）。
   自由文 PASS は契約違反（自動判定不能のため保存しない）。翌晩に自動判定される
   `当日使用可能なPASS指標`だけを使い、そこで測れない行動は提案しない
+- 同じ行動を測れる指標が複数あるときはレート指標（`*_per_hour` / `*_per_session`）を選ぶ。
+  生カウントは、稼働量が変わっても意味が保たれる場合だけ使う
 
 {{KAIZENLOG_PASS_METRIC_CONTRACT}}
 - PASS 数値は推奨帯 F10 を基準に決める。根拠なく大きな削減目標を設定しない

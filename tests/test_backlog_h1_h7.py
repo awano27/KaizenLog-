@@ -199,7 +199,7 @@ def test_cost_uncosted_and_markdown_stats_f5():
     md = render_aiwork_markdown(
         [s_known, s_unknown], ZoneInfo("UTC"), retry_chain_count=0
     )
-    assert "推定コスト: $3.00" in md
+    assert "推定コスト(下限): $3.00" in md
     assert "対象外 5,000 tok" in md
 
     stats = build_stats(date(2026, 7, 20), _summary(), [s_known, s_unknown])

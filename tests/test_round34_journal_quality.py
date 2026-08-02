@@ -165,16 +165,14 @@ def test_b1_action_wording_and_pass_separation_byte_safe():
     ]
     section = render_actions_section(entries, day, None)
     assert section is not None
-    assert "実行済みPASS 0件" in section
-    assert "未実行のままPASS到達" in section
-    assert "チェックなしで指標が目標値に達した提案" in section
-    assert "指標は達成済み（習慣化するならチェック）" in section
-    assert "KZN-20260728-001" in section
-    # PASS 達成済みは小見出し下、通常未完了と分離
-    idx_h = section.index("指標は達成済み")
-    idx_pass = section.index("KZN-20260728-001")
-    idx_open = section.index("KZN-20260729-001")
-    assert idx_open < idx_h < idx_pass
+    # 第41弾 §A2: 内部用語を廃し平文。未実行PASS相当は「チェックなしで指標が…」
+    assert "実行済みPASS" not in section
+    assert "未実行のままPASS到達" not in section
+    assert "チェックなしで指標が目標に達しています" in section
+    # 第39弾 §D1: 達成済みは件数1行、未完了は1件
+    assert "指標は達成済み 1件" in section
+    assert "KZN-20260729-001" in section  # 未完了の最新
+    assert "kaizenlog today --all" in section
 
     # マーカー内 upsert で手書き不可侵（改行正規化後も本文保持）
     content = handwritten.decode("utf-8")
@@ -249,9 +247,9 @@ def test_b1_pass_achieved_overflow_counted():
     ]
     section = render_actions_section(entries, date(2026, 7, 30), None)
     assert section is not None
-    shown = sum(1 for e in entries if e.id in section)
-    assert shown == 3  # 表示は上限3件
-    assert "ほか達成済み 2件" in section  # 超過分が無言で消えない
+    # 第39弾: 達成済みは件数1行に畳む（個別IDは出さない）
+    assert "指標は達成済み 5件" in section
+    assert "kaizenlog today --all" in section
 
 
 # ---- §B2 追補: システムXML→実発話フォールバックのE2E(scan_sessions経由) ----

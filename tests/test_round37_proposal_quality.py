@@ -404,8 +404,12 @@ def test_b2_post_verdict_trajectory_confirmed_only():
         {"day": "2026-07-30", "ai": {"tool_errors": 639, "sessions": 1}},
         {"day": "2026-07-31", "ai": {"tool_errors": 48, "sessions": 1}},
     ]
+    # 第39弾: 達成済みは件数1行に畳むため、still_open 側の fail で推移を検証
+    confirmed_fail = MemoryEntry(
+        **{**confirmed.__dict__, "verdict": "fail", "verdict_value": 200.0}
+    )
     out = render_actions_section(
-        [confirmed], date(2026, 8, 1), stats_history=history
+        [confirmed_fail], date(2026, 8, 1), stats_history=history
     )
     assert out is not None
     assert "判定後の実測: 7/29 178 ❌ → 7/30 639 ❌ → 7/31 48 ✅" in out
@@ -417,7 +421,7 @@ def test_b2_post_verdict_trajectory_confirmed_only():
     assert out_p is not None
     assert "判定後の実測" not in out_p
 
-    out_no = render_actions_section([confirmed], date(2026, 8, 1))
+    out_no = render_actions_section([confirmed_fail], date(2026, 8, 1))
     assert out_no is not None
     assert "判定後の実測" not in out_no
 
@@ -511,6 +515,7 @@ def test_c2_reader_lines_and_no_id_pollution():
 
 def test_d1_repeat_prompt_line(tmp_path):
     from kaizenlog.cli import _format_repeat_prompt_line
+    from kaizenlog.promptledger import PromptLedgerEntry, append_prompt_ledger
 
     memory = tmp_path / "mem"
     memory.mkdir()
@@ -535,14 +540,28 @@ def test_d1_repeat_prompt_line(tmp_path):
         )
         for i in range(5)
     )
+    # skilled エントリを台帳に先置き → 表示行にその representative が出ない
+    append_prompt_ledger(
+        memory,
+        [
+            PromptLedgerEntry(
+                id="PRM-20260701-001",
+                representative="既にスキル化した依頼文XYZ",
+                count_total=9,
+                days_seen=4,
+                first_seen="2026-07-01",
+                last_seen="2026-07-10",
+                status="skilled",
+                skill_name="x",
+                marked_on="2026-07-10",
+            )
+        ],
+    )
     line = _format_repeat_prompt_line(prompts, memory, day)
     assert "台帳の最終観測" in line
     assert "push" in line
     assert "task-notification" not in line
-    assert "skilled" in line  # 案内文に skilled の説明は出る
-    # 表示対象が skilled ステータスで出ないこと: 行本体に PRM はあるが status=new のみ
-    ledger = load_prompt_ledger(memory)
-    assert any(e.status == "new" for e in ledger)
+    assert "既にスキル化した依頼文XYZ" not in line
 
     # 0件なら空
     assert _format_repeat_prompt_line([], memory, day) == ""

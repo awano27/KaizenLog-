@@ -11,12 +11,14 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 MEMORY_FILE = "suggestions.jsonl"
+# 終端 status（寿命管理）。現役分母・📌・判定対象から除外する。
+TERMINAL_STATUSES = frozenset({"unmeasurable", "graduated", "retired"})
 ID_PATTERN = re.compile(r"KZN-(\d{8})-(\d{3,})")  # 1000件目以降は4桁になるため下限のみ固定
 ACTION_SECTION = "### 明日試すこと"
 LEGACY_ACTION_SECTION = "### 明日の最小アクション"
@@ -44,7 +46,8 @@ class MemoryEntry:
     id: str
     date: str  # 提案日 YYYY-MM-DD
     action: str
-    status: str = "proposed"  # proposed | done | superseded | skipped
+    # proposed | done | superseded | skipped | unmeasurable | graduated | retired
+    status: str = "proposed"
     done_date: str | None = None
     # 翌日 generate による PASS 機械判定（旧 JSONL には無い → None）
     verdict: str | None = None  # pass | fail
@@ -52,6 +55,9 @@ class MemoryEntry:
     verdict_date: str | None = None  # 判定日 YYYY-MM-DD
     skip_reason: str | None = None  # status=skipped の理由（旧 JSONL は欠落 → None）
     verdict_stage: str = "confirmed"  # provisional | confirmed（旧 JSONL の既定は confirmed）
+    # 寿命管理（旧 JSONL は欠落 → None）。終了扱いは達成を意味しない。
+    closed_reason: str | None = None
+    closed_date: str | None = None
 
 
 def _memory_file(memory_dir: Path) -> Path:
@@ -99,6 +105,12 @@ def load_entries(memory_dir: Path) -> list[MemoryEntry]:
         verdict_stage = _normalize_verdict_stage(
             d.get("verdict_stage"), key_present="verdict_stage" in d
         )
+        closed_reason = d.get("closed_reason")
+        if closed_reason is not None:
+            closed_reason = str(closed_reason) or None
+        closed_date = d.get("closed_date")
+        if closed_date is not None:
+            closed_date = str(closed_date) or None
         entries[d["id"]] = MemoryEntry(
             id=d["id"],
             date=d.get("date", ""),
@@ -110,6 +122,8 @@ def load_entries(memory_dir: Path) -> list[MemoryEntry]:
             verdict_date=d.get("verdict_date"),
             skip_reason=skip_reason,
             verdict_stage=verdict_stage,
+            closed_reason=closed_reason,
+            closed_date=closed_date,
         )
     return sorted(entries.values(), key=lambda e: e.id)
 
@@ -244,22 +258,19 @@ def update_statuses_from_note(
         entry = by_id.get(id_match.group(0))
         if not entry:
             continue
+        # §B6: 終端 status のみ再開不可（CLI と揃える）。skipped/superseded は再開可
+        if entry.status in TERMINAL_STATUSES:
+            continue
         if mark in ("x", "X"):
             if entry.status == "done":
                 continue
             # done 化しても verdict 系は消さない（判定結果を失わない）
             updated.append(
-                MemoryEntry(
-                    id=entry.id,
-                    date=entry.date,
-                    action=entry.action,
+                replace(
+                    entry,
                     status="done",
                     done_date=done_date.isoformat(),
-                    verdict=entry.verdict,
-                    verdict_value=entry.verdict_value,
-                    verdict_date=entry.verdict_date,
                     skip_reason=None,
-                    verdict_stage=entry.verdict_stage,
                 )
             )
         elif mark == "-":
@@ -270,17 +281,10 @@ def update_statuses_from_note(
             if rm:
                 reason = rm.group(1).strip() or None
             updated.append(
-                MemoryEntry(
-                    id=entry.id,
-                    date=entry.date,
-                    action=entry.action,
+                replace(
+                    entry,
                     status="skipped",
-                    done_date=entry.done_date,
-                    verdict=entry.verdict,
-                    verdict_value=entry.verdict_value,
-                    verdict_date=entry.verdict_date,
                     skip_reason=reason,
-                    verdict_stage=entry.verdict_stage,
                 )
             )
     return updated
@@ -438,7 +442,8 @@ def compute_streaks(entries: list[MemoryEntry], today: date) -> Streaks:
         # 旧実装は end=max(days_sorted[-1], today) の全日走査のため 1 行で数秒化していた。
         if e.date > today_iso:
             continue
-        if e.status == "superseded":
+        # superseded と卒業3状態は連続を切らない（対象外）
+        if e.status == "superseded" or e.status in TERMINAL_STATUSES:
             continue
         by_day.setdefault(e.date, set()).add(e.status)
 
@@ -850,17 +855,11 @@ def resolve_action_id(
 
 def mark_entry_done(entry: MemoryEntry, done_date: date) -> MemoryEntry:
     """status=done / done_date を付けた差分エントリ（追記型後勝ち用）。"""
-    return MemoryEntry(
-        id=entry.id,
-        date=entry.date,
-        action=entry.action,
+    return replace(
+        entry,
         status="done",
         done_date=done_date.isoformat(),
-        verdict=entry.verdict,
-        verdict_value=entry.verdict_value,
-        verdict_date=entry.verdict_date,
         skip_reason=None,
-        verdict_stage=entry.verdict_stage,
     )
 
 
@@ -868,17 +867,10 @@ def mark_entry_skipped(
     entry: MemoryEntry, *, reason: str | None = None
 ) -> MemoryEntry:
     """status=skipped の差分エントリ。"""
-    return MemoryEntry(
-        id=entry.id,
-        date=entry.date,
-        action=entry.action,
+    return replace(
+        entry,
         status="skipped",
-        done_date=entry.done_date,
-        verdict=entry.verdict,
-        verdict_value=entry.verdict_value,
-        verdict_date=entry.verdict_date,
         skip_reason=(reason or "").strip() or None,
-        verdict_stage=entry.verdict_stage,
     )
 
 
@@ -887,7 +879,152 @@ def _execution_label(entry: MemoryEntry) -> str:
         return "実行済み"
     if entry.status == "skipped":
         return "スキップ"
+    if entry.status == "unmeasurable":
+        return "判定不能で終了"
+    if entry.status == "graduated":
+        return "指標継続"
+    if entry.status == "retired":
+        return "期限切れ"
     return "未実行"
+
+
+def graduate_entries(
+    entries: list[MemoryEntry],
+    today: date,
+    *,
+    stats_dir: Path,
+    known_categories: set[str] | frozenset[str] | None = None,
+) -> list[MemoryEntry]:
+    """寿命管理: unmeasurable / graduated / retired の差分エントリを返す。
+
+    評価順: unmeasurable → graduated → retired（同一実行で両方にしない）。
+    追記型・冪等（既に終端なら出さない）。
+
+    known_categories: category_minutes の偽0.0 卒業を防ぐ（backfill と同じ）。
+    測定可能日は提案日より後かつ **当日未満**（当日は集計途中のため含めない）。
+    """
+    from .experiments import metric_from_stats, target_met
+    from .stats import load_stats
+    from .verdict import parse_pass_condition
+
+    out: list[MemoryEntry] = []
+    # 測定可能日探索用に十分な stats を1回読む
+    stats_list = load_stats(stats_dir, days=45, end_day=today)
+    stats_by_day = {
+        str(s.get("day")): s
+        for s in stats_list
+        if isinstance(s, dict) and s.get("day")
+    }
+
+    for e in entries:
+        if e.status != "proposed":
+            continue
+        try:
+            prop = date.fromisoformat(e.date)
+        except ValueError:
+            continue
+        age = (today - prop).days
+        if age < 0:
+            continue
+        parsed = parse_pass_condition(e.action)
+
+        # 自由文PASS（機械構文なし）は3日で unmeasurable
+        if parsed is None:
+            if age >= 3:
+                out.append(
+                    replace(
+                        e,
+                        status="unmeasurable",
+                        closed_reason="no_machine_pass",
+                        closed_date=today.isoformat(),
+                    )
+                )
+            continue
+
+        metric, op, target = parsed
+        # graduated: 提案日より後・当日未満の測定可能日の直近2日が両方 PASS
+        measurable: list[tuple[str, bool]] = []
+        d = prop + timedelta(days=1)
+        while d < today:  # 当日を含めない（provisional 原則と揃える）
+            s = stats_by_day.get(d.isoformat())
+            if s is not None:
+                v = metric_from_stats(
+                    metric, s, known_categories=known_categories
+                )
+                if v is not None:
+                    measurable.append(
+                        (d.isoformat(), target_met(float(v), op, float(target)))
+                    )
+            d += timedelta(days=1)
+        if len(measurable) >= 2 and measurable[-1][1] and measurable[-2][1]:
+            out.append(
+                replace(
+                    e,
+                    status="graduated",
+                    closed_reason="metric_sustained",
+                    closed_date=today.isoformat(),
+                )
+            )
+            continue
+
+        # retired: 14日経過かつ graduated でない
+        if age >= 14:
+            out.append(
+                replace(
+                    e,
+                    status="retired",
+                    closed_reason="expired",
+                    closed_date=today.isoformat(),
+                )
+            )
+    return out
+
+
+def format_lifecycle_reader_notes(
+    graduated: list[MemoryEntry], *, today: date
+) -> list[str]:
+    """計測上の注意用の固定文面。closed_date == today のみ。達成断定禁止。"""
+    from .verdict import parse_pass_condition
+
+    today_s = today.isoformat()
+    notes: list[str] = []
+    retired_n = 0
+    for e in graduated:
+        if e.closed_date != today_s:
+            continue
+        if e.status == "unmeasurable":
+            notes.append(
+                f"{e.id} は自動判定できるPASS条件が無いまま3日経過したため"
+                f"終了扱いにしました。同じ狙いは判定可能な指標で出し直します。"
+            )
+        elif e.status == "graduated":
+            parsed = parse_pass_condition(e.action)
+            if parsed:
+                metric, op, target = parsed
+                cond = f"{metric} {op} {target:g}"
+            else:
+                cond = "条件"
+            notes.append(
+                f"{e.id} の PASS条件（{cond}）は測定できた直近2日とも"
+                f"満たされていました（実行の有無は問いません）。📌からは外します。"
+            )
+            # 実験昇格は副産物1行（自動起票しない）。--title 必須。
+            title = " ".join((e.action or "").split())[:30] or e.id
+            if parsed:
+                metric, op, target = parsed
+                notes.append(
+                    f"14日の実験として追跡するなら: kaizenlog experiment new "
+                    f'--title "{title}" --metric {metric} '
+                    f'--target "{op} {target:g}" --days 14'
+                )
+        elif e.status == "retired":
+            retired_n += 1
+    if retired_n:
+        notes.append(
+            f"提案期限切れで終了した提案が {retired_n} 件あります"
+            f"（終了扱いは達成を意味しません）。"
+        )
+    return notes
 
 
 def _verdict_block_line(entry: MemoryEntry) -> str:
@@ -989,14 +1126,16 @@ def summarize_for_prompt(
             "その指標の刻み幅を半分にするか、指標を変える。"
         )
 
-    # 直近の判定（最大3日・新しい順）
+    # 直近の判定（最大3日・新しい順）。終端 status は LLM プロンプトへ流さない
     verdict_lines: list[str] = []
     for delta in range(1, 4):
         d = (today - timedelta(days=delta)).isoformat()
         day_entries = [
             e
             for e in entries
-            if e.verdict in ("pass", "fail") and e.verdict_date == d
+            if e.verdict in ("pass", "fail")
+            and e.verdict_date == d
+            and e.status not in TERMINAL_STATUSES
         ]
         day_entries.sort(key=lambda e: e.id, reverse=True)
         for e in day_entries:
@@ -1032,6 +1171,12 @@ def summarize_for_prompt(
         if e.status == "skipped" and e.date >= d30
     ]
     skipped.sort(key=lambda e: e.id, reverse=True)
+    unmeasurable = [
+        e
+        for e in entries
+        if e.status == "unmeasurable" and e.date >= d30
+    ]
+    unmeasurable.sort(key=lambda e: e.id, reverse=True)
 
     if open_actions:
         lines.append(
@@ -1049,6 +1194,13 @@ def summarize_for_prompt(
         for e in skipped[:5]:
             reason = e.skip_reason or "（理由なし）"
             lines.append(f"- {e.id}: {e.action[:80]} ｜ 理由: {reason}")
+    if unmeasurable:
+        lines.append("## 判定不能で終了した提案（同種を繰り返さない）")
+        for e in unmeasurable[:5]:
+            lines.append(
+                f"- {e.id}: {e.action[:80]} ｜ 理由: "
+                f"{e.closed_reason or 'no_machine_pass'}"
+            )
     return "\n".join(lines)
 
 
@@ -1071,10 +1223,13 @@ def _denominator_shortfall_note(
     entry: MemoryEntry,
     stats_by_day: dict[str, Mapping[str, Any]],
 ) -> str | None:
-    """分母不足で判定できないとき「判定不成立」注記を返す。失敗アイコンは付けない。"""
+    """分母不足で判定できないとき「判定不成立」注記を返す。失敗アイコンは付けない。
+
+    分子キー欠落は分母不足と断定しない（注記を出さず従来表記へ落とす）。
+    注記は「分子キーが存在し、かつ分母が下限未満」のときだけ。
+    """
     if entry.verdict in ("pass", "fail"):
         return None
-    from .experiments import metric_from_stats
     from .verdict import measure_day_for_entry, parse_pass_condition
 
     parsed = parse_pass_condition(entry.action)
@@ -1089,29 +1244,44 @@ def _denominator_shortfall_note(
     day_stats = stats_by_day.get(measure_day.isoformat())
     if day_stats is None:
         return None
-    # stats はあるが metric が None → 分母下限未満
-    if metric_from_stats(metric, dict(day_stats)) is not None:
-        return None
     try:
         proposal_day = date.fromisoformat(entry.date)
         proposal_label = f"{proposal_day.month}/{proposal_day.day}"
     except ValueError:
         proposal_label = entry.date
-    reason = ""
+
     if metric.endswith("_per_hour"):
+        # 分子: context_switches キーが無いなら注記しない
+        if "context_switches" not in day_stats:
+            return None
+        if not isinstance(day_stats.get("context_switches"), (int, float)):
+            return None
         mins = day_stats.get("total_minutes")
-        if isinstance(mins, (int, float)):
-            reason = f"・稼働{float(mins):g}分のため分母不足"
-        else:
-            reason = "・分母不足"
-    else:
-        ai = day_stats.get("ai") if isinstance(day_stats.get("ai"), Mapping) else {}
-        sessions = ai.get("sessions") if isinstance(ai, Mapping) else None
-        if sessions is not None:
-            reason = f"・AIセッション{sessions}件のため分母不足"
-        else:
-            reason = "・分母不足"
-    return f"{proposal_label}提案・判定不成立{reason}"
+        if not isinstance(mins, (int, float)):
+            return None
+        if float(mins) >= 60:
+            return None  # 分母は足りている（別理由で None なら従来表記）
+        return (
+            f"{proposal_label}提案・判定不成立"
+            f"・稼働{float(mins):g}分のため分母不足"
+        )
+
+    # *_per_session: 分子 tool_errors キーが必要、分母 sessions が 0 以下
+    ai = day_stats.get("ai") if isinstance(day_stats.get("ai"), Mapping) else None
+    if not isinstance(ai, Mapping):
+        return None
+    if "tool_errors" not in ai or not isinstance(ai.get("tool_errors"), (int, float)):
+        return None
+    sessions = ai.get("sessions")
+    if not isinstance(sessions, (int, float)):
+        return None
+    if float(sessions) > 0:
+        return None
+    return (
+        f"{proposal_label}提案・判定不成立"
+        f"・AIセッション{int(sessions) if float(sessions) == int(sessions) else sessions}"
+        f"件のため分母不足"
+    )
 
 
 def _post_verdict_trajectory_lines(
@@ -1119,7 +1289,7 @@ def _post_verdict_trajectory_lines(
     target_day: date,
     stats_by_day: dict[str, Mapping[str, Any]],
 ) -> list[str]:
-    """confirmed 判定後の実測推移（最大5日）。全日測定不能なら空。"""
+    """confirmed 判定後の実測推移（最新側最大5日）。全日測定不能なら空。"""
     if entry.verdict not in ("pass", "fail"):
         return []
     if entry.verdict_stage != "confirmed":
@@ -1142,7 +1312,7 @@ def _post_verdict_trajectory_lines(
         return []
     points: list[tuple[date, float, bool]] = []
     d = start
-    while d <= end and len(points) < 5:
+    while d <= end:
         s = stats_by_day.get(d.isoformat())
         if s is not None:
             v = metric_from_stats(metric, dict(s))
@@ -1152,6 +1322,8 @@ def _post_verdict_trajectory_lines(
         d += timedelta(days=1)
     if not points:
         return []
+    # 最新側5日（古い5日で凍結しない）
+    points = points[-5:]
     chain = " → ".join(
         f"{p.month}/{p.day} {v:g} {'✅' if met else '❌'}"
         for p, v, met in points
@@ -1161,6 +1333,93 @@ def _post_verdict_trajectory_lines(
         f"  └ 判定後の実測: {chain}",
         f"     (測定できた{len(points)}日のうち{over}日が閾値超過。"
         f"実行の有無は問わない指標の挙動です)",
+    ]
+
+
+_PASS_SPLIT_RE = re.compile(r"[｜|]\s*PASS\s*:", re.IGNORECASE)
+_FAIL_SPLIT_RE = re.compile(r"[｜|]\s*FAIL\s*:", re.IGNORECASE)
+_OP_JA = {"<=": "以下", ">=": "以上", "<": "未満", ">": "超", "==": "", "=": ""}
+_ARROW_RE = re.compile(r"\s*→\s*")
+
+
+def humanize_action_body(action: str) -> str:
+    """台帳 action から行動文だけを取り、→ 前後に半角スペースを入れる。
+
+    ｜PASS: 以降は落とす。機械構文が無い自由文はそのまま返す。
+    """
+    text = (action or "").strip()
+    if not text:
+        return ""
+    m = _PASS_SPLIT_RE.search(text)
+    body = text[: m.start()] if m else text
+    body = body.strip(" ｜|\t")
+    return _ARROW_RE.sub(" → ", body)
+
+
+def _pass_segment(action: str) -> str | None:
+    m = _PASS_SPLIT_RE.search(action or "")
+    if not m:
+        return None
+    rest = action[m.end() :]
+    fm = _FAIL_SPLIT_RE.search(rest)
+    if fm:
+        rest = rest[: fm.start()]
+    return rest.strip(" ｜|\t")
+
+
+def _annotation_label(pass_segment: str) -> str | None:
+    """PASS 部の （…） / (...) 注記をラベルとして返す。"""
+    for open_ch, close_ch in (("（", "）"), ("(", ")")):
+        if close_ch not in pass_segment or open_ch not in pass_segment:
+            continue
+        end = pass_segment.rfind(close_ch)
+        start = pass_segment.rfind(open_ch, 0, end)
+        if start >= 0 and end > start:
+            label = pass_segment[start + 1 : end].strip()
+            if label:
+                return label
+    return None
+
+
+def format_effect_metric_clause(action: str) -> str | None:
+    """効果指標の本体（括弧タグなし）。機械構文が無ければ None。"""
+    from .experiments import metric_display_label
+    from .verdict import parse_pass_condition, strip_pass_annotation
+
+    seg = _pass_segment(action)
+    if seg is None:
+        return None
+    parsed = parse_pass_condition(action)
+    if parsed is not None:
+        metric, op, value = parsed
+        label = _annotation_label(seg) or metric_display_label(metric) or metric
+        op_ja = _OP_JA.get(op, op)
+        val_s = f"{value:g}"
+        if op_ja:
+            return f"{label} を {val_s} {op_ja} に"
+        return f"{label} を {val_s} に"
+    # 自由文 PASS（機械構文ではない）
+    core = strip_pass_annotation(seg).strip()
+    if not core:
+        return None
+    return core
+
+
+def format_action_display_lines(
+    entry_id: str,
+    action: str,
+    *,
+    mark: str = " ",
+    tag: str,
+) -> list[str]:
+    """📌 用の平文化行。PASS 無しは1行、有りは2行。"""
+    body = humanize_action_body(action)
+    effect = format_effect_metric_clause(action)
+    if effect is None:
+        return [f"- [{mark}] {entry_id}: {body}（{tag}）"]
+    return [
+        f"- [{mark}] {entry_id}: {body}",
+        f"    - 効果指標: {effect}（{tag}）",
     ]
 
 
@@ -1209,44 +1468,83 @@ def render_actions_section(
     elif streaks.broken_yesterday and streaks.best > 0:
         lines.append(f"今日から再スタート（過去最長 {streaks.best}日）")
     if stats.proposed > 0 or stats.skipped > 0:
-        skip_part = f" / スキップ {stats.skipped}件" if stats.skipped else ""
-        undone_part = (
-            f"（未実行のままPASS到達 {stats.undone_passed}件："
-            f"チェックなしで指標が目標値に達した提案）"
+        # §A2: 内部用語（消化/実行済みPASS/未実行のままPASS到達）を出さない平文
+        skip_sentence = (
+            f"スキップは{stats.skipped}件。" if stats.skipped else ""
+        )
+        undone_sentence = (
+            f"うち{stats.undone_passed}件はチェックなしで指標が目標に達しています"
+            f"（習慣化するなら下の「達成済み」からチェック）。"
             if stats.undone_passed
             else ""
         )
-        pass_part = f"実行済みPASS {stats.done_passed}件"
-        if stats.pass_rate is not None:
-            pass_part += f"（{_pct_label(stats.pass_rate)}）"
         # 低調期の保護: 悪い消化率%の常時提示が記録行動を止める副作用への対策
         if (
             stats.done_rate is not None
             and stats.done_rate < _DOSING_DONE_RATE
             and stats.proposed >= _DOSING_MIN_PROPOSED
         ):
-            lines.append(
-                f"今週の消化 {stats.done}件"
-                f"（提案 {stats.proposed}件）{skip_part}"
-                f" / {pass_part}{undone_part}"
+            line = (
+                f"今週は{stats.proposed}件提案し、"
+                f"チェック完了は{stats.done}件。"
             )
         else:
-            lines.append(
-                f"直近{stats.window_days}日: 消化率 {_pct_label(stats.done_rate)}"
-                f"（{stats.proposed}件中{stats.done}件）{skip_part}"
-                f" / {pass_part}{undone_part}"
+            rate = (
+                _pct_label(stats.done_rate)
+                if stats.done_rate is not None
+                else "—"
             )
+            line = (
+                f"直近{stats.window_days}日は{stats.proposed}件提案し、"
+                f"チェック完了は{stats.done}件（完了率 {rate}）。"
+            )
+        if skip_sentence:
+            line = f"{line}{skip_sentence}"
+        if undone_sentence:
+            line = f"{line}{undone_sentence}"
+        lines.append(line)
 
     stats_by_day = _stats_by_day(stats_history)
 
-    def _action_line(e: MemoryEntry, mark: str) -> str:
+    def _thin_coverage_for(e: MemoryEntry) -> bool:
+        """§A3 表示: 未判定・生カウントで測定日が薄いとき True。"""
+        if e.verdict in ("pass", "fail"):
+            return False
+        from .verdict import (
+            _is_raw_count_metric,
+            _prior_totals_from_history,
+            _thin_measurement_coverage,
+            measure_day_for_entry,
+            parse_pass_condition,
+        )
+
+        parsed = parse_pass_condition(e.action)
+        if parsed is None or not _is_raw_count_metric(parsed[0]):
+            return False
+        md = measure_day_for_entry(e)
+        if md is None:
+            return False
+        day_s = stats_by_day.get(md.isoformat())
+        if day_s is None:
+            return False
+        tm = day_s.get("total_minutes")
+        day_total = float(tm) if isinstance(tm, (int, float)) else None
+        hist = list(stats_by_day.values())
+        prior = _prior_totals_from_history(
+            [dict(h) for h in hist], md
+        )
+        return _thin_measurement_coverage(day_total, prior)
+
+    def _action_line(e: MemoryEntry, mark: str) -> list[str]:
+        """§A1: 機械構文を平文化した1〜2行。台帳 action 文字列は変更しない。"""
         from .verdict import format_action_verdict_tag
 
         shortfall = _denominator_shortfall_note(e, stats_by_day)
         if shortfall is not None:
-            return f"- [{mark}] {e.id}: {e.action}（{shortfall}）"
-        tag = format_action_verdict_tag(e)
-        return f"- [{mark}] {e.id}: {e.action}（{tag}）"
+            body = humanize_action_body(e.action)
+            return [f"- [{mark}] {e.id}: {body}（{shortfall}）"]
+        tag = format_action_verdict_tag(e, thin_coverage=_thin_coverage_for(e))
+        return format_action_display_lines(e.id, e.action, mark=mark, tag=tag)
 
     # 判定✅かつ未チェックは未完了リストから分離
     pass_achieved = [
@@ -1267,24 +1565,43 @@ def render_actions_section(
             and e.id not in checked_ids
         )
     ]
-    # 新しい提案から最大3件（決定論。優先度推定ではない）
-    shown = still_open[:TODAY_CANDIDATE_CAP]
+    # §D1: 未完了は最新1件のみ（件数算出は変えず表示上限だけ）
+    _OPEN_DISPLAY_CAP = 1
+    shown = still_open[:_OPEN_DISPLAY_CAP]
     for e in shown:
         mark = "x" if e.id in checked_ids else " "
-        lines.append(_action_line(e, mark))
+        lines.extend(_action_line(e, mark))
         lines.extend(_post_verdict_trajectory_lines(e, target_day, stats_by_day))
+    if shown:
+        # §D2: 完了導線
+        lines.append(f"完了したら: `kaizenlog done {shown[0].id}`")
 
     if pass_achieved:
-        lines.append("### ☑ 指標は達成済み（習慣化するならチェック）")
-        for e in pass_achieved[:TODAY_CANDIDATE_CAP]:
-            lines.append(_action_line(e, " "))
-            lines.extend(
-                _post_verdict_trajectory_lines(e, target_day, stats_by_day)
-            )
-        rest_achieved = max(0, len(pass_achieved) - TODAY_CANDIDATE_CAP)
-        if rest_achieved:
-            # 表示上限超過分を無言で落とさない（全件は today --all）
-            lines.append(f"ほか達成済み {rest_achieved}件")
+        # §D1: 達成済みは個別行を出さず件数1行（件数は常に残す）
+        lines.append(
+            f"☑ 指標は達成済み {len(pass_achieved)}件"
+            f"（習慣化するなら `kaizenlog today --all`）"
+        )
+        # §Z2: 推移に ❌ がある達成済みだけ再表示（圧縮は維持）
+        regressed: list[tuple[MemoryEntry, list[str]]] = []
+        for e in pass_achieved:
+            traj = _post_verdict_trajectory_lines(e, target_day, stats_by_day)
+            if any("❌" in ln for ln in traj):
+                regressed.append((e, traj))
+        # 新しい順（ID 降順）
+        regressed.sort(key=lambda pair: pair[0].id, reverse=True)
+        if regressed:
+            lines.append("⚠ 達成済みだが指標が戻っています")
+            shown_reg = regressed[:2]
+            for e, traj in shown_reg:
+                lines.extend(_action_line(e, " "))
+                lines.extend(traj)
+            extra = len(regressed) - len(shown_reg)
+            if extra > 0:
+                lines.append(
+                    f"ほか {extra}件も推移に未達日があります"
+                    f"（`kaizenlog today --all`）"
+                )
 
     rest_recent = max(0, len(still_open) - len(shown))
     if rest_recent or buckets.stale or buckets.older or not shown:

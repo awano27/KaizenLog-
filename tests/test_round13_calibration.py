@@ -251,5 +251,7 @@ def test_k4_streak_and_low_period_display():
         )
     md = render_actions_section(entries, today)
     assert md is not None
-    assert "今週の消化" in md or "消化率" in md
+    # 第41弾 §A2: 低調期は「今週はN件提案し…」平文（消化率は出さない）
+    assert "今週は" in md and "提案し" in md
+    assert "消化率" not in md
     assert "🔥" in md or "連続" in md or "再スタート" in md

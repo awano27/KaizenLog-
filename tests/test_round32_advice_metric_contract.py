@@ -63,7 +63,7 @@ def test_daily_prompt_marks_unmeasurable_metrics_as_forbidden():
         evidence=evidence,
     )
 
-    available = _metric_section(system_prompt, "## 当日使用可能なPASS指標")
+    available = _metric_section(system_prompt, "## 当日使用可能なPASS指標(条件付き・生カウント)")
     forbidden = _metric_section(system_prompt, "## 当日使用禁止のPASS指標")
     assert "context_switches" in available
     assert "category_minutes:開発" in available
@@ -83,7 +83,7 @@ def test_contract_repair_uses_the_same_available_metric_contract():
         ["actions[1] の pass が計測不能です"],
     )
 
-    available = _metric_section(prompt, "## 当日使用可能なPASS指標")
+    available = _metric_section(prompt, "## 当日使用可能なPASS指標(条件付き・生カウント)")
     forbidden = _metric_section(prompt, "## 当日使用禁止のPASS指標")
     assert "context_switches" in available
     assert "ai_tool_errors" not in available

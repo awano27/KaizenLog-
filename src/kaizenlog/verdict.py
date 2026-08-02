@@ -146,6 +146,64 @@ def looks_like_machine_pass(pass_value: str) -> bool:
     return bool(_MACHINE_PASS_RE.match(strip_pass_annotation(pass_value)))
 
 
+def _is_rate_metric(metric: str) -> bool:
+    return metric.endswith("_per_hour") or metric.endswith("_per_session")
+
+
+def _is_raw_count_metric(metric: str) -> bool:
+    if _is_rate_metric(metric):
+        return False
+    if metric.startswith("category_minutes:") or metric.startswith("site_minutes:"):
+        return False
+    return True
+
+
+def _thin_measurement_coverage(
+    day_total: float | None,
+    prior_totals: list[float],
+    *,
+    min_history: int = 3,
+) -> bool:
+    """対象日 total が直近中央値の50%未満なら True（判定不成立ゲート）。
+
+    履歴が min_history 未満ならゲートを適用しない（fail-closed で従来どおり）。
+    """
+    from statistics import median
+
+    if day_total is None:
+        return False
+    if len(prior_totals) < min_history:
+        return False
+    med = float(median(prior_totals))
+    if med <= 0:
+        return False
+    return float(day_total) < med * 0.5
+
+
+def _prior_totals_from_history(
+    history: list[dict] | None,
+    measure_day: date,
+    *,
+    window_days: int = 7,
+) -> list[float]:
+    """対象日を含まない直近 window_days の total_minutes 列。"""
+    if not history:
+        return []
+    start = (measure_day - timedelta(days=window_days)).isoformat()
+    end = (measure_day - timedelta(days=1)).isoformat()
+    out: list[float] = []
+    for s in history:
+        if not isinstance(s, dict):
+            continue
+        day_s = s.get("day")
+        if not isinstance(day_s, str) or not (start <= day_s <= end):
+            continue
+        tm = s.get("total_minutes")
+        if isinstance(tm, (int, float)):
+            out.append(float(tm))
+    return out
+
+
 def judge_entries(
     entries: list[MemoryEntry],
     proposal_day: date,
@@ -157,6 +215,7 @@ def judge_entries(
     known_categories: set[str] | frozenset[str] | None = None,
     *,
     today: date | None = None,
+    history_stats: list[dict] | None = None,
 ) -> list[MemoryEntry]:
     """提案日のエントリを判定し、差分 MemoryEntry だけを返す。
 
@@ -165,10 +224,14 @@ def judge_entries(
 
     today を渡した場合、測定日当日は provisional、翌日以降は confirmed。
     省略時は既存呼び出しの後方互換として confirmed。
+
+    history_stats: 計測カバレッジゲート用の過去 stats（対象日は含めない想定）。
+    生カウントは直近7日中央値の50%未満なら判定不成立（verdict を書かない）。
     """
     proposal = proposal_day.isoformat()
     judged = judged_day.isoformat()
     out: list[MemoryEntry] = []
+    prior_totals = _prior_totals_from_history(history_stats, judged_day)
     for entry in entries:
         if entry.date != proposal:
             continue
@@ -179,6 +242,10 @@ def judge_entries(
         if parsed is None:
             continue
         metric, op, target_value = parsed
+        # §A3: 生カウント × 計測が薄い日 → 判定不成立（既存 verdict は触らない）
+        if _is_raw_count_metric(metric) and entry.verdict not in ("pass", "fail"):
+            if _thin_measurement_coverage(summary.total_minutes, prior_totals):
+                continue
         value = compute_metric(
             metric,
             summary,
@@ -385,6 +452,26 @@ def backfill_verdicts(
         if stats is None:
             result.skipped_no_stats += 1
             continue
+        # §A3: 既に verdict を持つ行にはゲートを掛けない。未判定の生カウントのみ。
+        if (
+            _is_raw_count_metric(metric)
+            and entry.verdict not in ("pass", "fail")
+        ):
+            day_total = stats.get("total_minutes")
+            day_total_f = (
+                float(day_total) if isinstance(day_total, (int, float)) else None
+            )
+            prior: list[float] = []
+            for i in range(1, 8):
+                ps = load_day(measure_day - timedelta(days=i))
+                if ps is None:
+                    continue
+                tm = ps.get("total_minutes")
+                if isinstance(tm, (int, float)):
+                    prior.append(float(tm))
+            if _thin_measurement_coverage(day_total_f, prior):
+                result.skipped_none += 1
+                continue
         value = metric_from_stats(metric, stats, known_categories=known_categories)
         if value is None:
             # focus_*/input は input キー欠落、ai_avg_turns は復元不能日、未知カテゴリ
@@ -498,7 +585,11 @@ def format_verdict_suffix(entry: MemoryEntry) -> str:
     return f"｜判定: ❌ 実測{measured:g}（目標{t:g}・あと{dist:g}）"
 
 
-def format_action_verdict_tag(entry: MemoryEntry) -> str:
+def format_action_verdict_tag(
+    entry: MemoryEntry,
+    *,
+    thin_coverage: bool = False,
+) -> str:
     """📌 ACTIONS 行の括弧内タグを、stageを含めて決定論で返す。"""
     try:
         proposal_day = date.fromisoformat(entry.date)
@@ -506,6 +597,8 @@ def format_action_verdict_tag(entry: MemoryEntry) -> str:
     except ValueError:
         proposal_label = entry.date
     if entry.verdict not in ("pass", "fail"):
+        if thin_coverage:
+            return f"{proposal_label}提案・判定 — 計測が薄い日のため判定不成立"
         return f"{proposal_label}提案"
     val = f"{entry.verdict_value:g}" if entry.verdict_value is not None else "?"
     if entry.verdict_stage == "provisional":

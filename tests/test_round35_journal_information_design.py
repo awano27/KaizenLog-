@@ -277,7 +277,10 @@ def test_a3_screen_tool_coverage_lists_all_positive_unlogged_tools() -> None:
     )
 
     assert "計測範囲: セッションログのある AI CLI / ブラウザ拡張のみが対象です。" in markdown
-    assert "claude 34.8分・openai 30分・gemini 29.9分 はログが無く" in markdown
+    assert "claude（ブラウザ/デスクトップ）" in markdown
+    assert "openai（ブラウザ/デスクトップ）" in markdown
+    assert "gemini（ブラウザ/デスクトップ）" in markdown
+    assert "はログが無く" in markdown
     assert "chatgpt 71.7分" not in markdown
     assert "%" not in markdown
 
@@ -301,7 +304,10 @@ def test_a3_screen_tool_minutes_accept_only_finite_nonnegative_mapping_values() 
     non_mapping_markdown = render_aiwork_markdown([_session("s2")], TZ, screen_tool_minutes=["bad"])
 
     assert stats["ai_screen_tool_minutes"] == {"safe": 12.5, "7": 1.2, "zero": 0.0}
-    assert "safe 12.5分・7 1.25分 はログが無く" in markdown
+    # 第39弾: _fmt_minutes 統一・1分未満除外（1.25→1m、12.5→12m）
+    assert "safe（ブラウザ/デスクトップ）" in markdown
+    assert "はログが無く" in markdown
+    assert "nan" not in markdown
     assert "nan" not in markdown and "inf" not in markdown and "list" not in markdown
     assert "画面計測のAI作業のうち" not in non_mapping_markdown
 
@@ -381,10 +387,13 @@ def test_b1_friction_worst_is_redacted_and_precedes_the_session_table() -> None:
 
     lines = markdown.splitlines()
     warning_index = next(i for i, line in enumerate(lines) if line.startswith("⚠ 本日の摩擦ワースト:"))
-    table_index = lines.index("| 時刻 | プロジェクト | 内容 | 往復 | ツール | エラー | 中断 | 変更 |")
+    table_index = lines.index("| 開始-最終 | プロジェクト | 内容 | 往復 | ツール | エラー | 中断 | 変更 |")
     assert warning_index < table_index
     assert lines[warning_index] == "⚠ 本日の摩擦ワースト: [REDACTED]\\|project ([REDACTED]\\|cli)「[REDACTED]\\|request」"
-    assert lines[warning_index + 1] == "   — 摩擦14（ツールエラー4 ＋ 中断2×5 ＋ リトライ連鎖関与0×5）"
+    # 第39弾 §E5: ツール実行総数がある場合は率を併記
+    assert "摩擦14" in lines[warning_index + 1]
+    assert "ツールエラー4" in lines[warning_index + 1]
+    assert "中断2×5" in lines[warning_index + 1]
     assert lines[warning_index + 2] == "   ※ 摩擦はスコア順位であり、AIの良し悪しの判定ではありません。"
     assert "| first session |" in markdown
     assert "| last session |" in markdown
@@ -411,7 +420,7 @@ def test_b2_uncosted_majority_explains_tokens_and_stable_unknown_models() -> Non
 
     markdown = render_aiwork_markdown([registered, unknown], TZ)
 
-    assert "推定コスト: 換算なし — 出力300 tok のうち単価未登録が200 tok。" in markdown
+    assert "推定コスト(下限): 換算なし — 出力300 tok のうち単価未登録が200 tok。" in markdown
     assert "未登録モデル: alpha-unknown, zeta-unknown。" in markdown
     assert "kaizenlog.toml の [aiwork.pricing] に $/1Mtok を設定すると金額換算されます。" in markdown
 
@@ -419,8 +428,8 @@ def test_b2_uncosted_majority_explains_tokens_and_stable_unknown_models() -> Non
 def test_b2_all_registered_models_keep_existing_cost_display() -> None:
     markdown = render_aiwork_markdown([_session("registered")], TZ)
 
-    assert "推定コスト: $0.00（output tokens ベース概算、対象外 0 tok。input/cache 未計上）" in markdown
-    assert "推定コスト: 換算なし" not in markdown
+    assert "推定コスト(下限): $0.00（output tokens ベース概算、対象外 0 tok。input/cache 未計上）" in markdown
+    assert "推定コスト(下限): 換算なし" not in markdown
     assert "未登録モデル:" not in markdown
 
 
@@ -548,7 +557,7 @@ def test_b2_mixed_known_and_unknown_models_are_fully_uncosted() -> None:
     assert cost == 0.0
     assert uncosted == 200
     assert per_source["claude-code"]["uncosted_tokens"] == 200
-    assert "推定コスト: 換算なし — 出力200 tok のうち単価未登録が200 tok。" in markdown
+    assert "推定コスト(下限): 換算なし — 出力200 tok のうち単価未登録が200 tok。" in markdown
     assert "未登録モデル: unknown-model。" in markdown
 
 
@@ -569,8 +578,8 @@ def test_b2_all_registered_prices_stay_costed_even_when_rates_differ() -> None:
     assert cost > 0.0
     assert uncosted == 0
     assert per_source["claude-code"]["uncosted_tokens"] == 0
-    assert "推定コスト: $" in markdown
-    assert "推定コスト: 換算なし" not in markdown
+    assert "推定コスト(下限): $" in markdown
+    assert "推定コスト(下限): 換算なし" not in markdown
     assert "未登録モデル:" not in markdown
 
 
@@ -617,6 +626,7 @@ def test_c1_reports_under_threshold_blocks_in_jst_with_dynamic_threshold() -> No
 
 
 def test_c1_shows_explanation_without_timeline_rows_and_keeps_overflow_separate() -> None:
+    # 第40弾 §A1: eligible 0 でも細切れバケット行は表に載る。eligible 説明文は出ない。
     all_under = render_markdown(
         _summary(blocks=[_block(0, 2, "AI作業"), _block(1, 1, "開発")], total_minutes=3.0),
         ZoneInfo("Asia/Tokyo"),
@@ -624,7 +634,8 @@ def test_c1_shows_explanation_without_timeline_rows_and_keeps_overflow_separate(
     )
     assert "表示外: 4分未満のブロック 2件・計3分（合計 3m の100%）。" in all_under
     assert "4分以上の画面ブロックを時刻順に表示。" not in all_under
-    assert "| 時刻 | 時間 |" not in all_under
+    assert "| 時刻 | 時間 |" in all_under
+    assert "細切れ" in all_under
 
     capped = render_markdown(
         _summary(
@@ -702,7 +713,6 @@ def test_c2_cmd_generate_uses_only_calendar_previous_stats_and_hashes_written_se
     def fake_load_stats(*args, **kwargs):
         assert args[1:] == ()
         load_calls.append(dict(kwargs))
-        # 前日比用 days=2 と ACTIONS 用の広め履歴の両方を許容
         return [
             {"day": "2026-07-31", "total_minutes": 100.0, "by_category": {"AI作業": 80.0}, "ai": {"tool_errors": 1}},
             {"day": day.isoformat(), "total_minutes": 999.0, "by_category": {"AI作業": 999.0}, "ai": {"tool_errors": 999}},
@@ -725,9 +735,15 @@ def test_c2_cmd_generate_uses_only_calendar_previous_stats_and_hashes_written_se
 
     cli_mod.cmd_generate(cfg, day)
 
-    # 前日比は calendar previous のみ (days=2)。ACTIONS 用の広め履歴も追加呼び出し可。
-    assert load_calls[0] == {"days": 2, "end_day": day}
-    assert any(c.get("days") == 2 and c.get("end_day") == day for c in load_calls)
+    # 呼び出し列の完全一致: 前日比 days=2 + ACTIONS 用 _actions_stats_history
+    from kaizenlog.memory import ACTIONS_HANDOFF_DAYS
+
+    assert load_calls == [
+        {"days": 2, "end_day": day},
+        # §A3 判定カバレッジ用 prior stats
+        {"days": 8, "end_day": day - __import__("datetime").timedelta(days=1)},
+        {"days": ACTIONS_HANDOFF_DAYS + 14, "end_day": day + __import__("datetime").timedelta(days=1)},
+    ]
 
     stored = DailyNoteStore(cfg.daily_notes_path).read(day) or ""
     section = extract_section(stored, ACTIVITY_MARKER) or ""

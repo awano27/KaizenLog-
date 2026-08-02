@@ -15,6 +15,8 @@ from .collector import _is_browser_app
 
 _MIN_BASELINE_DAYS = 3
 _MIN_BASELINE_ACTIVE_MINUTES = 60.0
+# short_record / 計測欠測検知の共通閾値（aiwork へは呼び出し側から渡す）
+SHORT_RECORD_MIN_MINUTES = 120.0
 _SCREEN_TOOL_WEB_SOURCES = {
     "chatgpt": ("chatgpt-web",),
     "claude": ("claude-web",),
@@ -46,6 +48,8 @@ class AdviceEvidence:
     site_metrics_available: bool = False  # by_site 統計が有効（web watcher 経路）
     # 指標 → 挑戦性検査用ベースライン（直近履歴の中央値。無い指標は入口で検査しない）
     metric_baselines: Mapping[str, float] | None = None
+    # 当日 total_minutes（生カウントPASS入口ガード用。欠落は None）
+    total_minutes: float | None = None
 
 
 def _evidence(
@@ -65,6 +69,7 @@ def _evidence(
     structured_ai_metrics_available: bool = False,
     site_metrics_available: bool = False,
     metric_baselines: Mapping[str, float] | None = None,
+    total_minutes: float | None = None,
 ) -> AdviceEvidence:
     markdown = "\n".join(lines)
     return AdviceEvidence(
@@ -84,6 +89,7 @@ def _evidence(
         structured_ai_metrics_available=structured_ai_metrics_available,
         site_metrics_available=site_metrics_available,
         metric_baselines=metric_baselines,
+        total_minutes=total_minutes,
     )
 
 
@@ -534,10 +540,19 @@ def _build_reader_summary(
     category_stats_valid: bool,
     entertainment_minutes: float | None,
     previous_day_available: bool,
+    measurement_gap: tuple[int, int] | None = None,
 ) -> str:
     """「今日の結論」用の決定論文（最大3文）。数字は evidence 確定事実のみ。"""
     total_hm = _fmt_duration_ja(total_minutes)
     if short_record:
+        # §B2: 画面計測が薄いが AI CLI ログがある日は欠測疑いへ接続
+        if measurement_gap is not None:
+            n_sess, _err = measurement_gap
+            return (
+                f"本日の画面記録は合計{total_hm}のため評価できません。"
+                f"AI CLI ログには{n_sess}セッションの記録があり、"
+                "画面側の計測欠測が疑われます。"
+            )
         return (
             f"本日の記録は合計{total_hm}のため、"
             "1日の働き方を評価するにはデータ不足です。"
@@ -631,6 +646,7 @@ def build_advice_evidence(
     action_stats: Any | None = None,
     decay_events: Sequence[Any] | None = None,
     coach_entries: Sequence[Any] | None = None,
+    lifecycle_notes: Sequence[str] | None = None,
 ) -> AdviceEvidence:
     """LLMがログの意味を取り違えないための根拠コンテキストを作る。
 
@@ -992,13 +1008,16 @@ def build_advice_evidence(
     by_site_val_early = stats.get("by_site")
     site_metrics_available = _valid_number_mapping(by_site_val_early)
 
-    # F10: 推奨PASS帯（過去14日中央値×0.85〜0.95）。ガイドであり外れてよい
+    # F10: 推奨PASS帯（履歴窓の中央値×0.85〜0.95）。ラベルは実窓長と一致させる
+    _F10_HISTORY_WINDOW = 14  # 上限。短い history ではそのまま全件
     band_parts: list[str] = []
     history_list = list(history or [])
+    f10_window = history_list[-_F10_HISTORY_WINDOW:]
+    f10_window_days = len(f10_window)
     # 主要指標: context_switches / 上位カテゴリ / focus / ai_sessions
     def _hist_values(key_fn) -> list[float]:
         vals: list[float] = []
-        for h in history_list[-14:]:
+        for h in f10_window:
             if not isinstance(h, dict):
                 continue
             v = key_fn(h)
@@ -1013,7 +1032,7 @@ def build_advice_evidence(
             f"context_switches {m * 0.85:.0f}〜{m * 0.95:.0f}"
         )
     by_cat_hist: dict[str, list[float]] = {}
-    for h in history_list[-14:]:
+    for h in f10_window:
         if not isinstance(h, dict):
             continue
         bc = h.get("by_category")
@@ -1054,7 +1073,7 @@ def build_advice_evidence(
             band_parts.append(f"ai_cc_sessions {m * 0.85:.1f}〜{m * 0.95:.1f}")
         # ai_tool_errors_per_session: 入口ガードと同じ structured_ai ゲート
         err_per_sess_vals: list[float] = []
-        for h in history_list[-14:]:
+        for h in f10_window:
             if not isinstance(h, dict):
                 continue
             from .experiments import metric_from_stats as _mfs
@@ -1069,7 +1088,7 @@ def build_advice_evidence(
             )
     # context_switches_per_hour: cs と total_minutes が両方あり測定可能日3日以上
     cph_vals: list[float] = []
-    for h in history_list[-14:]:
+    for h in f10_window:
         if not isinstance(h, dict):
             continue
         from .experiments import metric_from_stats as _mfs
@@ -1083,14 +1102,14 @@ def build_advice_evidence(
             f"context_switches_per_hour {m * 0.85:.1f}〜{m * 0.95:.1f}"
         )
     # site 帯を将来足す場合も site_metrics_available を掛けること（現状は未使用）
-    if band_parts:
+    if band_parts and f10_window_days > 0:
         lines.append(
-            "- [F10] 推奨PASS帯（過去14日中央値×0.85〜0.95）: "
+            f"- [F10] 推奨PASS帯（過去{f10_window_days}日中央値×0.85〜0.95）: "
             + " / ".join(band_parts)
             + "。推奨帯はガイドであり、行動内容に合わせて外れてよい。"
         )
 
-    short_record = total_minutes < 120
+    short_record = total_minutes < SHORT_RECORD_MIN_MINUTES
     previous_day_available = _previous_day_available(stats, history)
     browser_sample_sufficient = bool(
         browser_category_minutes is not None and browser_category_minutes >= 30
@@ -1105,6 +1124,33 @@ def build_advice_evidence(
         except Exception:
             pass
 
+    # §Z3: 構造化 AI CLI セッション数（web を除く）。日誌行と F19 で同じ母数。
+    cli_session_count = 0
+    if ai_stats_valid:
+        sources = ai_telemetry.get("sources")
+        if isinstance(sources, Mapping) and sources:
+            for name, bucket in sources.items():
+                nkey = str(name)
+                if nkey.endswith("-web") or nkey == "web":
+                    continue
+                if isinstance(bucket, Mapping):
+                    n = bucket.get("sessions")
+                    if isinstance(n, (int, float)) and not isinstance(n, bool):
+                        cli_session_count += int(n)
+        else:
+            # sources 無しの旧 stats は sessions 合算を CLI とみなす
+            cli_session_count = int(telemetry_sessions)
+
+    # 画面計測が薄いのに AI CLI ログがある → 欠測疑い
+    measurement_gap: tuple[int, int] | None = None
+    if short_record and ai_stats_valid and cli_session_count >= 1:
+        measurement_gap = (int(cli_session_count), int(tool_errors))
+        lines.append(
+            f"- [F19] 画面計測は{_fmt(total_minutes)}分だが AI CLI ログには"
+            f"{cli_session_count}セッション・ツールエラー{tool_errors}回がある。"
+            "画面側の計測欠測の疑いがある。"
+        )
+
     reader_summary = _build_reader_summary(
         total_minutes=total_minutes,
         short_record=short_record,
@@ -1114,6 +1160,7 @@ def build_advice_evidence(
         category_stats_valid=category_stats_valid,
         entertainment_minutes=entertainment_minutes,
         previous_day_available=previous_day_available,
+        measurement_gap=measurement_gap,
     )
 
     reader_notes: list[str] = []
@@ -1170,8 +1217,9 @@ def build_advice_evidence(
             "AFKウォッチャーが無いため、合計時間は離席を含む可能性があります。"
         )
     if short_record:
+        thr = int(SHORT_RECORD_MIN_MINUTES) if float(SHORT_RECORD_MIN_MINUTES).is_integer() else SHORT_RECORD_MIN_MINUTES
         lines.append(
-            "- [L9] 当日の記録が120分未満で評価材料が少ない。問題を作らず、"
+            f"- [L9] 当日の記録が{thr}分未満で評価材料が少ない。問題を作らず、"
             "改善提案は維持行動を最大1件だけにする。"
         )
     if not previous_day_available:
@@ -1215,12 +1263,19 @@ def build_advice_evidence(
     except Exception:
         pass
 
+    # 寿命管理の読者向け1行（空なら足さない。第35弾の空許容と両立）
+    notes_out = list(reader_notes)
+    for note in lifecycle_notes or ():
+        text = str(note or "").strip()
+        if text:
+            notes_out.append(text)
+
     return _evidence(
         lines,
         ai_conversation_metrics_available=ai_stats_valid and telemetry_sessions > 0,
         entertainment_observed=entertainment_observed,
         reader_summary=reader_summary,
-        reader_notes=tuple(reader_notes),
+        reader_notes=tuple(notes_out),
         max_actions=max_actions,
         previous_day_available=previous_day_available,
         browser_sample_sufficient=browser_sample_sufficient,
@@ -1231,4 +1286,5 @@ def build_advice_evidence(
         structured_ai_metrics_available=structured_ai_metrics_available,
         site_metrics_available=site_metrics_available,
         metric_baselines=metric_baselines or None,
+        total_minutes=float(total_minutes) if isinstance(total_minutes, (int, float)) else None,
     )

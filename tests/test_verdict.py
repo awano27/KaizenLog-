@@ -280,12 +280,12 @@ def test_render_actions_section_window_check_verdict():
     ]
     assert render_actions_section(entries, target) is not None
     md = render_actions_section(entries, target)
-    assert "KZN-20260724-001" in md
-    assert "KZN-20260722-001" in md
-    assert "判定 ❌ 実測52" in md
-    # window: target-7 = 7/18 〜 target-1 = 7/24 → 7/18 は含む
-    assert "KZN-20260718-001" in md
+    # 第39弾: 未完了は最新1件のみ個別表示。残りは件数行
+    assert "KZN-20260724-001" in md  # 最新
+    assert "ほか直近7日の未完了" in md
     assert "KZN-20260720-001" not in md  # done 除外
+    # 折りたたまれたIDは件数側
+    assert "today --all" in md
 
     assert render_actions_section([], target) is None
 

@@ -43,8 +43,17 @@ Windows のPC作業を ActivityWatch + AI CLIセッションログから自動�
 | 33 | **申し送りROIメーター**(実装: Grok): handoff_ledger.jsonl(自然キー安定ID HND-*・first_injected)・コンテキスト家賃(概算tok×リポジトリ帰属セッション、不一致は「不明」)・注入前後30日の効果測定(fail-closed)・`handoff roi --suppress/--unsuppress/--promote`(承認=コマンド、global_target注入+以後除外)・weekly小節 |
 | 34 | **日誌可読性と計測正直化**(実装: Grok、実日誌2026-07-30レビュー起点): システム注入XML(`<task-notification>`等)のユーザー発話除外(scan/user_turns/guard/codexアダプタ全系統)・ループ税のエピソード間セッションデデュープ(浪費≦総出力の不変条件)・codex過大計上注記・`$-.--`→「金額不明」・アクション文言(「未実行のままPASS到達」説明付き・達成済み分離+超過件数表示)・内容列basename/フォールバック・短小セッション畳み・結論の時分表記統一 |
 
-テスト基準線: **pytest 704 passed**(`./.venv/Scripts/python.exe -m pytest -q`)。
-**注意: 第34弾はワーキングツリーのみ(未コミット)**。第27-33弾はコミット済み(〜aefb64e)。レビュー済み(全§✅、§B1の達成済み超過消失バグと§C1テスト穴2件はClaude直接修正済み)、コミットはユーザー指示待ち。**ワーキングツリーには別セッションの並行変更(PLAN.md・advisor.py・prompts/・stats.py・test_patterns.py・test_round32_advice_metric_contract.py)が混在** — 第34弾のコミット時は除外すること。
+| 35 | **日誌情報設計**(描画層一括): 前日比テーブル・reader_notes 空許容・履歴中央値ベースライン・ループ税/コスト表示正直化 |
+| 36 | **判定の2段階確定** `verdict_stage`(provisional/confirmed)・測定日ノート再同期・confirmed-only 学習消費 |
+| 37 | **提案の質と学習ループ再起動**: 稼働正規化PASS指標・2トラック学習・因果仮説 mechanism/falsifier・PRM日次1行・測定日固定(§Z1) |
+| 38 | **提案寿命管理と成果可視化**: TERMINAL_STATUSES(unmeasurable/graduated/retired)・digest・outcome_git |
+| 39 | **指標の行動性回復と欠測検知**: レート優先契約・生カウント入口/判定ゲート・計測欠測F19・📌1件表示 |
+| 40 | **第38弾レビュー残件**: digest redactor ガード撤去・git root 正規化・known_categories 伝搬・卒業日境界・変異テスト強化 |
+| 41 | **日誌可読性の抜本改善**(実日誌2026-08-02レビュー起点): アクション2行平文化(描画のみ・台帳契約不変・演算子和訳)・サマリ行平文化・タイムライン×AIセッション時間突合(ツール適合・（ログなし）フォールバック)・未計測分数の表記正規化・outcome_git subjects取得+stats永続化・日報ドラフトのプロジェクト事実化(業務=digests集約/成果=コミットsubjects/明日=未チェックKZN) |
+
+テスト基準線: **pytest 902 passed**（2026-08-02 第41弾適用後・実行結果を正とする。`./.venv/Scripts/python.exe -m pytest -q`）。
+**HEAD**: `99df32e`(第37弾までコミット)。第38〜41弾はワーキングツリー適用済み・未コミット。
+既知の残存(第41弾レビュー): 「🤖 AIコーチ」節の「明日の最小アクション」には台帳の機械構文(`｜PASS:…`)がそのまま残る(§A1の平文化は📌区間のみ)。memory.py の humanize_action_body を advise 側描画にも適用するのが次弾候補。タイムラインのツール適合は source→tool_class 写像方式(仕様の project 判定と現行 source 語彙では等価・不一致時は（ログなし）側に倒れる fail-safe)。
 既知の限界(第33弾): retry系レッスンの効果指標は AISession に retry_chains 属性が無いため `is_fragmented`(細切れセッション)をプロキシに使用(handoffledger.py:278-294 にコメント明示)。UserPrompt.project でのプロンプトフィルタ+detect_retry_chains による真のリポジトリ別リトライ計測が次弾候補。
 既知のグレーゾーン: guard の `_has_successful_tool_result` は content 文字列ヒューリスティック併用のため「"no errors found" のような成功文」を成功と判定せず streak がリセットされない(発火過剰側の偏り・実害小。既知課題「Codexツールエラー判定の文字列ヒューリスティック」と同系)。
 既知の潜在バグ(第29弾レビューで発見・別タスク起票済み): `retry_chain_excerpts`/`session_title_from_text` が40字切詰め後にredactするため、秘匿パターンが境界をまたぐと一部漏れる余地(既存コード由来・顕在化例なし)。
@@ -75,3 +84,5 @@ Windows のPC作業を ActivityWatch + AI CLIセッションログから自動�
 - ガード強化するとLLMが検証の緩い経路に流れる(自由文PASS事件)→ 入口の一本化で対処
 - 新機能のID/ラベルが既存と衝突(F11事件)・セレクタ定数をキーに使う(data-testid事件)
 - 検証系サブエージェントの副作用ファイル(リポジトリ直下 `Kaizen/` 等)は削除する
+- **既定configで機能全体が死ぬガード**(digest の `redactor is None` 早期 return)— 機能追加時は実configの既定値(`redact_patterns=[]` 等)で発火することを確認する
+- **レビュー中に別エージェントの実装がツリーへ書き込まれた**(プロトコル6違反の実例・第38弾レビュー時)— レビュー開始前に実装エージェントの停止を確認する

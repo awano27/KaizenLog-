@@ -72,11 +72,10 @@ def test_c5_pricing_gpt4o_mini_not_matched_as_gpt4o():
 def test_c5_usd_jpy_and_unknown_tokens():
     prompts = [_prompt(0), _prompt(5)]
     chain = RetryChain(project="repo", prompts=prompts)
-    # セッション無し → tokens不明
+    # セッション無し → tokens/金額とも不明 → 第39弾 §E3 で行ごと省略
     tax = compute_loop_tax([chain], [])
     line = format_loop_tax_line(tax)
-    assert "tokens不明" in line
-    assert "1エピソード" in line
+    assert line == ""
 
     sessions = [_session("s1", 0, 1_000_000, model="claude-sonnet-4")]
     tax2 = compute_loop_tax([chain], sessions)

@@ -101,6 +101,22 @@ _INPUT_PASS_METRICS = (
     "input_keypresses",
 )
 _PASS_METRIC_CONTRACT_MARKER = "{{KAIZENLOG_PASS_METRIC_CONTRACT}}"
+# metric_from_stats の context_switches_per_hour 分母下限と同じ
+_RAW_COUNT_MIN_ACTIVE_MINUTES = 60.0
+
+
+def _is_rate_metric(metric: str) -> bool:
+    """接尾辞でレート指標を判定（ハードコード列を増やさない）。"""
+    return metric.endswith("_per_hour") or metric.endswith("_per_session")
+
+
+def _is_raw_count_pass_metric(metric: str) -> bool:
+    """生カウントPASS（レートでも category/site でもない）。"""
+    if _is_rate_metric(metric):
+        return False
+    if metric.startswith("category_minutes:") or metric.startswith("site_minutes:"):
+        return False
+    return True
 
 
 def available_pass_metrics(evidence: AdviceEvidence) -> tuple[str, ...]:
@@ -124,8 +140,10 @@ def available_pass_metrics(evidence: AdviceEvidence) -> tuple[str, ...]:
 
 
 def render_pass_metric_contract(evidence: AdviceEvidence) -> str:
-    """初回生成と修復で共有する、当日のPASS指標可否契約。"""
+    """初回生成と修復で共有する、当日のPASS指標可否契約（推奨階層つき）。"""
     available = available_pass_metrics(evidence)
+    rate = [m for m in available if _is_rate_metric(m)]
+    raw = [m for m in available if not _is_rate_metric(m)]
     forbidden: list[str] = []
     if not evidence.structured_ai_metrics_available:
         forbidden.extend(_STRUCTURED_AI_PASS_METRICS)
@@ -133,11 +151,14 @@ def render_pass_metric_contract(evidence: AdviceEvidence) -> str:
         forbidden.extend(_INPUT_PASS_METRICS)
     if not evidence.site_metrics_available:
         forbidden.append("site_minutes:<ドメイン>")
-    available_text = " / ".join(available) or "なし"
+    rate_text = " / ".join(rate) or "なし"
+    raw_text = " / ".join(raw) or "なし"
     forbidden_text = " / ".join(forbidden) or "なし"
     return (
-        "## 当日使用可能なPASS指標\n"
-        f"{available_text}\n\n"
+        "## 当日使用可能なPASS指標(推奨・レート)\n"
+        f"{rate_text}\n\n"
+        "## 当日使用可能なPASS指標(条件付き・生カウント)\n"
+        f"{raw_text}\n\n"
         "## 当日使用禁止のPASS指標\n"
         f"{forbidden_text}\n"
     )
@@ -566,6 +587,42 @@ def evidence_gated_action_errors(
         errors.append(
             f"最小アクション{index}はブラウザ実測が短いためwatcher設定を優先できません"
         )
+    # §A2: 稼働薄い日の生カウントPASSを拒否し、レート指標へ誘導（修復経路へ乗せる）
+    from .verdict import parse_pass_condition
+
+    # action_text は JSON 層で f"{action} {pass_core} {fail_v}" の連結
+    pass_metric = None
+    if "PASS:" in action_text:
+        parsed = parse_pass_condition(action_text)
+        if parsed:
+            pass_metric = parsed[0]
+    if pass_metric is None:
+        m = re.search(r"(\S+)\s*(?:<=|>=|<|>|==?)\s*[\d.]+", action_text)
+        if m:
+            cand_m = m.group(1)
+            # is_known 相当: レート/生の接尾辞判定だけでもガード対象を決める
+            parsed = parse_pass_condition(f"x｜PASS: {m.group(0)}｜FAIL: y")
+            if parsed:
+                pass_metric = parsed[0]
+            elif _is_raw_count_pass_metric(cand_m) or _is_rate_metric(cand_m):
+                pass_metric = cand_m
+    if pass_metric and _is_raw_count_pass_metric(pass_metric):
+        total = getattr(evidence, "total_minutes", None)
+        if isinstance(total, (int, float)) and float(total) < _RAW_COUNT_MIN_ACTIVE_MINUTES:
+            rates = [m for m in available_pass_metrics(evidence) if _is_rate_metric(m)]
+            if rates:
+                cand = " / ".join(rates[:4])
+                errors.append(
+                    f"最小アクション{index}: 本日の記録は{float(total):g}分のため"
+                    f"生カウント指標「{pass_metric}」は翌日の稼働量に左右されます。"
+                    f"レート指標({cand})を使うこと"
+                )
+            else:
+                errors.append(
+                    f"最小アクション{index}: 本日の記録は{float(total):g}分のため"
+                    f"生カウント指標「{pass_metric}」は翌日の稼働量に左右されます。"
+                    f"稼働が十分な日の指標か別の測り方を使うこと"
+                )
     return errors
 
 

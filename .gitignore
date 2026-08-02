@@ -15,3 +15,5 @@ eval/cases/
 grok-desktop-experiment/
 # Codexの分離実装用Git worktree
 .worktrees/
+# Claude Code ローカル設定（絶対パス付き hook。git add . 誤コミット防止）
+.claude/settings.json

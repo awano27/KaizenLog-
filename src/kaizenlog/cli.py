@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import traceback
 from dataclasses import dataclass, field
@@ -262,21 +263,25 @@ def cmd_generate(
     input_stats = (compute_input_stats(input_raw, day_start=day_start, day_end=day_end)
                    if input_raw is not None else None)
 
-    section = render_markdown(summary, tz, min_block_minutes=cfg.min_block_minutes,
-                              input_stats=input_stats)
-
-    ai_sessions = []
-    day_prompts = []
-    day_retry_chains = []
-    retry_chain_count: int | None = None
-    pricing = cfg.aiwork.pricing or None
     from .privacy import make_redactor
+    from .report import build_session_spans
 
     # 依頼抜粋は日誌・stats に載るため privacy redact を適用（画面タイトル原文方針の例外）
     title_redactor = make_redactor(
         cfg.privacy.redact_patterns, cfg.privacy.replacement
     )
+    ai_sessions = []
+    day_prompts = []
+    day_retry_chains = []
+    retry_chain_count: int | None = None
+    pricing = cfg.aiwork.pricing or None
     internal_ai_n = 0
+    commit_stats = None
+    commit_omitted = 0
+    loop_tax = None
+    session_spans = []
+    outcome_git_payload: list[dict] | None = None
+
     if cfg.aiwork.enabled:
         adapters = available_adapters(cfg)
         ai_sessions, day_prompts, internal_ai_n = collect_ai_telemetry(
@@ -287,6 +292,70 @@ def cmd_generate(
         loop_tax = compute_loop_tax(
             day_retry_chains, ai_sessions, pricing=pricing
         )
+        # §B1: タイムライン突合用スパン（render 前に用意）
+        session_spans = build_session_spans(
+            ai_sessions, redactor=title_redactor
+        )
+        if getattr(cfg.aiwork, "outcome_git", True):
+            from .outcome_git import collect_commit_stats
+
+            repo_paths: list[str] = []
+            seen_repos: set[str] = set()
+            for s in ai_sessions:
+                rp = getattr(s, "repo_path", None)
+                if not isinstance(rp, str) or not rp.strip():
+                    continue
+                try:
+                    p = Path(rp).resolve()
+                except (OSError, RuntimeError):
+                    continue
+                if not p.is_dir():
+                    continue
+                key = str(p)
+                if key in seen_repos:
+                    continue
+                seen_repos.add(key)
+                repo_paths.append(key)
+            if repo_paths:
+                commit_stats, commit_omitted = collect_commit_stats(
+                    repo_paths,
+                    day,
+                    tz=tz,
+                    timeout=float(
+                        getattr(cfg.aiwork, "outcome_git_timeout_seconds", 5.0)
+                    ),
+                    max_repos=int(
+                        getattr(cfg.aiwork, "outcome_git_max_repos", 5)
+                    ),
+                )
+                # §C1: subjects を redact して stats 永続化用に整形
+                outcome_git_payload = []
+                for st in commit_stats or []:
+                    subjs = []
+                    for sub in list(getattr(st, "subjects", None) or [])[:3]:
+                        s = str(sub)
+                        if title_redactor is not None:
+                            s = title_redactor(s)
+                        subjs.append(s[:80])
+                    outcome_git_payload.append(
+                        {
+                            "repo_label": st.repo_label,
+                            "commits": int(st.commits),
+                            "insertions": int(st.insertions),
+                            "deletions": int(st.deletions),
+                            "subjects": subjs,
+                        }
+                    )
+
+    section = render_markdown(
+        summary,
+        tz,
+        min_block_minutes=cfg.min_block_minutes,
+        input_stats=input_stats,
+        session_spans=session_spans,
+    )
+
+    if cfg.aiwork.enabled:
         try:
             from .guard import count_live_breaker_fires
 
@@ -295,6 +364,17 @@ def cmd_generate(
             )
         except Exception:
             breaker_n = 0
+        from .advice_evidence import SHORT_RECORD_MIN_MINUTES
+
+        structured_cli_n = sum(
+            1
+            for s in ai_sessions
+            if not str(getattr(s, "source", "") or "").endswith("-web")
+        )
+        gap = (
+            summary.total_minutes < SHORT_RECORD_MIN_MINUTES
+            and structured_cli_n >= 1
+        )
         aiwork_md = render_aiwork_markdown(
             ai_sessions,
             tz,
@@ -308,6 +388,11 @@ def cmd_generate(
             loop_tax_summary=loop_tax,
             breaker_fires=breaker_n,
             screen_tool_minutes=summary.ai_tool_minutes,
+            commit_stats=commit_stats or None,
+            commit_repos_omitted=commit_omitted,
+            screen_total_minutes=summary.total_minutes,
+            measurement_gap=gap,
+            structured_cli_sessions=structured_cli_n,
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
@@ -324,19 +409,20 @@ def cmd_generate(
         alert = getattr(cfg.aiwork, "loop_tax_alert_usd", None)
         if (
             alert is not None
+            and loop_tax is not None
             and loop_tax.est_cost_usd is not None
             and loop_tax.est_cost_usd > float(alert)
         ):
-            _notify(
-                cfg,
-                "KaizenLog ループ税",
-                format_loop_tax_line(
-                    loop_tax, usd_jpy=getattr(cfg.aiwork, "usd_jpy", None)
-                ),
-                icon="Warning",
+            tax_msg = format_loop_tax_line(
+                loop_tax, usd_jpy=getattr(cfg.aiwork, "usd_jpy", None)
             )
-    else:
-        loop_tax = None
+            if tax_msg:
+                _notify(
+                    cfg,
+                    "KaizenLog ループ税",
+                    tax_msg,
+                    icon="Warning",
+                )
 
     today_stats = build_stats(
         day,
@@ -349,6 +435,7 @@ def cmd_generate(
         title_redactor=title_redactor if cfg.aiwork.enabled else None,
         internal_ai_sessions=internal_ai_n,
         loop_tax_summary=loop_tax,
+        outcome_git=outcome_git_payload,
     )
     previous_day = (day - timedelta(days=1)).isoformat()
     previous_stats = next(
@@ -403,6 +490,7 @@ def cmd_generate(
         goal_category=goal_cat_stat,
         internal_ai_sessions=internal_ai_n,
         loop_tax_summary=loop_tax,
+        outcome_git=outcome_git_payload,
     )
 
     # 実験の実測追記: running 全件 + adopted（deadline から30日以内のみ）
@@ -536,11 +624,13 @@ def cmd_generate(
     # A1: 前日提案の PASS 機械判定 → Memory と前日ノートへ書き戻し
     memory_entries = load_entries(cfg.memory_path)
     proposal_day = day - timedelta(days=1)
+    hist_for_gate = load_stats(cfg.stats_path, days=8, end_day=day - timedelta(days=1))
     judged = judge_entries(
         memory_entries, proposal_day, summary, ai_sessions, input_stats, day,
         retry_chains=retry_chain_count,
         known_categories=known_cats,
         today=datetime.now(ZoneInfo(cfg.timezone)).date(),
+        history_stats=hist_for_gate,
     )
     if skip_verdict_ids:
         judged = [e for e in judged if e.id not in skip_verdict_ids]
@@ -1082,6 +1172,26 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         append_entries(cfg.memory_path, status_updates)
         print("📗 完了アクションを記録しました: "
               + ", ".join(entry.id for entry in status_updates))
+    # §A2/A3: チェック同期後・evidence 前に寿命管理（卒業差分）
+    lifecycle_notes: list[str] = []
+    if not dry_run:
+        from .memory import format_lifecycle_reader_notes, graduate_entries
+
+        graduated = graduate_entries(
+            effective_entries,
+            day,
+            stats_dir=cfg.stats_path,
+            known_categories=known_category_names(cfg.rules),
+        )
+        if graduated:
+            append_entries(cfg.memory_path, graduated)
+            for g in graduated:
+                print(f"🎓 寿命管理: {g.id} → {g.status} ({g.closed_reason})")
+            effective_by_id.update({g.id: g for g in graduated})
+            effective_entries = sorted(
+                effective_by_id.values(), key=lambda entry: entry.id
+            )
+            lifecycle_notes = format_lifecycle_reader_notes(graduated, today=day)
     memory_ctx = summarize_for_prompt(effective_entries, day)
     action_stats = compute_action_stats(effective_entries, day)
     reflections = _extract_reflections(content)
@@ -1131,6 +1241,7 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         action_stats=action_stats,
         decay_events=decay_for_f17,
         coach_entries=coach_for_f18,
+        lifecycle_notes=lifecycle_notes,
     )
 
     redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
@@ -1211,6 +1322,79 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
     proposed_entries = [entry for entry in new_entries if entry.status == "proposed"]
     if proposed_entries:
         print("🆔 アクションID: " + ", ".join(e.id for e in proposed_entries))
+    # §B2: 冒頭 digest（失敗しても advise は成功扱い。日誌本体は触らない）
+    try:
+        from .digest import build_digest
+        from .vault import (
+            DIGEST_MARKER,
+            ACTIONS_MARKER as _AM,
+            ADVICE_MARKER as _ADM,
+            WEEKLY_CONTEXT_MARKER as _WCM,
+            GOAL_MARKER as _GM,
+            _start_tag,
+            atomic_write_text,
+        )
+
+        note_now = store.read(day) or ""
+        marker_candidates = (_ADM, _AM, _WCM, _GM, DIGEST_MARKER)
+        existing_markers = {
+            m for m in marker_candidates if _start_tag(m) in note_now
+        }
+        dig_stats = None
+        if source_status == "verified" and current_stats is not None:
+            dig_stats = dict(current_stats)
+            dig_stats["source_status"] = "verified"
+        goal_text = None
+        try:
+            from .goal import read_goal
+
+            g = read_goal(store.read(day), known_category_names(cfg.rules))
+            if g is not None and getattr(g, "text", None):
+                goal_text = str(g.text)
+        except Exception:
+            goal_text = None
+        digest_body = build_digest(
+            dig_stats,
+            list(effective_by_id.values()) + list(new_entries),
+            today=day,
+            tz=ZoneInfo(cfg.timezone),
+            redactor=redactor,
+            existing_markers=existing_markers,
+            goal_text=goal_text,
+            commit_stats=None,  # advise 経路では generate 時の commit を再取得しない
+        )
+        if digest_body:
+            store.write_section(
+                day, DIGEST_MARKER, digest_body, position="top"
+            )
+        else:
+            # None のときは既存 digest だけ削除（他区間・手書きは保持）
+            content = store.read(day)
+            if content is not None and _start_tag(DIGEST_MARKER) in content:
+                from .vault import _end_tag
+
+                start_tag = _start_tag(DIGEST_MARKER)
+                end_tag = _end_tag(DIGEST_MARKER)
+                s_idx = content.find(start_tag)
+                e_idx = content.find(end_tag)
+                if s_idx >= 0 and e_idx >= 0 and e_idx >= s_idx:
+                    # 区間削除 + start_tag 直前の連続改行を1つに正規化（空行増殖防止）
+                    before = content[:s_idx]
+                    after = content[e_idx + len(end_tag) :]
+                    # before 末尾の連続空行を1改行に
+                    if before.endswith("\r\n"):
+                        while before.endswith("\r\n\r\n"):
+                            before = before[:-2]
+                    else:
+                        while before.endswith("\n\n"):
+                            before = before[:-1]
+                    if after.startswith("\r\n"):
+                        after = after[2:]
+                    elif after.startswith("\n"):
+                        after = after[1:]
+                    atomic_write_text(store.path_for(day), before + after)
+    except Exception as dig_err:
+        print(f"⚠️  digest 書き込みをスキップ: {type(dig_err).__name__}", file=sys.stderr)
     # A2: ID 採番後の最新集合で翌日へ転記（dry_run ではここまで来ない）
     merged = {e.id: e for e in effective_entries}
     merged.update({e.id: e for e in new_entries})
@@ -1390,6 +1574,8 @@ def cmd_today(
 
 def cmd_skip(cfg: Config, action_id: str, reason: str | None = None) -> int:
     """アクションをスキップ（拒否）として記録する。消化率分母から外す。"""
+    from .memory import TERMINAL_STATUSES
+
     entries = load_entries(cfg.memory_path)
     resolved = resolve_action_id(action_id, entries)
     if resolved is None:
@@ -1401,6 +1587,9 @@ def cmd_skip(cfg: Config, action_id: str, reason: str | None = None) -> int:
             print(f"  {e.id}  {e.action[:60]}", file=sys.stderr)
         return 1
     entry = resolved
+    if entry.status in TERMINAL_STATUSES:
+        print(f"❌ 終了済みです（{entry.status}）: {entry.id}", file=sys.stderr)
+        return 1
     if entry.status == "skipped":
         print(f"ℹ️  既にスキップ済みです: {entry.id}")
         return 0
@@ -1416,6 +1605,8 @@ def cmd_skip(cfg: Config, action_id: str, reason: str | None = None) -> int:
 
 def cmd_done(cfg: Config, action_id: str, day: date) -> int:
     """ターミナルからアクションを消化する。"""
+    from .memory import TERMINAL_STATUSES
+
     entries = load_entries(cfg.memory_path)
     resolved = resolve_action_id(action_id, entries)
     if resolved is None:
@@ -1427,6 +1618,9 @@ def cmd_done(cfg: Config, action_id: str, day: date) -> int:
             print(f"  {e.id}  {e.action[:60]}", file=sys.stderr)
         return 1
     entry = resolved
+    if entry.status in TERMINAL_STATUSES:
+        print(f"❌ 終了済みです（{entry.status}）: {entry.id}", file=sys.stderr)
+        return 1
     if entry.status == "done":
         # 再 done で done_date を上書きしない（M2 測定基準日 = 最初の done_date+1 が正）
         done_label = entry.done_date or "?"
@@ -1517,18 +1711,52 @@ def _extract_reflections(content: str) -> str | None:
 NIPPOU_MARKER = "kaizenlog:nippou"
 
 
+def _open_kzn_for_nippou(cfg: Config, day: date, content: str) -> list[tuple[str, str]]:
+    """日報「明日の予定」用: 未チェック KZN 上位2件（平文化行動文）。"""
+    from .memory import (
+        ID_PATTERN,
+        humanize_action_body,
+        load_entries,
+        partition_open_actions,
+    )
+    from .vault import ACTIONS_MARKER
+
+    checked: set[str] = set()
+    actions_md = extract_section(content, ACTIONS_MARKER) or ""
+    for line in actions_md.splitlines():
+        if re.match(r"^\s*- \[x\]", line, re.IGNORECASE):
+            m = ID_PATTERN.search(line)
+            if m:
+                checked.add(m.group(0))
+    entries = load_entries(cfg.memory_path)
+    buckets = partition_open_actions(entries, day, recent_include_today=True)
+    open_list = [e for e in buckets.recent if e.id not in checked]
+    out: list[tuple[str, str]] = []
+    for e in open_list[:2]:
+        out.append((e.id, humanize_action_body(e.action)))
+    return out
+
+
 def cmd_report(cfg: Config, day: date, use_llm: bool, write: bool) -> None:
     tz = ZoneInfo(cfg.timezone)
     store = DailyNoteStore(cfg.daily_notes_path)
     content = store.read(day) or ""
     intent = _extract_intent(content)
+    open_kzn = _open_kzn_for_nippou(cfg, day, content)
 
     if use_llm:
         activity_md = extract_section(content, ACTIVITY_MARKER)
         if activity_md is None:
             raise SystemExit("Activity Log がありません。先に `kaizenlog generate` を実行してください。")
         redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
-        section = generate_nippou_llm(cfg.llm, activity_md, intent, redactor=redactor)
+        stats_list = load_stats(cfg.stats_path, days=1, end_day=day)
+        section = generate_nippou_llm(
+            cfg.llm,
+            activity_md,
+            intent,
+            redactor=redactor,
+            stats=stats_list[0] if stats_list else None,
+        )
     else:
         stats_list = load_stats(cfg.stats_path, days=1, end_day=day)
         if not stats_list:
@@ -1536,7 +1764,11 @@ def cmd_report(cfg: Config, day: date, use_llm: bool, write: bool) -> None:
                 f"{day} の統計がありません。先に `kaizenlog generate` を実行してください。"
             )
         section = generate_nippou_deterministic(
-            stats_list[0], tz, intent, min_block_minutes=cfg.min_block_minutes
+            stats_list[0],
+            tz,
+            intent,
+            min_block_minutes=cfg.min_block_minutes,
+            open_kzn_actions=open_kzn,
         )
 
     print(section)
@@ -1686,6 +1918,7 @@ def cmd_guard(cfg: Config, args: argparse.Namespace) -> int:
     print(
         format_guard_status(
             enabled=g.enabled,
+            notify=g.notify,
             retry_threshold=g.retry_threshold,
             tool_error_streak=g.tool_error_streak,
             cooldown_seconds=g.cooldown_seconds,

@@ -406,10 +406,11 @@ def test_x4_obsidian_section_max_three():
     md = render_actions_section(entries, today, note)
     assert md is not None
     checks = [ln for ln in md.splitlines() if ln.startswith("- [")]
-    assert len(checks) == TODAY_CANDIDATE_CAP
-    assert "- [x] KZN-20260725-004:" in md
-    assert "ほか直近7日の未完了 1件" in md
+    # 第39弾 §D1: 未完了は既定1件
+    assert len(checks) == 1
+    assert "ほか直近7日の未完了" in md
     assert "today --all" in md
+    assert "kaizenlog done" in md
 
 
 # ---- X5 Activity Log --------------------------------------------------------

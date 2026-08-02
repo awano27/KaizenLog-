@@ -40,18 +40,30 @@ INTENT = """## Tasks
 
 
 def test_deterministic_nippou_structure():
+    # 第41弾 §C2: プロジェクト事実中心。セッション総括行は digests から出す
     md = generate_nippou_deterministic(_stats(), TZ, INTENT)
     assert "## 📝 日報ドラフト" in md
     assert "【本日の業務】" in md and "【成果・進捗】" in md and "【明日の予定】" in md
     assert "collector.py" in md
     assert "スクレイパーのバグ修正 を完了" in md
     assert "READMEの更新" in md  # 未完タスク→明日の予定
-    assert "Claude Code" in md and "2セッション" in md
-    # sources ありなら複数ソース表記
+    assert "合計 4時間0分" in md
+    # digests があればプロジェクト行
     stats2 = _stats()
-    stats2["ai"]["sources"] = {"claude-code": {"sessions": 1}, "codex": {"sessions": 1}}
+    stats2["ai"]["session_digests"] = [
+        {
+            "project": "KaizenLog-",
+            "title": "日誌可読性を改善する長いタイトル",
+            "user_turns": 5,
+            "edits": 3,
+            "tools_total": 10,
+            "source": "claude-code",
+            "tests_run": False,
+        }
+    ]
     md2 = generate_nippou_deterministic(stats2, TZ, INTENT)
-    assert "Claude Code / Codex CLI" in md2
+    assert "KaizenLog-" in md2
+    assert "セッション1回" in md2
 
 
 def test_deterministic_nippou_excludes_entertainment_and_short():

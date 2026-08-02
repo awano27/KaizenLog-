@@ -116,6 +116,7 @@ class _SessionAccum:
     tests_run: bool = False
     ended_in_error: bool = False
     is_internal: bool = False
+    repo_path: str | None = None  # 初回 cwd のみ保持
 
     def add_token(self, ts: datetime, ot: int, day_start: datetime, day_end: datetime) -> None:
         if ts < day_start:
@@ -197,6 +198,7 @@ class _SessionAccum:
             title=self.title,
             first_prompt_len=self.first_prompt_len,
             edits=self.edits,
+            repo_path=self.repo_path,
             tests_run=self.tests_run,
             ended_in_error=self.ended_in_error,
             is_internal=self.is_internal,
@@ -295,6 +297,16 @@ class CodexAdapter:
                     a = acc_for(active_sid)
                     if project != "unknown":
                         a.project = project
+                    # 初回 cwd のみ repo_path に設定
+                    if a.repo_path is None:
+                        cwd = payload.get("cwd")
+                        if isinstance(cwd, str) and cwd.strip():
+                            try:
+                                cwd_p = Path(cwd).expanduser()
+                                if cwd_p.is_dir():
+                                    a.repo_path = str(cwd_p.resolve())
+                            except (OSError, RuntimeError):
+                                pass
                     continue
                 if top == "turn_context":
                     if isinstance(payload.get("model"), str) and payload["model"]:
@@ -304,6 +316,16 @@ class CodexAdapter:
                         project = _project_from_cwd(payload.get("cwd"))
                         if project != "unknown":
                             acc_for(active_sid).project = project
+                    a = acc_for(active_sid)
+                    if a.repo_path is None:
+                        cwd = payload.get("cwd")
+                        if isinstance(cwd, str) and cwd.strip():
+                            try:
+                                cwd_p = Path(cwd).expanduser()
+                                if cwd_p.is_dir():
+                                    a.repo_path = str(cwd_p.resolve())
+                            except (OSError, RuntimeError):
+                                pass
                     continue
                 if ts is None:
                     continue

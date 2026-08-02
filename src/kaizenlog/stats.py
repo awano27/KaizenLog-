@@ -57,6 +57,7 @@ def build_stats(
     goal_category: str | None = None,
     internal_ai_sessions: int = 0,
     loop_tax_summary: LoopTaxSummary | None = None,
+    outcome_git: list[dict] | None = None,
 ) -> dict:
     projects: dict[str, dict] = {}
     for s in cc_sessions:
@@ -247,6 +248,9 @@ def build_stats(
     # 判定・実験計測からの除外は本キー導入後も行わない（注記のみ。将来判断）。
     if afk_watcher_available is not None:
         stats["afk_watcher_available"] = bool(afk_watcher_available)
+    # §C1: コミット統計（subjects は呼び出し側で redact 済みを渡す）
+    if outcome_git is not None:
+        stats["outcome_git"] = list(outcome_git)
     # 今日の目標（redact 適用後の文言のみ保存。generate がノートから読む）
     if goal_text:
         stats["goal_text"] = str(goal_text)
@@ -270,6 +274,7 @@ def write_stats(
     goal_category: str | None = None,
     internal_ai_sessions: int = 0,
     loop_tax_summary: LoopTaxSummary | None = None,
+    outcome_git: list[dict] | None = None,
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
@@ -290,6 +295,7 @@ def write_stats(
                 goal_category=goal_category,
                 internal_ai_sessions=internal_ai_sessions,
                 loop_tax_summary=loop_tax_summary,
+                outcome_git=outcome_git,
             ),
             ensure_ascii=False,
             indent=1,

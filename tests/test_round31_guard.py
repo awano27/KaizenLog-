@@ -225,6 +225,99 @@ def test_c1_detection_boundaries(tmp_path: Path, monkeypatch, capsys):
     assert "hookSpecificOutput" not in out2
 
 
+def test_c1_settings_injection_suppresses_host_notification_by_default(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """設定注入（テスト経路）はOS通知を出さず、フックJSONだけ返す。"""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    sid = "notify-default-off"
+    st = load_state(sid)
+    st["effective_debounce"] = 0
+    save_state(sid, st)
+    settings = {
+        "enabled": True,
+        "debounce_seconds": 0,
+        "retry_threshold": 3,
+        "cooldown_seconds": 0,
+        "memory_dir": tmp_path / "mem",
+    }
+    payload = lambda: json.dumps(
+        {
+            "session_id": sid,
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "please handle the same request carefully",
+        }
+    )
+    with patch("kaizenlog.notify.notify") as toast:
+        for _ in range(3):
+            run_hook(payload(), settings=settings)
+    out = capsys.readouterr().out
+    assert "hookSpecificOutput" in out
+    toast.assert_not_called()
+
+
+def test_c1_settings_injection_can_explicitly_enable_host_notification(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """設定注入で notify=True を明示したときだけOS通知を許可する。"""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    sid = "notify-explicit-on"
+    st = load_state(sid)
+    st["effective_debounce"] = 0
+    save_state(sid, st)
+    settings = {
+        "enabled": True,
+        "notify": True,
+        "debounce_seconds": 0,
+        "retry_threshold": 3,
+        "cooldown_seconds": 0,
+        "memory_dir": tmp_path / "mem",
+    }
+    payload = lambda: json.dumps(
+        {
+            "session_id": sid,
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "please handle the same request carefully",
+        }
+    )
+    with patch("kaizenlog.notify.notify") as toast:
+        for _ in range(3):
+            run_hook(payload(), settings=settings)
+    capsys.readouterr()
+    toast.assert_called_once()
+
+
+def test_c1_config_notify_false_keeps_hook_context_without_host_notification(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """TOMLのnotify=falseは検知を残し、Windows通知だけを抑止する。"""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text(
+        f'[general]\nvault_dir = "{tmp_path.as_posix()}"\n'
+        "[guard]\nenabled = true\nnotify = false\n"
+        "debounce_seconds = 0\ncooldown_seconds = 0\n",
+        encoding="utf-8",
+    )
+    sid = "notify-config-off"
+    st = load_state(sid)
+    st["effective_debounce"] = 0
+    save_state(sid, st)
+    payload = lambda: json.dumps(
+        {
+            "session_id": sid,
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "please handle the same request carefully",
+        }
+    )
+    with patch("kaizenlog.notify.notify") as toast:
+        for _ in range(3):
+            run_hook(payload(), config_path=str(cfg_path))
+    out = capsys.readouterr().out
+    assert "hookSpecificOutput" in out
+    toast.assert_not_called()
+
+
 def test_c1_tool_error_streak(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
     settings = {

@@ -71,6 +71,7 @@ GOAL_MARKER = "kaizenlog:goal"  # 今日の作業目標（所有: goal コマン
 WEEKLY_CONTEXT_MARKER = "kaizenlog:weekly-context"  # 週次スコアカード（決定論）
 AGENT_CONTEXT_MARKER = "kaizenlog:agent-context"  # handoff が CLAUDE.md/AGENTS.md へ注入
 COACH_MARKER = "kaizenlog:coach"  # coach --apply が追記する調教区間
+DIGEST_MARKER = "kaizenlog:digest"  # 冒頭30秒サマリ（決定論・advise が所有）
 
 
 def _start_tag(marker: str) -> str:

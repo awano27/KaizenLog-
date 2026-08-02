@@ -92,7 +92,7 @@ def test_q1_title_redacted_in_markdown():
 def test_q1_session_titles_off_hides_column():
     s = _sess(title="should-not-appear")
     md = render_aiwork_markdown([s], TZ, session_titles=False)
-    header = next(ln for ln in md.splitlines() if ln.startswith("| 時刻"))
+    header = next(ln for ln in md.splitlines() if ln.startswith("| 開始-最終"))
     assert "内容" not in header
     assert "should-not-appear" not in md
     assert "変更" in header

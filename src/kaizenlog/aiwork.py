@@ -167,6 +167,8 @@ class AISession:
     tools_measurable: bool = True
     # ブラウザ応答の文字数（トークンではない。コスト/output_tokens に混ぜない）
     assistant_chars: int = 0
+    # セッション cwd の実パス（表示名 project とは別。stats には保存しない）
+    repo_path: str | None = None
     # KaizenLog 自身の LLM 呼び出し（advise 等）— 全指標から除外
     is_internal: bool = False
 
@@ -507,14 +509,35 @@ def scan_sessions(
                         continue
                     sid = str(record.get("sessionId") or path.stem)
                     if sid not in sessions:
+                        repo_path = None
+                        cwd = record.get("cwd")
+                        if isinstance(cwd, str) and cwd.strip():
+                            try:
+                                cwd_p = Path(cwd).expanduser()
+                                if cwd_p.is_dir():
+                                    repo_path = str(cwd_p.resolve())
+                            except (OSError, RuntimeError):
+                                repo_path = None
                         sessions[sid] = AISession(
                             session_id=sid,
                             project=_project_name(record, path),
                             start=ts,
                             end=ts,
                             source="claude-code",
+                            repo_path=repo_path,
                         )
-                    _update_session(sessions[sid], record, ts)
+                    # 同一セッション内の cwd 変更は最初の値を保持（上書きしない）
+                    sess = sessions[sid]
+                    if sess.repo_path is None:
+                        cwd = record.get("cwd")
+                        if isinstance(cwd, str) and cwd.strip():
+                            try:
+                                cwd_p = Path(cwd).expanduser()
+                                if cwd_p.is_dir():
+                                    sess.repo_path = str(cwd_p.resolve())
+                            except (OSError, RuntimeError):
+                                pass
+                    _update_session(sess, record, ts)
         except OSError:
             continue
 
@@ -1054,10 +1077,15 @@ def format_loop_tax_line(
     day_output_tokens: int | None = None,
     redactor: Callable[[str], str] | None = None,
 ) -> str:
-    """日誌・status 用1行。不明は 0 にしない。金額不明時は「金額不明」。"""
+    """日誌・status 用1行。不明は 0 にしない。金額不明時は「金額不明」。
+
+    §E3: 金額もトークンも不明なら空文字（行ごと出さない）。
+    """
     n = summary.episode_count
     if n == 0:
         return "💸 ループ税: $0.00（0エピソード / 0 tokens）"
+    if summary.total_wasted_tokens is None and summary.est_cost_usd is None:
+        return ""
     if summary.total_wasted_tokens is None:
         tok_s = "tokens不明"
     else:
@@ -1189,6 +1217,9 @@ def session_digests_for_stats(
         if redactor is not None and title:
             title = redactor(title)
         retry_touch = _retry_touch_for_session(s, chains)
+        tools_total = (
+            sum(s.tool_counts.values()) if s.tools_measurable else None
+        )
         digests.append(
             {
                 "day": day,
@@ -1205,6 +1236,9 @@ def session_digests_for_stats(
                 "first_prompt_len": int(s.first_prompt_len),
                 "retry_touch": int(retry_touch),
                 "friction": s.friction_score(retry_touch),
+                "tools_total": (
+                    int(tools_total) if tools_total is not None else None
+                ),
             }
         )
     return digests
@@ -1246,8 +1280,16 @@ def render_aiwork_markdown(
     loop_tax_summary: LoopTaxSummary | None = None,
     breaker_fires: int = 0,
     screen_tool_minutes: Mapping[str, float] | None = None,
+    commit_stats: Sequence[Any] | None = None,
+    commit_repos_omitted: int = 0,
+    screen_total_minutes: float | None = None,
+    measurement_gap: bool | None = None,
+    structured_cli_sessions: int | None = None,
 ) -> str:
     """「AI作業の質」セクションのMarkdownを生成する。セッションが無ければ空文字。
+
+    measurement_gap: 呼び出し側が short_record 閾値と CLI セッション数で決める。
+    True のとき欠測疑い1行を出す（閾値リテラルはここに持たない）。
 
     細切れ（2往復以下）は中立の観測値。摩擦の主指標はリトライ連鎖。
     内容列 title は依頼文の抜粋。日誌本体は通常原文だが、依頼逐語は
@@ -1288,6 +1330,30 @@ def render_aiwork_markdown(
     )
 
     lines: list[str] = []
+    # §Z3: 欠測疑い行。判定は呼び出し側（F19 と同じ母数）。数値は書き換えない。
+    if measurement_gap:
+        from .report import _fmt_minutes
+
+        n_cli = (
+            int(structured_cli_sessions)
+            if isinstance(structured_cli_sessions, int)
+            else sum(
+                1
+                for s in sessions
+                if not str(getattr(s, "source", "") or "").endswith("-web")
+            )
+        )
+        screen_txt = (
+            _fmt_minutes(float(screen_total_minutes))
+            if isinstance(screen_total_minutes, (int, float))
+            else "—"
+        )
+        lines.append(
+            f"⚠ 計測欠測の疑い: 画面{screen_txt}"
+            f"に対しAIセッション{n_cli}件。"
+            "kaizenlog doctor で watcher を確認"
+        )
+        lines.append("")
     lines.append("### 🧠 AI作業の質")
     lines.append("")
     lines.append("計測範囲: セッションログのある AI CLI / ブラウザ拡張のみが対象です。")
@@ -1303,13 +1369,19 @@ def render_aiwork_markdown(
     }
     unlogged_screen_tools: list[tuple[str, float]] = []
     for tool, minutes in _normalize_screen_tool_minutes(screen_tool_minutes).items():
-        if minutes <= 0:
+        # §B2: 0.5分未満は表示から除外。小数は1位まで
+        if float(minutes) < 0.5:
             continue
         expected_sources = screen_sources.get(str(tool), ())
         if not any(source in session_sources for source in expected_sources):
             unlogged_screen_tools.append((str(tool), float(minutes)))
     if unlogged_screen_tools:
-        rendered_tools = "・".join(f"{tool} {minutes:g}分" for tool, minutes in unlogged_screen_tools)
+        # §E2: 画面分類名であることを明示（claude-code セッションと区別）
+        # §B2: 生 float 禁止・小数1位（例 25.7分）
+        rendered_tools = "・".join(
+            f"{tool}（ブラウザ/デスクトップ） {minutes:.1f}分"
+            for tool, minutes in unlogged_screen_tools
+        )
         lines.append(
             f"画面計測のAI作業のうち {rendered_tools} はログが無く、"
             "往復・エラー・トークンは計測できません。"
@@ -1378,7 +1450,8 @@ def render_aiwork_markdown(
     costed_tokens = max(0, int(output_tokens) - int(uncosted))
     if int(uncosted) > costed_tokens:
         lines.append(
-            f"推定コスト: 換算なし — 出力{output_tokens:,} tok のうち単価未登録が{int(uncosted):,} tok。"
+            f"推定コスト(下限): 換算なし — 出力{output_tokens:,} tok のうち"
+            f"単価未登録が{int(uncosted):,} tok。"
         )
         unknown_models = sorted(
             {
@@ -1395,7 +1468,7 @@ def render_aiwork_markdown(
         )
     else:
         lines.append(
-            f"推定コスト: ${est_cost:.2f}（output tokens ベース概算、"
+            f"推定コスト(下限): ${est_cost:.2f}（output tokens ベース概算、"
             f"対象外 {uncosted:,} tok。input/cache 未計上）"
         )
     if int(internal_ai_sessions) > 0:
@@ -1435,14 +1508,14 @@ def render_aiwork_markdown(
                 continue
             lines.append(f"リトライ{excerpt}")
     if tax is not None and tax.episode_count > 0:
-        lines.append(
-            format_loop_tax_line(
-                tax,
-                usd_jpy=usd_jpy,
-                day_output_tokens=output_tokens,
-                redactor=redactor,
-            )
+        tax_line = format_loop_tax_line(
+            tax,
+            usd_jpy=usd_jpy,
+            day_output_tokens=output_tokens,
+            redactor=redactor,
         )
+        if tax_line:
+            lines.append(tax_line)
     # 空転ブレーカー発火（通知履歴のみ。会計はループ税側）
     if int(breaker_fires or 0) > 0:
         lines.append(f"⚡ ブレーカー発動: {int(breaker_fires)}回")
@@ -1467,10 +1540,21 @@ def render_aiwork_markdown(
         interruptions = int(digest.get("interruptions") or 0)
         retry_touch = int(digest.get("retry_touch") or 0)
         friction = int(digest.get("friction") or 0)
+        # §E5: ツール実行総数が取れるとき率を併記（スコア自体は変えない）
+        tools_total = digest.get("tools_total")
+        if tools_total is None:
+            # session_digests に無い場合は tool_counts 合計キーを探す
+            tools_total = digest.get("tool_calls")
+        err_part = f"ツールエラー{errors}"
+        if isinstance(tools_total, (int, float)) and float(tools_total) > 0:
+            rate = errors / float(tools_total) * 100
+            err_part = (
+                f"ツールエラー{errors}/ツール実行{int(tools_total)}回={rate:.1f}%"
+            )
         lines.extend(
             [
                 f"⚠ 本日の摩擦ワースト: {project} ({source})「{title}」",
-                f"   — 摩擦{friction}（ツールエラー{errors} ＋ 中断{interruptions}×5 ＋ リトライ連鎖関与{retry_touch}×5）",
+                f"   — 摩擦{friction}（{err_part} ＋ 中断{interruptions}×5 ＋ リトライ連鎖関与{retry_touch}×5）",
                 "   ※ 摩擦はスコア順位であり、AIの良し悪しの判定ではありません。",
             ]
         )
@@ -1488,14 +1572,18 @@ def render_aiwork_markdown(
     table_sessions = [s for s in sessions if not _is_tiny_session(s)]
     tiny_n = len(sessions) - len(table_sessions)
     rows = table_sessions[:max_rows]
+    # §E7: 壁時計の開始〜最終であり作業時間ではない
+    lines.append(
+        "※「開始-最終」はセッションの最初と最後の記録時刻であり、作業時間ではありません。"
+    )
     if session_titles:
         lines.append(
-            "| 時刻 | プロジェクト | 内容 | 往復 | ツール | エラー | 中断 | 変更 |"
+            "| 開始-最終 | プロジェクト | 内容 | 往復 | ツール | エラー | 中断 | 変更 |"
         )
         lines.append("| --- | --- | --- | ---: | ---: | ---: | ---: | --- |")
     else:
         lines.append(
-            "| 時刻 | プロジェクト | 往復 | ツール | エラー | 中断 | 変更 |"
+            "| 開始-最終 | プロジェクト | 往復 | ツール | エラー | 中断 | 変更 |"
         )
         lines.append("| --- | --- | ---: | ---: | ---: | ---: | --- |")
     for s in rows:
@@ -1547,5 +1635,26 @@ def render_aiwork_markdown(
         if tiny_n:
             bits.append(f"ほか短小セッション {tiny_n}件")
         lines.append(f"（{' / '.join(bits)}）")
+    # §C3: コミット突合（空なら行ごと省略。「0件」とも書かない）
+    if commit_stats:
+        parts = [
+            f"{s.repo_label} {s.commits}件 +{s.insertions:,}/-{s.deletions:,}行"
+            for s in commit_stats
+        ]
+        omit_note = ""
+        if commit_repos_omitted > 0:
+            omit_note = f"（ほか {commit_repos_omitted} リポジトリは上限のため省略）"
+        lines.append("")
+        lines.append(
+            "📦 当日のコミット（AIセッションが触れたリポジトリ・ローカル計測）:"
+        )
+        lines.append(f"   {', '.join(parts)}{omit_note}")
+        lines.append(
+            "   ※ コミットとAIセッションの因果は判定しません"
+            "（同日・同リポジトリの並置のみ）。"
+        )
+        lines.append(
+            "     git が無い／リポジトリでないパスはスキップします。"
+        )
     lines.append("")
     return "\n".join(lines)

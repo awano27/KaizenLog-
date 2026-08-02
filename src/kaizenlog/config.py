@@ -138,6 +138,10 @@ class AIWorkConfig:
     usd_jpy: float | None = None
     # 当日ループ税がこの USD を超えたら notify（未設定なら無効）
     loop_tax_alert_usd: float | None = None
+    # AIセッション cwd とローカル git log の突合（読み取り専用）
+    outcome_git: bool = True
+    outcome_git_timeout_seconds: float = 5.0
+    outcome_git_max_repos: int = 5
 
 
 @dataclass
@@ -160,6 +164,9 @@ class GuardConfig:
     """空転ブレーカー（Claude Code フック）。"""
 
     enabled: bool = True
+    # 検知と additionalContext は維持したまま、Windowsバルーン通知だけ切れる。
+    # ユーザー作業を中断するため、通知は明示的に opt-in とする。
+    notify: bool = False
     retry_threshold: int = 3
     tool_error_streak: int = 3
     cooldown_seconds: int = 300
@@ -337,6 +344,10 @@ session_titles = true
 # ループ税の円換算（未設定なら USD のみ）
 # usd_jpy = 150.0
 # 当日ループ税がこの USD を超えたら通知（未設定なら無効）
+# AIセッションが触れたリポジトリの当日コミット件数を日誌に並置（既定ON・読み取り専用）
+# outcome_git = true
+# outcome_git_timeout_seconds = 5.0
+# outcome_git_max_repos = 5
 # loop_tax_alert_usd = 1.0
 
 # [handoff]
@@ -344,6 +355,7 @@ session_titles = true
 
 # [guard]
 # enabled = true
+# notify = false  # true にしたときだけWindowsバルーン通知を表示
 # retry_threshold = 3
 # tool_error_streak = 3
 # cooldown_seconds = 300
@@ -491,6 +503,20 @@ def load_config(path: str | None = None) -> Config:
         cfg.aiwork.loop_tax_alert_usd = _coerce(
             float, aiwork.get("loop_tax_alert_usd"), "aiwork.loop_tax_alert_usd"
         )
+    if "outcome_git" in aiwork:
+        cfg.aiwork.outcome_git = bool(aiwork.get("outcome_git"))
+    if "outcome_git_timeout_seconds" in aiwork:
+        cfg.aiwork.outcome_git_timeout_seconds = _coerce(
+            float,
+            aiwork.get("outcome_git_timeout_seconds"),
+            "aiwork.outcome_git_timeout_seconds",
+        )
+    if "outcome_git_max_repos" in aiwork:
+        cfg.aiwork.outcome_git_max_repos = _coerce(
+            int,
+            aiwork.get("outcome_git_max_repos"),
+            "aiwork.outcome_git_max_repos",
+        )
     pricing = aiwork.get("pricing")
     if isinstance(pricing, dict):
         parsed: dict[str, float] = {}
@@ -512,6 +538,8 @@ def load_config(path: str | None = None) -> Config:
     if isinstance(guard, dict):
         if "enabled" in guard:
             cfg.guard.enabled = bool(guard.get("enabled"))
+        if "notify" in guard:
+            cfg.guard.notify = bool(guard.get("notify"))
         if "retry_threshold" in guard:
             cfg.guard.retry_threshold = _coerce(
                 int, guard.get("retry_threshold"), "guard.retry_threshold"

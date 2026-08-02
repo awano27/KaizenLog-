@@ -193,10 +193,14 @@ def detect_kzn_decay(
     entries = load_entries(memory_dir)
     pass_start = (as_of - timedelta(days=_KZN_PASS_LOOKBACK)).isoformat()
     # 第37弾 §B3: done ゲートを外す。confirmed 条件は第36弾のまま維持。
+    # 第38弾 §A1: 終端 status は候補から除外（寿命管理で閉じた提案を風化しない）。
+    from .memory import TERMINAL_STATUSES
+
     candidates = [
         e
         for e in entries
-        if e.verdict == "pass"
+        if e.status not in TERMINAL_STATUSES
+        and e.verdict == "pass"
         and e.verdict_stage == "confirmed"
         and e.verdict_date
         and e.verdict_date >= pass_start

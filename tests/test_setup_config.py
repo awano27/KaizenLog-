@@ -107,3 +107,25 @@ def test_write_config_merge_preserves_extra_text(tmp_path):
     assert "keep-me" in text
     assert "Custom" in text
     assert "newvault" in text.replace("\\", "/")
+
+
+def test_guard_notify_can_be_disabled_without_disabling_detection(tmp_path):
+    dest = tmp_path / "guard.toml"
+    dest.write_text(
+        f'[general]\nvault_dir = "{tmp_path.as_posix()}"\n'
+        "[guard]\nenabled = true\nnotify = false\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(str(dest))
+    assert cfg.guard.enabled is True
+    assert cfg.guard.notify is False
+
+
+def test_guard_notification_is_opt_in_by_default(tmp_path):
+    dest = tmp_path / "default-guard.toml"
+    dest.write_text(
+        f'[general]\nvault_dir = "{tmp_path.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(str(dest))
+    assert cfg.guard.notify is False

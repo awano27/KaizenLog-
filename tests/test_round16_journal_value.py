@@ -113,7 +113,8 @@ def test_n2_short_day_single_sentence():
         "projects": {"p": {"sessions": 1, "turns": 1, "errors": 50, "fragmented": 0}},
     }
     ev = build_advice_evidence(stats, HISTORY)
-    assert "データ不足" in ev.reader_summary
+    # 第39弾: 短い日+AIセッションありは欠測疑い結論（従来の「データ不足」単独ではない）
+    assert "データ不足" in ev.reader_summary or "欠測" in ev.reader_summary
     assert "ツールエラー" not in ev.reader_summary
 
 
@@ -175,15 +176,15 @@ def test_n4_uncosted_majority_hides_dollar():
     known = _sess(10_000, "claude-sonnet-4", "k")  # priced
     unknown = _sess(200_000, "unknown-local", "u")
     md = render_aiwork_markdown([known, unknown], timezone.utc)
-    assert "推定コスト: 換算なし — 出力210,000 tok のうち単価未登録が200,000 tok。" in md
+    assert "推定コスト(下限): 換算なし — 出力210,000 tok のうち単価未登録が200,000 tok。" in md
     assert "未登録モデル: unknown-local。" in md
     assert "kaizenlog.toml の [aiwork.pricing] に $/1Mtok を設定すると金額換算されます。" in md
-    assert "推定コスト: $" not in md
+    assert "推定コスト(下限): $" not in md
 
 
 def test_n4_costed_majority_keeps_dollar():
     known = _sess(1_000_000, "claude-sonnet-4", "k")
     unknown = _sess(5_000, "unknown-local", "u")
     md = render_aiwork_markdown([known, unknown], timezone.utc)
-    assert "推定コスト: $" in md
+    assert "推定コスト(下限): $" in md
     assert "換算なし" not in md

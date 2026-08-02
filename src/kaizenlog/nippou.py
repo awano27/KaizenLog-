@@ -8,7 +8,10 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from datetime import datetime, tzinfo
+from typing import Any
 
 from .advisor import generate_text
 from .config import LLMConfig
@@ -65,10 +68,25 @@ def build_nippou_prompt(activity_md: str, intent: str | None) -> str:
     return "".join(parts)
 
 
+def build_nippou_facts_block(stats: Mapping[str, Any]) -> str:
+    """LLM 入力用の決定論事実ブロック（プロジェクト集約+コミット subjects）。"""
+    lines = ["# プロジェクト事実（決定論）"]
+    for row in _project_work_lines(stats):
+        lines.append(row)
+    for row in _outcome_lines(stats, include_total=False):
+        lines.append(row)
+    if len(lines) == 1:
+        lines.append("- （計測データなし）")
+    return "\n".join(lines)
+
+
 def generate_nippou_llm(
-    cfg: LLMConfig, activity_md: str, intent: str | None, redactor=None
+    cfg: LLMConfig, activity_md: str, intent: str | None, redactor=None,
+    *, stats: Mapping[str, Any] | None = None,
 ) -> str:
     prompt = build_nippou_prompt(activity_md, intent)
+    if stats is not None:
+        prompt = prompt + "\n\n" + build_nippou_facts_block(stats)
     if redactor:
         prompt = redactor(prompt)  # 送信プロンプトのみマスク
     body = generate_text(cfg, NIPPOU_SYSTEM_PROMPT, prompt)
@@ -114,56 +132,216 @@ def _unchecked_tasks(intent: str | None) -> list[str]:
     ]
 
 
-def generate_nippou_deterministic(
-    stats: dict, tz: tzinfo, intent: str | None = None, min_block_minutes: float = 15.0
-) -> str:
-    """統計JSONから事実ベースの日報ドラフトを組み立てる。"""
-    lines = [NIPPOU_MARKER_HEADING, ""]
+def _session_digests(stats: Mapping[str, Any]) -> list[dict]:
+    ai = stats.get("ai") if isinstance(stats.get("ai"), Mapping) else {}
+    digests = ai.get("session_digests") if isinstance(ai, Mapping) else None
+    if not isinstance(digests, list):
+        return []
+    out = []
+    for d in digests:
+        if not isinstance(d, Mapping):
+            continue
+        # is_internal 相当: 収集時に除外済みだが、残存フラグがあれば落とす
+        if d.get("is_internal"):
+            continue
+        out.append(dict(d))
+    return out
 
-    lines.append("【本日の業務】")
+
+def _project_work_lines(stats: Mapping[str, Any], *, limit: int = 5) -> list[str]:
+    """session digests を project 別に集約した業務行。"""
+    by_proj: dict[str, dict[str, Any]] = {}
+    for d in _session_digests(stats):
+        project = str(d.get("project") or "—").strip() or "—"
+        bucket = by_proj.setdefault(
+            project,
+            {
+                "sessions": 0,
+                "turns": 0,
+                "edits": 0,
+                "edits_known": False,
+                "titles": [],
+            },
+        )
+        bucket["sessions"] += 1
+        bucket["turns"] += int(d.get("user_turns") or 0)
+        # tools 計測不能（web 等）は edits を省略
+        tools_total = d.get("tools_total")
+        source = str(d.get("source") or "")
+        tools_ok = tools_total is not None and not source.endswith("-web")
+        if tools_ok:
+            bucket["edits"] += int(d.get("edits") or 0)
+            bucket["edits_known"] = True
+        title = str(d.get("title") or "").strip()
+        if title:
+            bucket["titles"].append(title)
+
+    ranked = sorted(
+        by_proj.items(),
+        key=lambda kv: (-int(kv[1]["turns"]), -int(kv[1]["sessions"]), kv[0]),
+    )
+    lines: list[str] = []
+    for project, data in ranked[:limit]:
+        rep = ""
+        candidates = [t for t in data["titles"] if len(t) >= 8]
+        if candidates:
+            rep = max(candidates, key=len)
+        elif data["titles"]:
+            rep = max(data["titles"], key=len)
+        title_part = f"「{rep}」" if rep else "「—」"
+        if data["edits_known"]:
+            meta = (
+                f"セッション{data['sessions']}回・往復{data['turns']}"
+                f"・編集{data['edits']}"
+            )
+        else:
+            meta = f"セッション{data['sessions']}回・往復{data['turns']}"
+        lines.append(f"- {project}: {title_part}（{meta}）")
+    extra = len(ranked) - limit
+    if extra > 0:
+        lines.append(f"- ほか {extra}プロジェクト")
+    return lines
+
+
+def _screen_block_lines(
+    stats: Mapping[str, Any],
+    tz: tzinfo,
+    *,
+    min_block_minutes: float,
+    limit: int = 3,
+) -> list[str]:
+    """エンタメ・私的以外かつ min 分以上のスクリーンブロック（補完）。"""
     blocks = [
-        b for b in stats.get("blocks", [])
-        if b.get("minutes", 0) >= min_block_minutes and not _is_private(b)
+        b
+        for b in stats.get("blocks", [])
+        if isinstance(b, Mapping)
+        and float(b.get("minutes") or 0) >= min_block_minutes
+        and not _is_private(b)
+        and b.get("category") not in _PRIVATE_CATEGORIES
     ]
-    blocks.sort(key=lambda b: -b.get("minutes", 0))
-    for b in blocks[:6]:
+    blocks.sort(key=lambda b: -float(b.get("minutes") or 0))
+    lines: list[str] = []
+    for b in blocks[:limit]:
         try:
-            hour = datetime.fromisoformat(b["start"]).astimezone(tz).hour
+            hour = datetime.fromisoformat(str(b["start"])).astimezone(tz).hour
             when = "午前" if hour < 12 else "午後"
-        except (KeyError, ValueError):
+        except (KeyError, TypeError, ValueError):
             when = ""
         title = b.get("title") or b.get("app", "")
-        lines.append(f"- {when}: {title}（{b.get('category', '')}、約{_fmt_minutes(b.get('minutes', 0))}）")
-    if len(blocks) == 0:
-        lines.append("- （15分以上の作業ブロックなし）")
-    lines.append("")
-
-    checked = _checked_tasks(intent)
-    lines.append("【成果・進捗】")
-    if checked:
-        lines.extend(f"- {t} を完了" for t in checked[:3])
-    else:
-        # 合計にも私的時間（エンタメ等）を含めない。【本日の業務】から除外した
-        # 時間を合計だけに足すと、提出用日報の作業時間が水増しされる
-        private = sum(
-            m for cat, m in stats.get("by_category", {}).items()
-            if cat in _PRIVATE_CATEGORIES
-        )
-        total = max(0.0, stats.get("total_minutes", 0) - private)
-        lines.append(f"- 合計 {_fmt_minutes(total)} の作業を実施")
-    ai = stats.get("ai", {})
-    if ai.get("sessions", 0) > 0:
+        prefix = f"{when}: " if when else ""
         lines.append(
-            f"- AIエージェント（{_format_ai_agent_names(ai)}）を"
-            f"{ai['sessions']}セッション活用"
+            f"- {prefix}{title}（{b.get('category', '')}、"
+            f"約{_fmt_minutes(float(b.get('minutes') or 0))}）"
         )
+    return lines
+
+
+def _outcome_lines(
+    stats: Mapping[str, Any],
+    *,
+    include_total: bool = True,
+    intent: str | None = None,
+) -> list[str]:
+    lines: list[str] = []
+    checked = _checked_tasks(intent)
+    for t in checked[:3]:
+        lines.append(f"- {t} を完了")
+
+    og = stats.get("outcome_git")
+    if isinstance(og, list):
+        for item in og:
+            if not isinstance(item, Mapping):
+                continue
+            label = str(item.get("repo_label") or "repo")
+            commits = int(item.get("commits") or 0)
+            ins = int(item.get("insertions") or 0)
+            dels = int(item.get("deletions") or 0)
+            subjects = item.get("subjects") if isinstance(item.get("subjects"), list) else []
+            subj_bits = [str(s).strip() for s in subjects[:2] if str(s).strip()]
+            if subj_bits:
+                lines.append(
+                    f"- {label}: コミット{commits}件（+{ins}/-{dels}）"
+                    f"主な内容: {' / '.join(subj_bits)}"
+                )
+            elif commits > 0:
+                lines.append(f"- {label}: コミット{commits}件（+{ins}/-{dels}）")
+
+    # テスト実行を伴うセッション
+    test_n = sum(
+        1 for d in _session_digests(stats) if d.get("tests_run")
+    )
+    if test_n > 0:
+        lines.append(f"- テスト実行を伴うセッション {test_n}回")
+
+    if include_total:
+        private = sum(
+            float(m)
+            for cat, m in (stats.get("by_category") or {}).items()
+            if cat in _PRIVATE_CATEGORIES and isinstance(m, (int, float))
+        )
+        total = max(0.0, float(stats.get("total_minutes") or 0) - private)
+        by_cat = stats.get("by_category") if isinstance(stats.get("by_category"), Mapping) else {}
+        ai_min = by_cat.get("AI作業") if isinstance(by_cat, Mapping) else None
+        if isinstance(ai_min, (int, float)) and float(ai_min) > 0:
+            lines.append(
+                f"- 合計 {_fmt_minutes(total)} の作業"
+                f"（うちAI作業 {_fmt_minutes(float(ai_min))}）"
+            )
+        else:
+            lines.append(f"- 合計 {_fmt_minutes(total)} の作業")
+    return lines
+
+
+def generate_nippou_deterministic(
+    stats: dict,
+    tz: tzinfo,
+    intent: str | None = None,
+    min_block_minutes: float = 15.0,
+    *,
+    open_kzn_actions: Sequence[tuple[str, str]] | None = None,
+) -> str:
+    """統計JSONから事実ベースの日報ドラフトを組み立てる。
+
+    open_kzn_actions: (KZN-ID, 平文化済み行動文) の未チェック上位。
+    """
+    lines = [NIPPOU_MARKER_HEADING, ""]
+
+    # ---- 【本日の業務】----
+    lines.append("【本日の業務】")
+    work: list[str] = []
+    goal = stats.get("goal_text")
+    if isinstance(goal, str) and goal.strip():
+        work.append(f"- 目標: {goal.strip()}")
+    work.extend(_project_work_lines(stats))
+    # スクリーン補完（15分以上・エンタメ除外・最大3）
+    work.extend(
+        _screen_block_lines(stats, tz, min_block_minutes=max(15.0, min_block_minutes), limit=3)
+    )
+    if not work:
+        work.append("- （本日の計測データがありません）")
+    lines.extend(work)
     lines.append("")
 
+    # ---- 【成果・進捗】----
+    lines.append("【成果・進捗】")
+    # include_total=True のため常に合計行を含む（コミット・テスト無しなら合計行のみ）
+    outcomes = _outcome_lines(stats, include_total=True, intent=intent)
+    lines.extend(outcomes)
+    lines.append("")
+
+    # ---- 【明日の予定】----
     lines.append("【明日の予定】")
+    tomorrow: list[str] = []
     unchecked = _unchecked_tasks(intent)
-    if unchecked:
-        lines.extend(f"- {t}" for t in unchecked[:3])
-    else:
-        lines.append("- 引き続き上記対応")
+    for t in unchecked[:3]:
+        tomorrow.append(f"- {t}")
+    for kid, body in list(open_kzn_actions or [])[:2]:
+        snippet = " ".join(str(body).split())
+        if len(snippet) > 40:
+            snippet = snippet[:40]
+        tomorrow.append(f"- {kid}: {snippet}")
+    if not tomorrow:
+        tomorrow.append("- 引き続き上記対応")
+    lines.extend(tomorrow)
     lines.append("")
     return "\n".join(lines)

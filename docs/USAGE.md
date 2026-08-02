@@ -381,7 +381,8 @@ kaizenlog guard status
 - 登録するのは **UserPromptSubmit** と **Stop** のみ
 - **PostToolUse には登録しない**（ツール毎の Python 起動はレイテンシ税が大きく非受容。リトライはユーザー発話、ツールエラー連続は Stop で足りる）
 - フックは内部エラーでも **exit 0**（セッションを壊さない）。transcript には書かない
-- 発火はトースト + `additionalContext` + `memory/live_episodes.jsonl`（通知履歴。トークン会計は夜間ループ税が正）
+- 発火は `additionalContext` + `memory/live_episodes.jsonl`（検知履歴。トークン会計は夜間ループ税が正）。Windowsトーストは既定で表示せず、必要な場合だけ `[guard] notify = true` を設定する（`false` でも検知と追加コンテキストは残る）
+- `run_hook(settings=...)` の設定注入経路は、ホスト環境を汚さないため `notify` を明示しない限りトーストを表示しない（テストや埋め込み実行向け）
 - 状態キャッシュ `%LOCALAPPDATA%/kaizenlog/guard/` で増分 tail・デバウンス（既定30秒。`debounce_seconds` は前回完全実行時の値を一段目ゲートに使う＝設定変更は1回遅れで反映）
 - リトライ検知の正規化・類似度は**夜間の `detect_retry_chains` と同一**（`promptmine.normalize` + 類似度0.85・窓30分）
 
@@ -437,8 +438,31 @@ kaizenlog guard status
 
 - **`context_switches_per_hour`**: 1時間あたりのカテゴリ変更回数。稼働が60分未満の日は測定不能（`None`。0埋めしない）。
 - **`ai_tool_errors_per_session`**: AI CLIセッション1回あたりのツールエラー回数。セッション0件の日は測定不能。`ai_tool_error_rate`（÷ツール呼び出し）は `tool_counts` が上位5件しか保存されないため実装しない。
-- **判定不成立**: 上記の正規化指標で分母不足のとき、📌 ACTIONS は「判定不成立」と出す（❌ ではない。失敗ではなく測れなかった）。
+- **判定不成立**: 上記の正規化指標で分母不足のとき、📌 ACTIONS は「判定不成立」と出す（❌ ではない。失敗ではなく測れなかった）。分子キー欠落は「分母不足」と断定しない。
 - **実行の有無は問わない指標の挙動**: 提案を実行したかどうかに関係なく、confirmed 判定の指標別PASS率を学習入力に使う。達成・習慣化といった断定ラベルは付けない。実行済みのみを見る従来の指標別PASS実績とは別トラック。
+
+### PASS指標の行動性（第39弾）
+
+- **レートが既定**: `*_per_hour` / `*_per_session` を優先。生カウント（`ai_tool_errors` 等）は**稼働60分以上**の日だけ入口で許可される。
+- **計測が薄い日の判定不成立**: 生カウントの判定時、対象日の稼働が直近7日中央値の50%未満なら verdict を書かず「計測が薄い日のため判定不成立」と表示する（既存の pass/fail は書き換えない）。
+- **📌欄**: 未完了は既定**1件**表示。全件は `kaizenlog today --all`。完了は `kaizenlog done <ID>`。
+
+### 達成済みの推移再掲とタイムライン被覆（第40弾）
+
+- **達成済みでも指標が戻っているもの**: 📌 の「指標は達成済み N件」の直後に、判定後の実測推移に ❌ があるものだけを最大2件再掲する（未完了1件圧縮は維持）。
+- **タイムライン**: 3分未満の細切れは1時間バケット行として表に含め、表末尾に「この表は合計 … の N% を説明しています」と被覆率を明示する。
+
+### 提案の寿命管理と digest / git 突合（第38弾）
+
+- **status 語彙**: `proposed` / `done` / `superseded` / `skipped` に加え、`unmeasurable`（機械PASS無しで3日経過）・`graduated`（測定可能日の直近2日が条件達成）・`retired`（14日経過）を追加。**終了扱いは達成を意味しない**。
+- **`kaizenlog:digest`**: advise が frontmatter 直後へ書く決定論30秒サマリ。LLM文・提案本文の再掲はしない。手書き禁止の自動区間。
+  - `privacy.redact_patterns` が空で redactor が無い日でも、稼働・AI作業・提案件数など **stats 由来の決定論行は出る**。摩擦ワースト・目標・今日の1手など外部由来文字列を含む行は redactor 無しでは行ごと省略（素通しはしない）。
+- **`[aiwork]` の git 突合**（既定ON・読み取り専用）:
+  - `outcome_git = true` — false にすると subprocess を呼ばず表示もしない
+  - `outcome_git_timeout_seconds = 5.0`
+  - `outcome_git_max_repos = 5`
+  - 各パスは `git rev-parse --show-toplevel` で root へ正規化してから `git log`（**最大2回/repo**）。subdir の二重計上はしない。
+  - コミットメッセージ・著者・ブランチ・絶対パスは日誌に出さない。因果は判定しない並置のみ。
 
 ## 開発者向け: プロンプト変更後の評価
 

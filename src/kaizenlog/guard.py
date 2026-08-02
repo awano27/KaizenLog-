@@ -453,6 +453,8 @@ def _run_hook_body(
     redactor = None
     pricing = None
     enabled = True
+    # settings 注入はテスト／埋め込み経路。ホストの通知を暗黙に起動しない。
+    notify_enabled = True
     retry_threshold = _DEFAULT_RETRY_THRESHOLD
     tool_error_streak_th = _DEFAULT_TOOL_ERROR_STREAK
     cooldown = _DEFAULT_COOLDOWN
@@ -465,6 +467,7 @@ def _run_hook_body(
             g = getattr(cfg, "guard", None)
             if g is not None:
                 enabled = bool(getattr(g, "enabled", True))
+                notify_enabled = bool(getattr(g, "notify", True))
                 retry_threshold = int(getattr(g, "retry_threshold", retry_threshold))
                 tool_error_streak_th = int(
                     getattr(g, "tool_error_streak", tool_error_streak_th)
@@ -482,6 +485,7 @@ def _run_hook_body(
             cfg = None
     else:
         enabled = bool(settings.get("enabled", True))
+        notify_enabled = bool(settings.get("notify", False))
         retry_threshold = int(settings.get("retry_threshold", retry_threshold))
         tool_error_streak_th = int(
             settings.get("tool_error_streak", tool_error_streak_th)
@@ -671,13 +675,14 @@ def _run_hook_body(
             sys.stdout.flush()
         except Exception:
             pass
-        # notify
-        try:
-            from .notify import notify
+        # notify（設定注入経路では明示 opt-in のみ。テストからOS通知を出さない）
+        if notify_enabled:
+            try:
+                from .notify import notify
 
-            notify("KaizenLog 空転ブレーカー", msg[:200], icon="Warning")
-        except Exception:
-            pass
+                notify("KaizenLog 空転ブレーカー", msg[:200], icon="Warning")
+            except Exception:
+                pass
         # live_episodes
         from datetime import datetime, timezone
 
@@ -831,6 +836,7 @@ def install_hooks_write(
 def format_guard_status(
     *,
     enabled: bool,
+    notify: bool = True,
     retry_threshold: int,
     tool_error_streak: int,
     cooldown_seconds: int,
@@ -852,6 +858,7 @@ def format_guard_status(
     lines = [
         "# KaizenLog 空転ブレーカー status",
         f"enabled: {enabled}",
+        f"notify: {notify}",
         f"retry_threshold: {retry_threshold}",
         f"tool_error_streak: {tool_error_streak}",
         f"cooldown_seconds: {cooldown_seconds}",

@@ -245,7 +245,7 @@ def test_s3_cost_fallback_shows_three_line_guidance():
     md = render_aiwork_markdown([s], TZ, pricing={})
     assert md.count("12,345") == 3
     assert md.count("出力トークン") == 1
-    assert "推定コスト: 換算なし — 出力12,345 tok のうち単価未登録が12,345 tok。" in md
+    assert "推定コスト(下限): 換算なし — 出力12,345 tok のうち単価未登録が12,345 tok。" in md
     assert "未登録モデル: unknown-model-xyz。" in md
     assert "kaizenlog.toml の [aiwork.pricing] に $/1Mtok を設定すると金額換算されます。" in md
     assert "コスト換算なし）" not in md.split("出力トークン")[1] if False else True

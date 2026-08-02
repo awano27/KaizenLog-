@@ -221,15 +221,25 @@ def render_weekly_context(
             )
     lines.append("")
 
-    # アクション実績（superseded 除外は compute_action_stats 側）
+    # アクション実績（superseded / 終端 status は現役分母から除外）
+    from .memory import TERMINAL_STATUSES
+
     entries = load_entries(memory_dir)
     week_start_s = days[0].isoformat()
     week_end_s = days[-1].isoformat()
     week_entries = [
         e
         for e in entries
-        if e.status != "superseded" and week_start_s <= e.date <= week_end_s
+        if e.status != "superseded"
+        and e.status not in TERMINAL_STATUSES
+        and week_start_s <= e.date <= week_end_s
     ]
+    closed_n = sum(
+        1
+        for e in entries
+        if e.status in TERMINAL_STATUSES
+        and week_start_s <= e.date <= week_end_s
+    )
     proposed = len(week_entries)
     done = sum(1 for e in week_entries if e.status == "done")
     judged = sum(
@@ -245,13 +255,14 @@ def render_weekly_context(
     open_list = [e for e in week_entries if e.status == "proposed"]
     done_rate = f"{round(100 * done / proposed)}%" if proposed else "-"
     pass_rate = f"{round(100 * passed / judged)}%" if judged else "-"
+    closed_part = f" / 終了: {closed_n}件" if closed_n else ""
     lines.extend(
         [
             "",
             "## アクション実績",
             "",
             f"- 週の提案: {proposed}件 / 消化: {done}件（{done_rate}） / "
-            f"判定: {judged}件 / PASS: {passed}件（{pass_rate}）",
+            f"判定: {judged}件 / PASS: {passed}件（{pass_rate}）{closed_part}",
             "",
             "### 未完了",
         ]

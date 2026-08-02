@@ -38,6 +38,15 @@ base_url = "http://localhost:5600"
 enabled = true
 claude_projects_dir = "~/.claude/projects"
 
+# 空転ブレーカー（Claude Code UserPromptSubmit / Stop フック）
+# [guard]
+# enabled = true
+# notify = false  # true にしたときだけWindowsトーストを表示
+# retry_threshold = 3
+# tool_error_streak = 3
+# cooldown_seconds = 300
+# debounce_seconds = 30
+
 [llm]
 # LLMバックエンド優先度（指定されたものが失敗したら自動フォールバック）:
 #   1. 設定値（下記から選択）

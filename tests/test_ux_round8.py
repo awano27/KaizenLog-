@@ -106,8 +106,10 @@ def test_render_actions_includes_stats_line():
     ]
     md = render_actions_section(entries, today)
     assert md is not None
-    assert "消化率" in md
-    assert "実行済みPASS" in md or "PASS" in md
+    # 第41弾 §A2: 内部用語「消化率」は出さない。完了率の平文へ
+    assert "提案し" in md and "チェック完了" in md
+    assert "消化率" not in md
+    assert "実行済みPASS" not in md
 
     # proposed 0 の窓内アクションのみ → セクション None（アクション0）
     assert render_actions_section([], today) is None
