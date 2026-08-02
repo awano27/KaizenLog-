@@ -91,6 +91,53 @@ def _pass_challenge_error(
     return None
 
 
+def _pass_range_error(
+    metric: str,
+    pass_core: str,
+    index: int,
+    history_values: object,
+) -> str | None:
+    """実測ヒストリに対して桁違い・レンジ外の PASS 目標を拒否する。"""
+    if history_values is None:
+        return None
+    try:
+        vals_raw = history_values.get(metric)  # type: ignore[union-attr]
+    except Exception:
+        return None
+    if not vals_raw:
+        return None
+    try:
+        vals = [float(v) for v in vals_raw]
+    except (TypeError, ValueError):
+        return None
+    if len(vals) < 3:
+        return None
+    m = _PASS_OP_RE.match(pass_core.strip())
+    if not m:
+        return None
+    op = m.group(2)
+    try:
+        target = float(m.group(3))
+    except ValueError:
+        return None
+    lo, hi = min(vals), max(vals)
+    # 減少指標: 目標が観測最小の半分未満なら桁違い（40 vs 200〜400）
+    if op in ("<=", "<"):
+        if hi > 0 and target < lo * 0.5 and target < hi * 0.25:
+            return (
+                f"actions[{index}] の pass: {metric} {op} {target:g} は"
+                f"直近実測 {lo:g}〜{hi:g} から見て厳しすぎます"
+                f"（実測分布内・下位25%付近を使ってください）"
+            )
+    elif op in (">=", ">"):
+        if lo > 0 and target > hi * 2 and target > lo * 2:
+            return (
+                f"actions[{index}] の pass: {metric} {op} {target:g} は"
+                f"直近実測 {lo:g}〜{hi:g} から見て非現実的です"
+            )
+    return None
+
+
 def parse_advice_json(text: str) -> dict:
     """LLM 応答から JSON オブジェクトを取り出す。
 
@@ -142,11 +189,17 @@ def normalize_advice_cardinality(data: dict, evidence: AdviceEvidence) -> dict:
     """順序を保ったまま提案とアクションを安全な同数へ切り詰める。
 
     内容や根拠IDは変更せず、後段の validate_advice が全契約を再検証する。
-    空配列や配列以外は正規化せず、従来どおり検証エラーに委ねる。
+    max_actions==0 のときは空配列に切り詰める（同時アクティブ上限到達時）。
     """
     normalized = deepcopy(data)
     proposals = normalized.get("proposals")
     actions = normalized.get("actions")
+    if evidence.max_actions <= 0:
+        if isinstance(proposals, list):
+            normalized["proposals"] = []
+        if isinstance(actions, list):
+            normalized["actions"] = []
+        return normalized
     if not isinstance(proposals, list) or not proposals:
         return normalized
     if not isinstance(actions, list) or not actions:
@@ -333,16 +386,23 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
     if not isinstance(ai_review, list):
         raise _contract_error("ai_review は配列である必要があります")
 
-    if not 1 <= len(proposals) <= 3:
-        raise _contract_error("proposals は1〜3件にしてください")
-    if not 1 <= len(actions) <= 3:
-        raise _contract_error("actions は1〜3件にしてください")
-    if len(proposals) != len(actions):
-        raise _contract_error("proposals と actions の件数を1対1にしてください")
-    if len(proposals) > evidence.max_actions:
-        raise _contract_error(
-            f"当日のデータ量では改善アクションは最大{evidence.max_actions}件にしてください"
-        )
+    if evidence.max_actions <= 0:
+        # 同時アクティブ上限などで新規提案枠が無い日
+        if len(proposals) != 0 or len(actions) != 0:
+            raise _contract_error(
+                "未完了の提案が上限に達しているため新規 actions/proposals は0件にしてください"
+            )
+    else:
+        if not 1 <= len(proposals) <= 3:
+            raise _contract_error("proposals は1〜3件にしてください")
+        if not 1 <= len(actions) <= 3:
+            raise _contract_error("actions は1〜3件にしてください")
+        if len(proposals) != len(actions):
+            raise _contract_error("proposals と actions の件数を1対1にしてください")
+        if len(proposals) > evidence.max_actions:
+            raise _contract_error(
+                f"当日のデータ量では改善アクションは最大{evidence.max_actions}件にしてください"
+            )
     if not 1 <= len(ai_review) <= 2:
         raise _contract_error("ai_review は1〜2件にしてください")
 
@@ -406,6 +466,15 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
                 f"actions[{i}] と proposals[{i}] の根拠IDが対応していません"
             )
         action = _require_single_line(item.get("action"), f"actions[{i}].action")
+        estimated_minutes = item.get("estimated_minutes")
+        if (
+            isinstance(estimated_minutes, bool)
+            or not isinstance(estimated_minutes, int)
+            or not 5 <= estimated_minutes <= 15
+        ):
+            raise _contract_error(
+                f"actions[{i}].estimated_minutes は5〜15の整数にしてください"
+            )
         # if-then 実行意図: 実在の日課・時刻をアンカーにした短い合図（目安15字）
         trigger = _require_single_line(item.get("trigger"), f"actions[{i}].trigger")
         if len(trigger) > 40:
@@ -523,12 +592,37 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
         )
         if challenge_err:
             raise _contract_error(challenge_err)
+        # §E: 実測分布外の桁違い目標を拒否（例: 実測200〜400なのに <=40）
+        range_err = _pass_range_error(
+            metric, pass_core, i, evidence.metric_history_values
+        )
+        if range_err:
+            raise _contract_error(range_err)
+        if evidence.suppressed_metrics and metric in evidence.suppressed_metrics:
+            raise _contract_error(
+                f"actions[{i}] の pass: 指標 {metric} はチェックなし達成の履歴があり"
+                f"新規提案を抑制しています"
+            )
         # evidence ゲート付き内容チェック（注記付与前の生フィールド）
         from .advisor import evidence_gated_action_errors
 
         scan = f"{action} {pass_core} {fail_v}"
         for msg in evidence_gated_action_errors(scan, i, evidence):
             raise _contract_error(msg)
+
+    if evidence.max_actions <= 0:
+        # 新規 actions が無い日は ai_review のみでも可
+        ai_facts_all: set[str] = set()
+        for i, item in enumerate(ai_review, 1):
+            if not isinstance(item, dict):
+                raise _contract_error(
+                    f"ai_review[{i}] はオブジェクトである必要があります"
+                )
+            facts = parse_facts(item.get("fact_ids"), f"ai_review[{i}].fact_ids")
+            ai_facts_all.update(facts)
+            text = _require_single_line(item.get("text"), f"ai_review[{i}].text")
+            _check_no_kzn_or_marker(text, f"ai_review[{i}].text")
+        return
 
     ai_facts_all: set[str] = set()
     for i, item in enumerate(ai_review, 1):
@@ -626,6 +720,7 @@ def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
             if trigger
             else item["action"].strip()
         )
+        body += f"（目安{item['estimated_minutes']}分）"
         lines.append(
             f"- [ ] {body}"
             f"｜PASS: {core}{note}｜FAIL: {item['fail'].strip()}"

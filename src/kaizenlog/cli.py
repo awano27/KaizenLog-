@@ -978,21 +978,31 @@ def _write_digest_for_day(
     goal_achieved = None
     try:
         from .goal import read_goal
+        from .vault import GOAL_MARKER as _GOAL_M
+        from .vault import extract_section as _extract_goal_sec
 
-        g = read_goal(store.read(day), known_category_names(cfg.rules))
-        if g is not None and getattr(g, "text", None):
-            goal_text = str(g.text)
-            if getattr(g, "achieved", None) is not None:
-                goal_achieved = int(g.achieved)
+        note_for_goal = store.read(day)
+        goal_section = (
+            _extract_goal_sec(note_for_goal, _GOAL_M) if note_for_goal else None
+        )
+        g = read_goal(note_for_goal, known_category_names(cfg.rules))
+        if goal_section is not None:
+            # R4: ノートの GOAL 区間が正。達成度行が無ければ未申告（stats で埋めない）
+            if g is not None and getattr(g, "text", None):
+                goal_text = str(g.text)
+                if getattr(g, "achieved", None) is not None:
+                    goal_achieved = int(g.achieved)
+        elif dig_stats is not None:
+            # GOAL 区間が無い場合のみ stats を fallback
+            st = dig_stats.get("goal_text")
+            if isinstance(st, str) and st.strip():
+                goal_text = st.strip()
+            raw_ach = dig_stats.get("goal_achieved")
+            if isinstance(raw_ach, (int, float)):
+                goal_achieved = int(raw_ach)
     except Exception:
         goal_text = None
         goal_achieved = None
-    # stats に保存済みの達成度を優先（goal 区間と乖離しても stats は自己申告の記録）
-    if dig_stats is not None and dig_stats.get("goal_achieved") is not None:
-        try:
-            goal_achieved = int(dig_stats["goal_achieved"])
-        except (TypeError, ValueError):
-            pass
 
     if dig_stats is None:
         if log_skips and skip_reason:
@@ -1623,6 +1633,8 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
             if len(screenpipe_lines) >= 3:
                 break
 
+    from .memory import causal_mismatch_metrics, count_open_proposed
+
     evidence_ctx = build_advice_evidence(
         current_stats,
         prior_stats,
@@ -1634,6 +1646,8 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         coach_entries=coach_for_f18,
         lifecycle_notes=lifecycle_notes,
         screenpipe_lines=screenpipe_lines or None,
+        open_proposed=count_open_proposed(effective_entries),
+        suppressed_metrics=causal_mismatch_metrics(effective_entries),
     )
 
     redactor = make_redactor(cfg.privacy.redact_patterns, cfg.privacy.replacement)
@@ -1881,7 +1895,11 @@ def cmd_goal(
 
 
 def _patch_stats_goal_achieved(cfg: Config, day: date, day_goal) -> None:
-    """既存 stats があれば goal_text / goal_achieved を更新（無ければ何もしない）。"""
+    """既存 stats があれば goal_achieved のみ更新（goal_text は触らない）。
+
+    R1: redactor なしで goal_text を上書きすると generate が保存した
+    redact 済み値を生テキストに戻し [F14] 経由で LLM に漏れる。
+    """
     import json
 
     path = cfg.stats_path / f"{day.isoformat()}.json"
@@ -1893,16 +1911,18 @@ def _patch_stats_goal_achieved(cfg: Config, day: date, day_goal) -> None:
         return
     if not isinstance(data, dict):
         return
-    from .goal import goal_stats_fields
+    ach = getattr(day_goal, "achieved", None)
+    if ach is None:
+        return
+    try:
+        n = int(ach)
+    except (TypeError, ValueError):
+        return
+    if not (0 <= n <= 100):
+        return
     from .vault import atomic_write_text
 
-    text, cat, ach = goal_stats_fields(day_goal, None)
-    if text:
-        data["goal_text"] = text
-    if cat:
-        data["goal_category"] = cat
-    if ach is not None:
-        data["goal_achieved"] = int(ach)
+    data["goal_achieved"] = n
     atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=1))
 
 

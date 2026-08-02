@@ -1004,6 +1004,9 @@ def graduate_entries(
     評価順: unmeasurable → graduated → retired（同一実行で両方にしない）。
     追記型・冪等（既に終端なら出さない）。
 
+    retired: age≥3 かつ proposed のまま・graduated 未達（§E）。
+    closed_reason で未測定 / 未チェック達成 / 指標未達などを区別する。
+
     known_categories: category_minutes の偽0.0 卒業を防ぐ（backfill と同じ）。
     測定可能日は提案日より後かつ **当日未満**（当日は集計途中のため含めない）。
     """
@@ -1071,13 +1074,25 @@ def graduate_entries(
             )
             continue
 
-        # retired: 14日経過かつ graduated でない
-        if age >= 14:
+        # retired (§E): 3日以上 proposed のまま = 未チェック、かつ graduated 未達
+        # closed_reason で「実行されなかった / 指標が動かない / チェックなし達成」を区別
+        if age >= 3:
+            any_pass = any(ok for _d, ok in measurable)
+            any_fail = any(not ok for _d, ok in measurable)
+            if not measurable:
+                reason = "unchecked_no_measurement"
+            elif any_pass and not any_fail:
+                # 測定できた日はすべて PASS なのに未チェック → 行動と指標の因果が弱い
+                reason = "unchecked_metric_ok_no_check"
+            elif any_pass and any_fail:
+                reason = "unchecked_metric_mixed"
+            else:
+                reason = "unchecked_metric_unmet"
             out.append(
                 replace(
                     e,
                     status="retired",
-                    closed_reason="expired",
+                    closed_reason=reason,
                     closed_date=today.isoformat(),
                 )
             )
@@ -1123,12 +1138,67 @@ def format_lifecycle_reader_notes(
                 )
         elif e.status == "retired":
             retired_n += 1
-    if retired_n:
+            reason = e.closed_reason or "expired"
+            why = {
+                "unchecked_no_measurement": "測定日が足りず効果を判定できないまま未チェックだった",
+                "unchecked_metric_ok_no_check": "指標は達していたがチェックされなかった（行動と指標の因果が弱い可能性）",
+                "unchecked_metric_mixed": "指標が安定せず未チェックのまま過ぎた",
+                "unchecked_metric_unmet": "未チェックのまま指標も目標に届かなかった",
+                "expired": "期限切れ",
+            }.get(reason, reason)
+            notes.append(
+                f"{e.id} を退役しました: {why}（終了扱いは達成を意味しません）。"
+            )
+    if retired_n and not any("退役" in n for n in notes):
         notes.append(
-            f"提案期限切れで終了した提案が {retired_n} 件あります"
+            f"提案を退役した件が {retired_n} 件あります"
             f"（終了扱いは達成を意味しません）。"
         )
     return notes
+
+
+# 同時に「proposed のまま」にしてよい上限（§E・advise 新規を止める）
+MAX_ACTIVE_PROPOSED = 3
+
+
+def count_open_proposed(entries: Sequence[MemoryEntry]) -> int:
+    """終端以外の status=proposed 件数（同時アクティブ提案数）。"""
+    n = 0
+    for e in entries:
+        if e.status == "proposed":
+            n += 1
+    return n
+
+
+def causal_mismatch_metrics(entries: Sequence[MemoryEntry]) -> frozenset[str]:
+    """チェックなしで PASS した提案の指標名集合（同じ指標の新規提案を抑制する）。
+
+    - proposed のまま confirmed pass
+    - または done だが判定が実行前（_execution_aligned_verdict が False）
+    """
+    from .verdict import parse_pass_condition
+
+    found: set[str] = set()
+    for e in entries:
+        parsed = parse_pass_condition(e.action)
+        if parsed is None:
+            continue
+        metric = parsed[0]
+        if (
+            e.status == "proposed"
+            and e.verdict == "pass"
+            and e.verdict_stage == "confirmed"
+        ):
+            found.add(metric)
+            continue
+        if (
+            e.status == "done"
+            and e.verdict == "pass"
+            and e.verdict_stage == "confirmed"
+            and not _execution_aligned_verdict(e)
+        ):
+            found.add(metric)
+    return frozenset(found)
 
 
 def _verdict_block_line(entry: MemoryEntry) -> str:

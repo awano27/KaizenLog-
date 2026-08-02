@@ -8,11 +8,38 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from datetime import date
 from pathlib import Path
 
 _FOOTNOTE_DEF_RE = re.compile(r"^\[\^(\d+)\]:\s*(.*)$")
 _FOOTNOTE_REF_RE = re.compile(r"\[\^(\d+)\]")
+
+# Obsidian 等が .md を掴んでいるときの WinError 5 / PermissionError 対策
+_REPLACE_RETRIES = 8
+_REPLACE_BASE_SLEEP_SEC = 0.05
+
+
+def _os_replace_with_retry(tmp: Path, path: Path) -> None:
+    """os.replace を短い間隔で再試行する（Windows ファイルロック耐性）。"""
+    last: BaseException | None = None
+    for attempt in range(_REPLACE_RETRIES):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as e:
+            last = e
+        except OSError as e:
+            # WinError 5 は環境により OSError のこともある
+            winerr = getattr(e, "winerror", None)
+            if winerr == 5 or e.errno in (13, 11):  # EACCES / EAGAIN
+                last = e
+            else:
+                raise
+        time.sleep(_REPLACE_BASE_SLEEP_SEC * (attempt + 1))
+    assert last is not None
+    # 失敗時は .tmp を残して原因調査しやすくする（成功時は replace で消える）
+    raise last
 
 
 def atomic_write_bytes(path: Path, content: bytes) -> None:
@@ -21,7 +48,9 @@ def atomic_write_bytes(path: Path, content: bytes) -> None:
     tmp = path.with_name(path.name + ".tmp")
     with open(tmp, "wb") as f:
         f.write(content)
-    os.replace(tmp, path)
+        f.flush()
+        os.fsync(f.fileno())
+    _os_replace_with_retry(tmp, path)
 
 
 def atomic_write_text(path: Path, content: str, *, newline: str | None = None) -> None:
@@ -29,6 +58,7 @@ def atomic_write_text(path: Path, content: str, *, newline: str | None = None) -
 
     newline=None の既定は newline=\"\"（変換なし）。明示指定時はその newline で書く。
     既存呼び出しの既定動作は「渡した content をそのまま書く」。
+    PermissionError / WinError 5 時は短い sleep のうえ再試行する。
     """
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
@@ -36,7 +66,9 @@ def atomic_write_text(path: Path, content: str, *, newline: str | None = None) -
     nl = "" if newline is None else newline
     with open(tmp, "w", encoding="utf-8", newline=nl) as f:
         f.write(content)
-    os.replace(tmp, path)
+        f.flush()
+        os.fsync(f.fileno())
+    _os_replace_with_retry(tmp, path)
 
 
 def read_text_preserve_newlines(path: Path) -> str:
@@ -232,6 +264,10 @@ def consolidate_disclaimers(content: str, *, max_inline: int = 1) -> str:
             stripped = line.lstrip()
             if stripped.startswith("※"):
                 note = stripped[1:].lstrip()
+                # T5: 空の ※ は脚注化しない（空定義は再読込で落ち冪等性が壊れる）
+                if not note:
+                    out.append(line)
+                    continue
                 seen += 1
                 if seen <= max_inline:
                     out.append(line)

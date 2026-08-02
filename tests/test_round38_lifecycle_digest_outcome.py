@@ -324,12 +324,17 @@ def test_a3_graduated_and_retired(tmp_path):
     g2 = graduate_entries([e2], date(2026, 7, 22), stats_dir=stats1)
     assert not any(x.status == "graduated" for x in g2)
 
-    # 14 days → retired（測定日が無いので graduated に落ちない）
+    # 3日以上 → retired（§E: 測定日が無い未チェックも退役。closed_reason 付き）
     stats2 = tmp_path / "stats2"
     stats2.mkdir()
     e3 = _entry(id="KZN-20260701-001", date="2026-07-01")
-    g3 = graduate_entries([e3], date(2026, 7, 16), stats_dir=stats2)
-    assert any(x.status == "retired" and x.id == "KZN-20260701-001" for x in g3)
+    g3 = graduate_entries([e3], date(2026, 7, 4), stats_dir=stats2)
+    assert any(
+        x.status == "retired"
+        and x.id == "KZN-20260701-001"
+        and x.closed_reason == "unchecked_no_measurement"
+        for x in g3
+    )
 
 
 def test_a1_cli_done_skip_terminal_exit_1(tmp_path, monkeypatch, capsys):

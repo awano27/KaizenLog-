@@ -425,14 +425,15 @@ def test_c1_decay_skips_terminal(tmp_path):
     assert detect_kzn_decay(mem, st, as_of=as_of) == []
 
 
-def test_c1_retired_boundary_13_vs_14(tmp_path):
+def test_c1_retired_boundary_2_vs_3(tmp_path):
+    """§E: age=2 は退役なし、age=3 で retired。"""
     stats = tmp_path / "s"
     stats.mkdir()
     e = _entry(date="2026-07-01", action="x｜PASS: context_switches <= 10｜FAIL: 11")
-    g13 = graduate_entries([e], date(2026, 7, 14), stats_dir=stats)  # age=13
-    assert not any(x.status == "retired" for x in g13)
-    g14 = graduate_entries([e], date(2026, 7, 15), stats_dir=stats)  # age=14
-    assert any(x.status == "retired" for x in g14)
+    g2 = graduate_entries([e], date(2026, 7, 3), stats_dir=stats)  # age=2
+    assert not any(x.status == "retired" for x in g2)
+    g3 = graduate_entries([e], date(2026, 7, 4), stats_dir=stats)  # age=3
+    assert any(x.status == "retired" for x in g3)
 
 
 def test_c1_outcome_git_fail_closed_returncode(monkeypatch):

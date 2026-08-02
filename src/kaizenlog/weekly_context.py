@@ -222,7 +222,12 @@ def render_weekly_context(
     lines.append("")
 
     # アクション実績（superseded / 終端 status は現役分母から除外）
-    from .memory import TERMINAL_STATUSES
+    from .memory import (
+        TERMINAL_STATUSES,
+        causal_mismatch_metrics,
+        compute_action_stats,
+        load_entries,
+    )
 
     entries = load_entries(memory_dir)
     week_start_s = days[0].isoformat()
@@ -272,6 +277,27 @@ def render_weekly_context(
             lines.append(f"- {e.id}: {e.action[:80]}")
     else:
         lines.append("- （なし）")
+
+    # §E: チェックなし達成 = 行動と指標の因果が弱いシグナル
+    week_end = days[-1]
+    stats_win = compute_action_stats(entries, week_end)
+    causal = causal_mismatch_metrics(entries)
+    undone = int(getattr(stats_win, "undone_passed", 0) or 0)
+    lines.extend(["", "### チェックなし達成（因果の弱い指標）", ""])
+    if undone or causal:
+        lines.append(
+            f"- 直近窓でチェックなし達成: {undone}件"
+            "（行動していないのに指標が目標到達 = 提案の失敗シグナル）"
+        )
+        if causal:
+            lines.append(
+                "- 新規提案を抑制する指標: " + ", ".join(sorted(causal)[:12])
+            )
+        lines.append(
+            "- 同じ指標への新規アクションは避け、行動が測れる別指標へ切り替える。"
+        )
+    else:
+        lines.append("- （該当なし）")
 
     # 実験（採否は表示のみ。frontmatter status は書き換えない — 人間/スキルが最終決定）
     experiments = load_experiments(experiments_dir)

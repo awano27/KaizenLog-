@@ -48,6 +48,10 @@ class AdviceEvidence:
     site_metrics_available: bool = False  # by_site 統計が有効（web watcher 経路）
     # 指標 → 挑戦性検査用ベースライン（直近履歴の中央値。無い指標は入口で検査しない）
     metric_baselines: Mapping[str, float] | None = None
+    # 指標 → 直近有効日の観測値列（パーセンタイル／桁違い拒否用）
+    metric_history_values: Mapping[str, tuple[float, ...]] | None = None
+    # チェックなし PASS などで因果が疑わしい指標（新規提案抑制）
+    suppressed_metrics: frozenset[str] | None = None
     # 当日 total_minutes（生カウントPASS入口ガード用。欠落は None）
     total_minutes: float | None = None
 
@@ -69,6 +73,8 @@ def _evidence(
     structured_ai_metrics_available: bool = False,
     site_metrics_available: bool = False,
     metric_baselines: Mapping[str, float] | None = None,
+    metric_history_values: Mapping[str, tuple[float, ...]] | None = None,
+    suppressed_metrics: frozenset[str] | None = None,
     total_minutes: float | None = None,
 ) -> AdviceEvidence:
     markdown = "\n".join(lines)
@@ -89,6 +95,8 @@ def _evidence(
         structured_ai_metrics_available=structured_ai_metrics_available,
         site_metrics_available=site_metrics_available,
         metric_baselines=metric_baselines,
+        metric_history_values=metric_history_values,
+        suppressed_metrics=suppressed_metrics,
         total_minutes=total_minutes,
     )
 
@@ -342,10 +350,10 @@ def _unique_prior_history(
     ]
 
 
-def _metric_baselines_from_history(
+def _metric_series_from_history(
     stats: Mapping[str, Any], history: Sequence[Mapping[str, Any]] | None
-) -> dict[str, float]:
-    """有効な直近履歴3日以上の中央値だけをPASS検査用に返す。"""
+) -> dict[str, list[float]]:
+    """指標ごとの有効日次値列（日付昇順）。3日未満の指標は載せない。"""
     from .experiments import metric_from_stats
 
     try:
@@ -370,7 +378,7 @@ def _metric_baselines_from_history(
         *sorted(site_metrics),
     ]
 
-    out: dict[str, float] = {}
+    out: dict[str, list[float]] = {}
     for metric in metrics:
         values_by_day: dict[date, float] = {}
         for item_day, item in valid_history:
@@ -400,8 +408,28 @@ def _metric_baselines_from_history(
                 continue
             values_by_day[item_day] = float(value)
         if len(values_by_day) >= _MIN_BASELINE_DAYS:
-            out[metric] = float(median(values_by_day.values()))
+            ordered = [values_by_day[d] for d in sorted(values_by_day)]
+            out[metric] = ordered
     return out
+
+
+def _metric_baselines_from_history(
+    stats: Mapping[str, Any], history: Sequence[Mapping[str, Any]] | None
+) -> dict[str, float]:
+    """有効な直近履歴3日以上の中央値だけをPASS検査用に返す。"""
+    series = _metric_series_from_history(stats, history)
+    return {m: float(median(vals)) for m, vals in series.items()}
+
+
+def _nearest_rank_percentile(values: Sequence[float], pct: float) -> float:
+    """pct in 0..100。nearest-rank（1-indexed）。"""
+    xs = sorted(float(v) for v in values)
+    if not xs:
+        raise ValueError("empty")
+    if len(xs) == 1:
+        return xs[0]
+    k = max(1, min(len(xs), int(round(pct / 100.0 * len(xs) + 0.5))))
+    return xs[k - 1]
 
 
 def _tool_error_concentration_sentence(stats: Mapping[str, Any]) -> str | None:
@@ -441,13 +469,10 @@ def _tool_error_concentration_sentence(stats: Mapping[str, Any]) -> str | None:
 def _goal_category_minutes(
     stats: Mapping[str, Any], category: str
 ) -> float | None:
-    by_cat = stats.get("by_category")
-    if not isinstance(by_cat, Mapping):
-        return None
-    v = by_cat.get(category)
-    if isinstance(v, (int, float)) and isfinite(float(v)):
-        return float(v)
-    return None
+    # R6: 単一実装は stats.goal_category_minutes
+    from .stats import goal_category_minutes
+
+    return goal_category_minutes(stats, category)
 
 
 def _count_goal_days(
@@ -648,6 +673,8 @@ def build_advice_evidence(
     coach_entries: Sequence[Any] | None = None,
     lifecycle_notes: Sequence[str] | None = None,
     screenpipe_lines: Sequence[str] | None = None,
+    open_proposed: int | None = None,
+    suppressed_metrics: frozenset[str] | Sequence[str] | None = None,
 ) -> AdviceEvidence:
     """LLMがログの意味を取り違えないための根拠コンテキストを作る。
 
@@ -758,7 +785,7 @@ def build_advice_evidence(
         raw_ach = stats.get("goal_achieved")
         if isinstance(raw_ach, (int, float)):
             n = max(0, min(100, int(raw_ach)))
-            lines.append(f"- [F14b] 目標達成度（自己申告）: {n}%")
+            lines.append(f"- [F21] 目標達成度（自己申告）: {n}%")
         n_goal, n_win = _count_goal_days(history, stats, window=7)
         lines.append(f"- [F16] 目標記入: {n_win}日中{n_goal}日")
 
@@ -1133,6 +1160,46 @@ def build_advice_evidence(
             )
         except Exception:
             pass
+    # §E: 同時アクティブ proposed が上限以上なら新規を出さない
+    if open_proposed is not None:
+        try:
+            from .memory import MAX_ACTIVE_PROPOSED
+
+            room = max(0, int(MAX_ACTIVE_PROPOSED) - int(open_proposed))
+            max_actions = min(max_actions, room)
+        except Exception:
+            pass
+    suppressed_set: frozenset[str] | None = None
+    if suppressed_metrics is not None:
+        suppressed_set = frozenset(str(m) for m in suppressed_metrics if str(m).strip())
+        if suppressed_set:
+            lines.append(
+                "- [L14] チェックなしで指標が達成された提案があるため、次の指標への"
+                "新規アクションは避けよ: " + ", ".join(sorted(suppressed_set)[:12])
+            )
+    # パーセンタイル根拠（LLM ガイド）。F10 帯に加え減少指標は下位25%目安を明示
+    metric_series: dict[str, list[float]] = {}
+    if stats is not None:
+        try:
+            metric_series = _metric_series_from_history(stats, history)
+            hint_parts: list[str] = []
+            for metric, vals in list(metric_series.items())[:8]:
+                if len(vals) < _MIN_BASELINE_DAYS:
+                    continue
+                p25 = _nearest_rank_percentile(vals, 25)
+                p75 = _nearest_rank_percentile(vals, 75)
+                lo, hi = min(vals), max(vals)
+                hint_parts.append(
+                    f"{metric}: 実測{lo:g}〜{hi:g} 下位25%={p25:g} 上位25%={p75:g}"
+                )
+            if hint_parts:
+                lines.append(
+                    "- [F21] PASS目標は実測分布内で決める（減少指標は下位25%付近、"
+                    "増加指標は上位25%付近。桁違いの裸数値は不可）: "
+                    + " / ".join(hint_parts[:5])
+                )
+        except Exception:
+            metric_series = {}
 
     # §Z3: 構造化 AI CLI セッション数（web を除く）。日誌行と F19 で同じ母数。
     cli_session_count = 0
@@ -1285,6 +1352,7 @@ def build_advice_evidence(
                 prompts = d.get("prompts_digest") if isinstance(d.get("prompts_digest"), list) else []
                 first = ""
                 if prompts:
+                    # stats 保存時に redact→80 字済み。再切詰めは仕様長を超えない保険
                     first = str(prompts[0] or "")[:80]
                 elif d.get("title"):
                     first = str(d.get("title") or "")[:80]
@@ -1336,5 +1404,9 @@ def build_advice_evidence(
         structured_ai_metrics_available=structured_ai_metrics_available,
         site_metrics_available=site_metrics_available,
         metric_baselines=metric_baselines or None,
+        metric_history_values=(
+            {k: tuple(v) for k, v in metric_series.items()} if metric_series else None
+        ),
+        suppressed_metrics=suppressed_set,
         total_minutes=float(total_minutes) if isinstance(total_minutes, (int, float)) else None,
     )
