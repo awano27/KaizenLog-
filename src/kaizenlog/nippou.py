@@ -15,6 +15,8 @@ from typing import Any
 
 from .advisor import generate_text
 from .config import LLMConfig
+from .privacy_filter import PRIVATE_CATEGORIES as _PRIVATE_CATEGORIES
+from .privacy_filter import is_private_block as _is_private
 
 NIPPOU_MARKER_HEADING = "## 📝 日報ドラフト"
 
@@ -94,9 +96,6 @@ def generate_nippou_llm(
 
 
 # ---- 決定的モード（LLM不要） ----
-
-from .privacy_filter import PRIVATE_CATEGORIES as _PRIVATE_CATEGORIES
-from .privacy_filter import is_private_block as _is_private
 
 
 def _fmt_minutes(minutes: float) -> str:

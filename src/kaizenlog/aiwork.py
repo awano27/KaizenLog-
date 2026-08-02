@@ -420,8 +420,11 @@ def _note_tool_use(session: AISession, name: str, tool_input: object = None) -> 
         base = _basename_from_tool_input(tool_input)
         if base and base not in session._files_order:
             session._files_order.append(base)
-    # Bash 等のコマンドからテスト実行を検出
-    if str(name) in ("Bash", "bash", "Shell", "shell", "local_shell"):
+    # Bash / Codex shell 等のコマンドから head を記録
+    # shell_command は digests 用のみ。tests_run は従来どおり Bash 系名のみ
+    # （既存集計を変えない）
+    _cmd_tools = ("Bash", "bash", "Shell", "shell", "local_shell", "shell_command")
+    if str(name) in _cmd_tools:
         cmd = ""
         if isinstance(tool_input, dict):
             cmd = str(
@@ -432,8 +435,9 @@ def _note_tool_use(session: AISession, name: str, tool_input: object = None) -> 
             )
         elif isinstance(tool_input, str):
             cmd = tool_input
-        if _looks_like_test_command(cmd):
-            session.tests_run = True
+        if str(name) in ("Bash", "bash", "Shell", "shell", "local_shell"):
+            if _looks_like_test_command(cmd):
+                session.tests_run = True
         head = _cmd_head(cmd)
         if head:
             session._cmd_counts[head] += 1

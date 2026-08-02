@@ -51,8 +51,12 @@ class _ConvAccum:
     first_user_text: str | None = None
     has_user_text: bool = False
     rows: int = 0
+    # §G1: 本文保存モードでのみ prompts_digest を積む
+    _user_prompts_raw: list[str] = field(default_factory=list, repr=False)
 
     def add(self, ts: datetime, role: str, char_count: int, text: str | None) -> None:
+        from .aiwork import _is_system_wrapper, normalize_prompt_text
+
         self.rows += 1
         self.start = ts if self.start is None else min(self.start, ts)
         self.end = ts if self.end is None else max(self.end, ts)
@@ -67,6 +71,11 @@ class _ConvAccum:
                     # メタデータのみ: 本文なしフラグ
                     self.first_user_text = ""
                     self.has_user_text = False
+            # 本文がある発話のみ digest バッファへ（未保存モードは後で捨てる）
+            if text and str(text).strip() and not _is_system_wrapper(str(text)):
+                cleaned = normalize_prompt_text(str(text))
+                if cleaned:
+                    self._user_prompts_raw.append(cleaned)
         elif role_l in ("assistant", "model", "ai"):
             self.assistant_chars += max(0, int(char_count or 0))
             if text and not char_count:
@@ -77,20 +86,25 @@ class _ConvAccum:
             return None
         if self.user_turns <= 0 and self.assistant_chars <= 0:
             return None
+        from .aiwork import finalize_session_io_digest
+
         title: str | None
         first_len = 0
+        prompts: list[str] = []
         if self.has_user_text and self.first_user_text:
             extracted = extract_session_title(self.first_user_text)
             if extracted:
                 title, first_len = extracted
             else:
                 title = None
+            prompts = list(self._user_prompts_raw)
         else:
             # 本文未保存モードでも表・層別以外は動く
             title = "（本文未保存）"
             first_len = 0
+            prompts = []  # 推測で埋めない
         sid = f"{self.site}:{self.conversation_id}"
-        return AISession(
+        session = AISession(
             session_id=sid,
             project=_site_label(self.site),
             start=self.start,
@@ -103,7 +117,10 @@ class _ConvAccum:
             assistant_chars=self.assistant_chars,
             # トークンは設定しない（0 のまま。コストに混入させない）
             output_tokens=0,
+            _user_prompts_raw=prompts,
         )
+        finalize_session_io_digest(session)
+        return session
 
 
 def _day_files(export_dir: Path, day_start: datetime, day_end: datetime) -> list[Path]:

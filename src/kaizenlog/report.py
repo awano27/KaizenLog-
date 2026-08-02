@@ -11,6 +11,7 @@ from typing import Any
 
 from .classifier import ClassifiedEvent
 from .focus import FOCUS_MIN_MINUTES, InputStats
+from .privacy_filter import is_private_block
 
 
 @dataclass
@@ -482,9 +483,12 @@ def render_markdown(
     )
     rows = eligible
     overflow_omitted = 0
+    shown_ids: set[int] | None = None
     if eligible_blocks > max_timeline_rows:
-        rows = sorted(eligible, key=lambda b: -b.minutes)[:max_timeline_rows]
-        rows.sort(key=lambda b: b.start)
+        kept = sorted(eligible, key=lambda b: -b.minutes)[:max_timeline_rows]
+        kept.sort(key=lambda b: b.start)
+        rows = kept
+        shown_ids = {id(b) for b in kept}
         overflow_omitted = eligible_blocks - max_timeline_rows
     shown_blocks = len(rows)
 
@@ -494,20 +498,33 @@ def render_markdown(
     table_entries: list[tuple[datetime, str, float]] = []
     # (sort_key, markdown_row, minutes)
     spans = list(session_spans or ())
-    # (sort_key, category, app, content, minutes, start, end) for collapse
-    raw_rows: list[tuple[datetime, str, str, str, float, datetime, datetime]] = []
-    for b in rows:
-        title = b.titles[0] if b.titles else ""
+    # §G2: 細切れ・省略を織り込んだ時刻順で圧縮（frag/gap は境界）
+    # item: (sort_key, kind, payload)
+    # kind "block": (cat, app, content, mins, start, end)
+    # kind "frag": (md, mins)
+    # kind "gap": None（省略された eligible。出力なし・連続打ち切り）
+    merge_items: list[tuple[datetime, str, object]] = []
+    # 省略がある場合は全 eligible を時刻順に走査し、非表示は gap にする
+    scan_blocks = (
+        sorted(eligible, key=lambda b: b.start) if shown_ids is not None else rows
+    )
+    for b in scan_blocks:
+        if shown_ids is not None and id(b) not in shown_ids:
+            merge_items.append((b.start.astimezone(tz), "gap", None))
+            continue
+        raw_title = b.titles[0] if b.titles else ""
+        # §G3: 私的判定は切詰め前の原文で行う
+        private = False
+        if hide_private_titles and is_private_block(
+            category=b.category, title=raw_title, app=b.app
+        ):
+            private = True
+        title = raw_title
         if len(title) > 60:
             title = title[:57] + "..."
         # §F1: 私的タイトルを伏せる（行は残し被覆率を壊さない）
-        if hide_private_titles:
-            from .privacy_filter import is_private_block
-
-            if is_private_block(
-                category=b.category, title=title, app=b.app
-            ):
-                title = "（私的・非表示）"
+        if private:
+            title = "（私的・非表示）"
         # §B1: AI ブロックのみセッション突合（非AI・細切れは不変）
         if b.ai and title != "（私的・非表示）":
             matched = _best_session_label(b, spans)
@@ -525,26 +542,24 @@ def render_markdown(
                     title = f"（画面テキスト: {fill}）"
                 else:
                     title = f"{title}（ログなし）" if title else "（ログなし）"
-        raw_rows.append(
+        merge_items.append(
             (
                 b.start.astimezone(tz),
-                b.category,
-                b.app,
-                title,
-                float(b.minutes),
-                b.start,
-                b.end,
+                "block",
+                (
+                    b.category,
+                    b.app,
+                    title,
+                    float(b.minutes),
+                    b.start,
+                    b.end,
+                ),
             )
         )
     for sort_key, md, mins in frag_rows:
-        # 細切れ行は既に md 文字列 — 圧縮対象外として後でマージ
-        table_entries.append((sort_key, md, mins))
-
-    # §F2: 同一 app/category/content が3行以上連続なら圧縮
-    collapsed = _collapse_consecutive_timeline_rows(raw_rows, tz)
-    for sort_key, md, mins in collapsed:
-        table_entries.append((sort_key, md, mins))
-    table_entries.sort(key=lambda x: x[0])
+        merge_items.append((sort_key, "frag", (md, mins)))
+    merge_items.sort(key=lambda x: x[0])
+    table_entries = _collapse_timeline_with_boundaries(merge_items, tz)
 
     if table_entries or under_lines:
         lines.append("### タイムライン")
@@ -584,29 +599,44 @@ def render_markdown(
     return "\n".join(lines)
 
 
-def _collapse_consecutive_timeline_rows(
-    rows: list[tuple[datetime, str, str, str, float, datetime, datetime]],
+def _collapse_timeline_with_boundaries(
+    items: list[tuple[datetime, str, object]],
     tz: tzinfo,
 ) -> list[tuple[datetime, str, float]]:
-    """同一 category/app/content が3行以上連続するとき1行に圧縮する。"""
-    if not rows:
+    """時刻順マージ後の並びで圧縮する。
+
+    kind=="frag" / kind=="gap" は圧縮境界（そこで連続を打ち切る）。
+    frag は表行として出力し、gap（省略行）は出力せず境界のみ。
+    kind=="block" のみ同一 category/app/content が3行以上連続なら1行に圧縮。
+    """
+    if not items:
         return []
     out: list[tuple[datetime, str, float]] = []
     i = 0
-    n = len(rows)
+    n = len(items)
     while i < n:
-        sk, cat, app, content, mins, start, end = rows[i]
+        sk, kind, payload = items[i]
+        if kind == "frag":
+            md, mins = payload  # type: ignore[misc]
+            out.append((sk, str(md), float(mins)))
+            i += 1
+            continue
+        if kind == "gap":
+            # 省略された eligible: 表には出さないが連続圧縮は打ち切る
+            i += 1
+            continue
+        # block run until frag/gap or content change
+        cat, app, content, mins, start, end = payload  # type: ignore[misc]
         j = i + 1
-        total = mins
+        total = float(mins)
         last_end = end
-        while (
-            j < n
-            and rows[j][1] == cat
-            and rows[j][2] == app
-            and rows[j][3] == content
-        ):
-            total += rows[j][4]
-            last_end = rows[j][6]
+        while j < n and items[j][1] == "block":
+            p = items[j][2]
+            cat_j, app_j, content_j, mins_j, _st_j, en_j = p  # type: ignore[misc]
+            if cat_j != cat or app_j != app or content_j != content:
+                break
+            total += float(mins_j)
+            last_end = en_j
             j += 1
         count = j - i
         if count >= 3:
@@ -620,17 +650,30 @@ def _collapse_consecutive_timeline_rows(
             out.append((sk, md, total))
         else:
             for k in range(i, j):
-                sk_k, cat_k, app_k, content_k, mins_k, st_k, en_k = rows[k]
+                sk_k = items[k][0]
+                cat_k, app_k, content_k, mins_k, st_k, en_k = items[k][2]  # type: ignore[misc]
                 md = (
                     f"| {_fmt_time(st_k, tz)}-{_fmt_time(en_k, tz)} "
-                    f"| {_fmt_minutes(mins_k)} "
+                    f"| {_fmt_minutes(float(mins_k))} "
                     f"| {_markdown_table_cell(cat_k)} "
                     f"| {_markdown_table_cell(app_k)} "
                     f"| {_markdown_table_cell(content_k)} |"
                 )
-                out.append((sk_k, md, mins_k))
+                out.append((sk_k, md, float(mins_k)))
         i = j
     return out
+
+
+def _collapse_consecutive_timeline_rows(
+    rows: list[tuple[datetime, str, str, str, float, datetime, datetime]],
+    tz: tzinfo,
+) -> list[tuple[datetime, str, float]]:
+    """後方互換: block のみの列を圧縮（細切れ境界なし）。"""
+    items = [
+        (sk, "block", (cat, app, content, mins, start, end))
+        for sk, cat, app, content, mins, start, end in rows
+    ]
+    return _collapse_timeline_with_boundaries(items, tz)
 
 
 def _fragment_bucket_rows(

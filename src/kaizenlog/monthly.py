@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import json
 from calendar import monthrange
-from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any
 
-from .effort import BUCKET_PRIVATE, _fmt_minutes_plain
+from .effort import BUCKET_PRIVATE
 from .memory import MemoryEntry
 from .report import _fmt_minutes
-from .vault import MONTHLY_MARKER, DailyNoteStore, atomic_write_text, upsert_section
+from .vault import MONTHLY_MARKER, atomic_write_text, upsert_section
 
 
 @dataclass
@@ -121,10 +120,7 @@ def aggregate_monthly(
         elif e.verdict == "fail" and e.verdict_stage == "confirmed":
             rep.fail_n += 1
 
-    # 当月に判定日があるエントリも少し見る（提案は前月でも当月判定）
-    # 提案数は当月提案のみ。指標達成は当月 confirmed 全体を見ると重複し得るので
-    # 上の month_entries に限定する。
-
+    # 提案数・指標達成は当月提案日のエントリのみ（by_id 後勝ち）。
     return rep
 
 

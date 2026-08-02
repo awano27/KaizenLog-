@@ -117,6 +117,10 @@ class _SessionAccum:
     ended_in_error: bool = False
     is_internal: bool = False
     repo_path: str | None = None  # 初回 cwd のみ保持
+    # §G1: 入出力 digest 収集（to_session で AISession へ渡す）
+    _files_order: list[str] = field(default_factory=list, repr=False)
+    _cmd_counts: Counter = field(default_factory=Counter, repr=False)
+    _user_prompts_raw: list[str] = field(default_factory=list, repr=False)
 
     def add_token(self, ts: datetime, ot: int, day_start: datetime, day_end: datetime) -> None:
         if ts < day_start:
@@ -146,9 +150,12 @@ class _SessionAccum:
 
         if _is_system_wrapper(text):
             return
-        if not normalize_prompt_text(text):
+        cleaned = normalize_prompt_text(text)
+        if not cleaned:
             return
         self.user_turns += 1
+        # §G1: ガード通過後の発話のみ digest バッファへ（順序・条件は維持）
+        self._user_prompts_raw.append(cleaned)
         if self.title is not None:
             return
         if is_kaizenlog_internal_text(text):
@@ -161,7 +168,7 @@ class _SessionAccum:
         self.title = title
 
     def note_tool(self, name: str, tool_input: object = None) -> None:
-        # AISession と同じ分類を一時オブジェクトで再利用
+        # AISession と同じ分類を再利用。_files_order / _cmd_counts を往復で渡す
         tmp = AISession(
             session_id=self.session_id,
             project=self.project,
@@ -170,10 +177,14 @@ class _SessionAccum:
             tool_counts=self.tool_counts,
             edits=self.edits,
             tests_run=self.tests_run,
+            _files_order=list(self._files_order),
+            _cmd_counts=Counter(self._cmd_counts),
         )
         _note_tool_use(tmp, name, tool_input)
         self.edits = tmp.edits
         self.tests_run = tmp.tests_run
+        self._files_order = list(tmp._files_order)
+        self._cmd_counts = Counter(tmp._cmd_counts)
         if isinstance(tool_input, str) and _looks_like_test_command(tool_input):
             self.tests_run = True
 
@@ -182,7 +193,9 @@ class _SessionAccum:
             return None
         if self.user_turns <= 0 and self.interruptions <= 0:
             return None
-        return AISession(
+        from .aiwork import finalize_session_io_digest
+
+        session = AISession(
             session_id=self.session_id,
             project=self.project,
             start=self.start,
@@ -202,7 +215,12 @@ class _SessionAccum:
             tests_run=self.tests_run,
             ended_in_error=self.ended_in_error,
             is_internal=self.is_internal,
+            _user_prompts_raw=list(self._user_prompts_raw),
+            _files_order=list(self._files_order),
+            _cmd_counts=Counter(self._cmd_counts),
         )
+        finalize_session_io_digest(session)
+        return session
 
 
 class CodexAdapter:
@@ -370,6 +388,16 @@ class CodexAdapter:
                     elif pt == "function_call":
                         name = str(payload.get("name") or "function")
                         args = payload.get("arguments") or payload.get("input")
+                        # Codex は arguments を JSON 文字列で渡すことがある
+                        if isinstance(args, str):
+                            s = args.strip()
+                            if s.startswith("{") or s.startswith("["):
+                                try:
+                                    parsed = json.loads(s)
+                                except json.JSONDecodeError:
+                                    parsed = None
+                                if isinstance(parsed, (dict, list)):
+                                    args = parsed
                         a.note_tool(name, args)
                         a.ended_in_error = False
                     elif pt == "custom_tool_call":

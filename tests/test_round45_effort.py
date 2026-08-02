@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import json
-import pytest
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from kaizenlog.config import Config, EffortConfig
+import pytest
+
+from kaizenlog.config import Config
 from kaizenlog.effort import (
     BUCKET_AI_GENERAL,
     BUCKET_PRIVATE,
@@ -17,13 +17,12 @@ from kaizenlog.effort import (
     extract_project_from_title,
     render_effort_markdown,
 )
-from kaizenlog.memory import MemoryEntry, append_entries
 from kaizenlog.monthly import (
     aggregate_monthly,
     render_monthly_markdown,
     write_monthly,
 )
-from kaizenlog.report import Block, SessionSpan, _fmt_minutes
+from kaizenlog.report import Block, SessionSpan
 from kaizenlog.vault import MONTHLY_MARKER, extract_section
 
 TZ = ZoneInfo("Asia/Tokyo")
@@ -208,13 +207,30 @@ def test_e14_monthly_write_marker_only(tmp_path):
     path = monthly_dir / "2026-08.md"
     monthly_dir.mkdir(parents=True)
     handwritten = "KEEP_HAND_MONTHLY"
-    path.write_text(f"# 2026-08\n\n{handwritten}\n", encoding="utf-8")
+    before = f"# 2026-08\n\n{handwritten}\n"
+    path.write_text(before, encoding="utf-8")
     body = "## 📅 2026-08 の実績\n\n稼働 1日 / 合計 1h\n"
     write_monthly(monthly_dir, 2026, 8, body)
     text = path.read_text(encoding="utf-8")
-    assert handwritten in text
     assert extract_section(text, MONTHLY_MARKER) is not None
     assert "稼働 1日" in (extract_section(text, MONTHLY_MARKER) or "")
+
+    def _outside(content: str) -> str:
+        start = f"<!-- {MONTHLY_MARKER}:start -->"
+        end = f"<!-- {MONTHLY_MARKER}:end -->"
+        si, ei = content.find(start), content.find(end)
+        if si >= 0 and ei > si:
+            return content[:si] + content[ei + len(end) :]
+        return content
+
+    # 手書きはマーカー外に残る
+    out1 = _outside(text)
+    assert handwritten in out1
+    assert handwritten in before
+    # 再書き込みで区間外バイトが厳密に不変（§G4-5）
+    write_monthly(monthly_dir, 2026, 8, body)
+    text2 = path.read_text(encoding="utf-8")
+    assert _outside(text2) == out1
 
 
 def test_e15_effort_disabled_emits_nothing(tmp_path, monkeypatch):

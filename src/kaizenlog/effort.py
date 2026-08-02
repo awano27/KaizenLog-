@@ -11,7 +11,6 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
-from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from .report import (
