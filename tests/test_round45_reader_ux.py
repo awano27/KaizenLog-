@@ -121,7 +121,8 @@ def test_nippou_skips_short_titles_and_avoids_leading_ellipsis():
     # short "A" project has no 「A」
     assert "「A」" not in md
     assert "KaizenLog-" in md
-    assert "主な内容: feat: reader ux" in md
+    # 第48弾: conventional type: を落としてテーマのみ
+    assert "主な内容: reader ux" in md
 
 
 def test_nippou_tomorrow_is_plain_action_without_kzn_id():

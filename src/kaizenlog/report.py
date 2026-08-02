@@ -172,16 +172,13 @@ def _under_threshold_lines(
     min_label: str,
     tz: tzinfo,
 ) -> list[str]:
+    """細切れを表に出さず、3行サマリへ畳む（第48弾 §D1）。"""
     under = [block for block in blocks if block.minutes < min_block_minutes]
     if not under:
         return []
 
     under_minutes = sum(block.minutes for block in under)
     ratio = under_minutes / total_minutes * 100 if total_minutes > 0 else 0.0
-    lines = [
-        f"表示外: {min_label}未満のブロック {len(under)}件・計"
-        f"{_fmt_under_threshold_minutes(under_minutes)}（合計 {_fmt_minutes(total_minutes)} の{ratio:.0f}%）。"
-    ]
     by_category: dict[str, float] = defaultdict(float)
     by_hour: dict[int, tuple[int, float]] = {}
     for block in under:
@@ -190,19 +187,20 @@ def _under_threshold_lines(
         count, minutes = by_hour.get(hour, (0, 0.0))
         by_hour[hour] = (count + 1, minutes + block.minutes)
     categories = sorted(by_category.items(), key=lambda item: (-item[1], item[0]))[:4]
-    lines.append(
-        "内訳は "
-        + " / ".join(
-            f"{category} {_fmt_under_threshold_minutes(minutes)}"
-            for category, minutes in categories
-        )
-        + "。"
+    cat_bits = " / ".join(
+        f"{category}{_fmt_under_threshold_minutes(minutes)}"
+        for category, minutes in categories
     )
+    lines = [
+        f"細切れ（{min_label}未満）{len(under)}件・"
+        f"{_fmt_under_threshold_minutes(under_minutes)}"
+        f"（合計の{ratio:.0f}%）。{cat_bits}。",
+    ]
     hours = sorted(by_hour.items(), key=lambda item: (-item[1][1], item[0]))[:3]
     lines.append(
-        "細切れが集中した時間帯: "
-        + "、".join(
-            f"{hour}時台 {count}件・{_fmt_under_threshold_minutes(minutes)}"
+        "集中を妨げた時間帯: "
+        + " / ".join(
+            f"{hour}時台 {count}件{_fmt_under_threshold_minutes(minutes)}"
             for hour, (count, minutes) in hours
         )
         + "。"
@@ -388,12 +386,16 @@ def render_markdown(
     screen_fills: Mapping[str, str] | None = None,
     *,
     hide_private_titles: bool = True,
+    stats_history: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     """デイリーノートに埋め込むアクティビティログのMarkdownを生成する。
 
     screen_fills: block_key → redact 済み画面テキスト要約（未突合 AI のみ）。
     hide_private_titles: 私的タイトルを（私的・非表示）にする。
+    stats_history: 基準線用（当日を除く直近）。任意。
     """
+    from .baseline import baseline, format_with_baseline
+
     lines: list[str] = []
     lines.append("## 📊 Activity Log")
     lines.append("")
@@ -408,13 +410,27 @@ def render_markdown(
         lines.append("")
         return "\n".join(lines)
 
-    lines.append(f"**合計アクティブ時間**: {_fmt_minutes(summary.total_minutes)}"
-                 f" / コンテキストスイッチ: {summary.context_switches}回")
+    prior = list(stats_history or [])
+    sw_text = f"{summary.context_switches}回"
+    med_sw, lab_sw = baseline(
+        prior, "context_switches", today_value=float(summary.context_switches)
+    )
+    sw_disp = format_with_baseline(sw_text, med_sw, lab_sw)
+    lines.append(
+        f"**合計アクティブ時間**: {_fmt_minutes(summary.total_minutes)}"
+        f" / コンテキストスイッチ: {sw_disp}"
+    )
     lines.append("")
 
     if input_stats is not None:
+        fb_n = len(input_stats.focus_blocks)
+        fb_text = f"{fb_n}回"
+        med_fb, lab_fb = baseline(
+            prior, "input.focus_blocks", today_value=float(fb_n)
+        )
+        fb_disp = format_with_baseline(fb_text, med_fb, lab_fb)
         lines.append(
-            f"**集中ブロック**: {len(input_stats.focus_blocks)}回 / "
+            f"**集中ブロック**: {fb_disp} / "
             f"合計 {_fmt_minutes(input_stats.focus_minutes)}"
             f"（{FOCUS_MIN_MINUTES:.0f}分以上入力が続いた区間）"
             f" / キー入力 {input_stats.keypresses:,}回"
@@ -433,41 +449,51 @@ def render_markdown(
         )
     lines.append("")
 
-    # サイト別（aw-watcher-web 導入時のみ）
+    # サイト別（aw-watcher-web 導入時のみ）— 私的は1行に畳む
     if summary.by_site:
         lines.append("### 🌐 サイト別（watcher取得分・上位10）")
         lines.append("")
         lines.append("| サイト | 時間 |")
         lines.append("| --- | ---: |")
-        for site, minutes in sorted(summary.by_site.items(), key=lambda x: -x[1])[:10]:
+        private_site_mins = 0.0
+        public_sites: list[tuple[str, float]] = []
+        for site, minutes in sorted(summary.by_site.items(), key=lambda x: -x[1]):
+            if hide_private_titles and is_private_block(
+                category="ブラウジング", title=str(site), app=""
+            ):
+                private_site_mins += float(minutes)
+            else:
+                public_sites.append((str(site), float(minutes)))
+        shown = 0
+        for site, minutes in public_sites:
+            if shown >= 10:
+                break
             lines.append(
                 f"| {_markdown_table_cell(site)} | {_fmt_site_minutes(minutes)} |"
             )
-        lines.append("")
-        lines.append("※ watcherが取得できた部分だけで、ブラウザ時間の完全な内訳ではありません。")
-        lines.append("")
-
-    # AI作業の詳細
-    if summary.ai_tool_minutes:
-        lines.append("### 🤖 AI作業の内訳（画面分類による推定）")
-        lines.append("")
-        lines.append(
-            "AI関連画面の前景ブロック数（推定）: "
-            f"{summary.ai_activity_blocks}回（会話数・往復数ではありません）"
-        )
-        lines.append("")
-        lines.append("| ツール | 時間 |")
-        lines.append("| --- | ---: |")
-        for tool, minutes in sorted(summary.ai_tool_minutes.items(), key=lambda x: -x[1]):
+            shown += 1
+        if private_site_mins > 0 and shown < 10:
             lines.append(
-                f"| {_markdown_table_cell(tool)} | {_fmt_minutes(minutes)} |"
+                f"| （私的） | {_fmt_site_minutes(private_site_mins)} |"
             )
         lines.append("")
+        lines.append(
+            "※ watcherが取得できた部分だけで、ブラウザ時間の完全な内訳ではありません。"
+        )
+        lines.append("")
 
-    # タイムライン（主要ブロック + 細切れ1時間バケット）— 件数は実配列から決定論
+    # AI作業の内訳は Activity Log から削り、AI作業の質へ統合（§D3）
+    if summary.ai_tool_minutes:
+        lines.append(
+            "AI作業のツール別内訳は「🤖 AI作業の質」節を参照。"
+        )
+        lines.append("")
+
+    # タイムライン（3分以上の実ブロックのみ。細切れは表前サマリへ）
     total_blocks = len(summary.blocks)
     eligible = [b for b in summary.blocks if b.minutes >= min_block_minutes]
     under_blocks = [b for b in summary.blocks if b.minutes < min_block_minutes]
+    under_minutes_total = sum(float(b.minutes) for b in under_blocks)
     eligible_blocks = len(eligible)
     min_label = (
         f"{int(min_block_minutes)}分"
@@ -492,28 +518,21 @@ def render_markdown(
         overflow_omitted = eligible_blocks - max_timeline_rows
     shown_blocks = len(rows)
 
-    # §A1: 細切れを1時間バケット行として時刻順にマージ
-    frag_rows = _fragment_bucket_rows(under_blocks, tz=tz)
-    # eligible 行は max_timeline_rows のみ。細切れは落とさない
+    # 細切れは表に入れない（§D1）。被覆説明は表計 + 細切れ分で行う。
     table_entries: list[tuple[datetime, str, float]] = []
-    # (sort_key, markdown_row, minutes)
     spans = list(session_spans or ())
-    # §G2: 細切れ・省略を織り込んだ時刻順で圧縮（frag/gap は境界）
-    # item: (sort_key, kind, payload)
-    # kind "block": (cat, app, content, mins, start, end)
-    # kind "frag": (md, mins)
-    # kind "gap": None（省略された eligible。出力なし・連続打ち切り）
     merge_items: list[tuple[datetime, str, object]] = []
-    # 省略がある場合は全 eligible を時刻順に走査し、非表示は gap にする
     scan_blocks = (
         sorted(eligible, key=lambda b: b.start) if shown_ids is not None else rows
     )
+    # 私的タイムライン行は集計1行へ畳むため先に蓄積
+    private_timeline_mins = 0.0
+    private_timeline_count = 0
     for b in scan_blocks:
         if shown_ids is not None and id(b) not in shown_ids:
             merge_items.append((b.start.astimezone(tz), "gap", None))
             continue
         raw_title = b.titles[0] if b.titles else ""
-        # §G3: 私的判定は切詰め前の原文で行う
         private = False
         if hide_private_titles and is_private_block(
             category=b.category, title=raw_title, app=b.app
@@ -522,11 +541,11 @@ def render_markdown(
         title = raw_title
         if len(title) > 60:
             title = title[:57] + "..."
-        # §F1: 私的タイトルを伏せる（行は残し被覆率を壊さない）
         if private:
-            title = "（私的・非表示）"
-        # §B1: AI ブロックのみセッション突合（非AI・細切れは不変）
-        if b.ai and title != "（私的・非表示）":
+            private_timeline_mins += float(b.minutes)
+            private_timeline_count += 1
+            continue
+        if b.ai:
             matched = _best_session_label(b, spans)
             if matched is not None:
                 title = matched
@@ -556,10 +575,24 @@ def render_markdown(
                 ),
             )
         )
-    for sort_key, md, mins in frag_rows:
-        merge_items.append((sort_key, "frag", (md, mins)))
     merge_items.sort(key=lambda x: x[0])
     table_entries = _collapse_timeline_with_boundaries(merge_items, tz)
+    if private_timeline_mins > 0:
+        # 表末尾に私的集計1行（時刻キーはソート後に付与するので任意）
+        sort_key = (
+            table_entries[-1][0] if table_entries else datetime(2099, 1, 1, tzinfo=tz)
+        )
+        table_entries.append(
+            (
+                sort_key,
+                (
+                    f"| — | {_fmt_minutes(private_timeline_mins)} "
+                    f"| （私的） | — | "
+                    f"集計{private_timeline_count}件 |"
+                ),
+                private_timeline_mins,
+            )
+        )
 
     if table_entries or under_lines:
         lines.append("### タイムライン")
@@ -582,19 +615,29 @@ def render_markdown(
                 lines.append(md)
                 table_sum += mins
             lines.append("")
-            # §A2: 被覆率
+            # 被覆率: 表計 + 細切れ。100%超は重複計上を明示し頭打ち
             if summary.total_minutes > 0:
-                pct = int(round(table_sum / summary.total_minutes * 100))
-                if abs(table_sum - summary.total_minutes) > 1.0 and pct == 100:
+                covered = table_sum + under_minutes_total
+                raw_pct = covered / summary.total_minutes * 100
+                if raw_pct > 100.0:
+                    overflow_m = covered - summary.total_minutes
                     lines.append(
                         f"この表は合計 {_fmt_minutes(summary.total_minutes)} の "
-                        f"{pct}%（表計 {_fmt_minutes(table_sum)}）を説明しています。"
+                        f"100% を説明しています"
+                        f"（重複計上 {_fmt_minutes(overflow_m)} を含む）。"
                     )
                 else:
-                    lines.append(
-                        f"この表は合計 {_fmt_minutes(summary.total_minutes)} の "
-                        f"{pct}% を説明しています。"
-                    )
+                    pct = int(round(raw_pct))
+                    if abs(covered - summary.total_minutes) > 1.0 and pct == 100:
+                        lines.append(
+                            f"この表は合計 {_fmt_minutes(summary.total_minutes)} の "
+                            f"{pct}%（表計 {_fmt_minutes(table_sum)}）を説明しています。"
+                        )
+                    else:
+                        lines.append(
+                            f"この表は合計 {_fmt_minutes(summary.total_minutes)} の "
+                            f"{pct}% を説明しています。"
+                        )
 
     return "\n".join(lines)
 

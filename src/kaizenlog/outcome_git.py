@@ -150,7 +150,9 @@ def _parse_numstat(text: str) -> tuple[int, int, int, list[str]] | None:
             # subject は \x01 直後（空 subject もあり得る）
             subj = line[1:] if line.startswith("\x01") else ""
             if len(subjects) < 3:
-                subjects.append(subj[:80])
+                # 80字超は省略記号付き（意味の途中切断を明示）
+                s = subj if len(subj) <= 80 else subj[:79] + "…"
+                subjects.append(s)
             continue
         if not in_commit and not line.strip():
             continue

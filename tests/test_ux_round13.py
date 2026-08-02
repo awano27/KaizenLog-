@@ -484,7 +484,7 @@ def test_x5_table_cell_escape():
             # unescaped pipe would break column count — escaped \| is fine
             assert "カテゴリ\\|A" in md or "tool\\|B" in md or "site\\|D" in md
     assert "カテゴリ\\|A" in md
-    assert "tool\\|B" in md
+    # 第48弾 §D3: ツール別内訳表は Activity Log から削除。タイムラインのエスケープは維持
     assert "App\\|B" in md
     assert "title\\|C" in md
 

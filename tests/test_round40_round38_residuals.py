@@ -92,9 +92,10 @@ def test_a1_digest_without_redactor_has_stats_lines_no_friction():
         existing_markers={ADVICE_MARKER},
     )
     assert body is not None
-    assert "稼働:" in body
-    assert "今日の提案:" in body
-    assert "摩擦ワースト" not in body  # 外部由来はスキップ
+    assert "稼働" in body
+    # 第48弾: 摩擦は数値のみ redactor 無しでも出す。タイトル・1手自由文は出さない
+    assert "今日いちばんの摩擦" in body
+    assert "「" not in body  # タイトル無し
     assert "今日の1手" not in body
 
     body2 = build_digest(
@@ -105,7 +106,7 @@ def test_a1_digest_without_redactor_has_stats_lines_no_friction():
         existing_markers=set(),
     )
     assert body2 is not None
-    assert "摩擦ワースト" in body2
+    assert "今日いちばんの摩擦" in body2
 
 
 # ---------- §A2 git root dedupe ----------

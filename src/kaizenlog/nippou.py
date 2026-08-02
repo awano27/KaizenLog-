@@ -166,13 +166,75 @@ def _project_work_lines(stats: Mapping[str, Any], *, limit: int = 5) -> list[str
     return _project_work_lines_legacy(stats, limit=limit)
 
 
+_ROUND_IN_SUBJECT_RE = re.compile(r"\s*\(round\s+\d+\)\s*", re.IGNORECASE)
+# ハード切詰め済みの途中切れ "(round 4" / "(round" も落とす
+_ROUND_TRAILING_RE = re.compile(r"\s*\(round\s*\d*$", re.IGNORECASE)
+_CONVENTIONAL_TYPE_RE = re.compile(
+    r"^(?P<type>feat|fix|docs|style|refactor|perf|test|build|ci|chore|add)"
+    r"(?:\([^)]*\))?\s*:\s*",
+    re.IGNORECASE,
+)
+
+
+def _theme_from_subject(subj: str) -> str | None:
+    """conventional commit の type: 以降をテーマに。内部 (round N) は落とす。"""
+    s = " ".join(str(subj or "").split()).strip()
+    if not s:
+        return None
+    s = _ROUND_IN_SUBJECT_RE.sub(" ", s).strip()
+    s = _ROUND_TRAILING_RE.sub("", s).strip()
+    m = _CONVENTIONAL_TYPE_RE.match(s)
+    if m:
+        s = s[m.end() :].strip()
+    # 末尾の切れかけ省略記号・断片は落とす
+    s = s.rstrip(" …./-")
+    if not s or len(s) < 4:
+        return None
+    return s
+
+
+def _project_themes(
+    stats: Mapping[str, Any],
+    project: str,
+) -> list[str]:
+    """テーマ候補: コミット subject → prompts_digest → 空。"""
+    themes: list[str] = []
+    og = stats.get("outcome_git")
+    if isinstance(og, list):
+        for item in og:
+            if not isinstance(item, Mapping):
+                continue
+            if str(item.get("repo_label") or "") != project:
+                continue
+            subjects = item.get("subjects") if isinstance(item.get("subjects"), list) else []
+            for raw in subjects:
+                t = _theme_from_subject(str(raw))
+                if t and t not in themes:
+                    themes.append(t)
+                if len(themes) >= 3:
+                    return themes
+    if themes:
+        return themes
+    # prompts_digest フォールバック
+    for d in _session_digests(stats):
+        if str(d.get("project") or "").strip() != project:
+            continue
+        for p in d.get("prompts_digest") or []:
+            t = " ".join(str(p).split()).strip()
+            if t and t not in themes:
+                themes.append(t[:40] + ("…" if len(t) > 40 else ""))
+            if len(themes) >= 2:
+                return themes
+    return themes
+
+
 def _project_work_lines_from_effort(
     stats: Mapping[str, Any],
     mins_map: Mapping[str, Any],
     *,
     limit: int = 5,
 ) -> list[str]:
-    """§F4: effort 時間 + files_touched + outcome_git subjects（プロンプト断片は使わない）。"""
+    """effort 時間 + テーマ（subject/prompts）+ 規模（コミット/編集/テスト）。"""
     from .effort import (
         BUCKET_AI_GENERAL,
         BUCKET_PRIVATE,
@@ -201,8 +263,10 @@ def _project_work_lines_from_effort(
         if d.get("tests_run"):
             bucket["tests"] += 1
 
-    # commits by repo_label
+    # commits / ins/del by repo_label
     commits: dict[str, int] = {}
+    ins_map: dict[str, int] = {}
+    del_map: dict[str, int] = {}
     og = stats.get("outcome_git")
     if isinstance(og, list):
         for item in og:
@@ -211,6 +275,8 @@ def _project_work_lines_from_effort(
             label = str(item.get("repo_label") or "")
             if label:
                 commits[label] = commits.get(label, 0) + int(item.get("commits") or 0)
+                ins_map[label] = ins_map.get(label, 0) + int(item.get("insertions") or 0)
+                del_map[label] = del_map.get(label, 0) + int(item.get("deletions") or 0)
 
     skip_buckets = {
         BUCKET_PRIVATE,
@@ -219,7 +285,6 @@ def _project_work_lines_from_effort(
         BUCKET_RESEARCH,
         "（ほか）",
     }
-    # 業務プロジェクト: effort で私的等を除き時間降順
     work_items = [
         (str(k), float(v or 0))
         for k, v in mins_map.items()
@@ -229,25 +294,37 @@ def _project_work_lines_from_effort(
 
     lines: list[str] = []
     for project, mins in work_items[:limit]:
-        bits: list[str] = []
         meta = by_proj.get(project) or {}
-        files = list(meta.get("files") or [])[:3]
         edits = int(meta.get("edits") or 0)
-        if files:
-            more = " ほか" if len(meta.get("files") or []) > 3 else ""
-            bits.append("・".join(files) + more)
-        if edits:
-            bits.append(f"{edits}編集")
         c_n = commits.get(project, 0)
-        if c_n:
-            bits.append(f"コミット{c_n}件")
         t_n = int(meta.get("tests") or 0)
+        themes = _project_themes(stats, project)
+        scale_bits: list[str] = []
+        if c_n:
+            ins = ins_map.get(project, 0)
+            dels = del_map.get(project, 0)
+            scale_bits.append(f"コミット{c_n}件 +{ins:,}/-{dels:,}")
+        if edits:
+            scale_bits.append(f"{edits}編集")
         if t_n:
-            bits.append(f"テスト{t_n}回")
-        body = "、".join(bits) if bits else "作業"
+            scale_bits.append(f"テスト{t_n}回")
+        if themes:
+            theme_text = "・".join(themes[:3])
+            if scale_bits:
+                body = f"{theme_text}（{'、'.join(scale_bits)}）"
+            else:
+                body = theme_text
+        else:
+            # ファイル名フォールバック
+            files = list(meta.get("files") or [])[:3]
+            bits: list[str] = []
+            if files:
+                more = " ほか" if len(meta.get("files") or []) > 3 else ""
+                bits.append("・".join(files) + more)
+            bits.extend(scale_bits)
+            body = "、".join(bits) if bits else "作業"
         lines.append(f"- {project}（{_fmt_minutes(mins)}）: {body}")
 
-    # 調査・未分類・AI汎用はまとめて1行
     other_mins = 0.0
     for key in (BUCKET_RESEARCH, BUCKET_UNCLASSIFIED, BUCKET_AI_GENERAL):
         other_mins += float(mins_map.get(key) or 0)
@@ -365,11 +442,18 @@ def _outcome_lines(
             ins = int(item.get("insertions") or 0)
             dels = int(item.get("deletions") or 0)
             subjects = item.get("subjects") if isinstance(item.get("subjects"), list) else []
-            subj_bits = [str(s).strip() for s in subjects[:2] if str(s).strip()]
-            if subj_bits:
+            # 切詰め済み subject 同士を ' / ' 連結しない（1件に絞る）
+            subj = ""
+            for s in subjects:
+                t = _theme_from_subject(str(s)) or str(s).strip()
+                t = _ROUND_TRAILING_RE.sub("", t).strip().rstrip(" …./-")
+                if t:
+                    subj = t
+                    break
+            if subj:
                 lines.append(
                     f"- {label}: コミット{commits}件（+{ins}/-{dels}）"
-                    f"主な内容: {' / '.join(subj_bits)}"
+                    f"主な内容: {subj}"
                 )
             elif commits > 0:
                 lines.append(f"- {label}: コミット{commits}件（+{ins}/-{dels}）")
@@ -452,6 +536,65 @@ def _screenpipe_work_lines(
     return [f"- {app}: 「{data['excerpt']}」（画面テキストより・約{_fmt_minutes(minutes)}）"]
 
 
+def _truncate_action_for_tomorrow(body: str, *, limit: int = 60) -> str:
+    """アクション文の切詰め。`→` があるときトリガー/動作を別々に切る。
+
+    行頭が `…` で始まらない。
+    """
+    text = " ".join(str(body).split()).strip()
+    if not text:
+        return ""
+    if "→" in text:
+        left, right = text.split("→", 1)
+        left = left.strip()
+        right = right.strip()
+        if len(left) > 20:
+            left = left[:20] + "…"
+        if len(right) > 36:
+            right = right[:36] + "…"
+        return f"{left} → {right}"
+    if len(text) > limit:
+        return text[: limit - 1] + "…"
+    return text
+
+
+def _impression_line(stats: Mapping[str, Any]) -> str | None:
+    """【所感】決定論1行。評価語なし。材料が無ければ None。"""
+    digests = _session_digests(stats)
+    if not digests:
+        return None
+    heavy = [
+        d
+        for d in digests
+        if int(d.get("user_turns") or 0) >= 20
+    ]
+    if not heavy:
+        # ツールエラー集中など別の事実
+        total_err = 0
+        ai = stats.get("ai") if isinstance(stats.get("ai"), Mapping) else {}
+        if isinstance(ai, Mapping) and isinstance(ai.get("tool_errors"), (int, float)):
+            total_err = int(ai.get("tool_errors") or 0)
+        if total_err >= 10:
+            return f"- ツールエラーが合計{total_err}回記録された"
+        return None
+    heavy.sort(key=lambda d: -int(d.get("user_turns") or 0))
+    top = heavy[0]
+    turns = int(top.get("user_turns") or 0)
+    edits_top = int(top.get("edits") or 0)
+    edits_all = sum(int(d.get("edits") or 0) for d in digests)
+    if edits_all > 0 and edits_top > 0:
+        share = int(round(edits_top / edits_all * 100))
+        if share >= 10 and share % 10 == 0:
+            share_txt = f"{share // 10}割"
+        else:
+            share_txt = f"約{share}%"
+        return (
+            f"- AI作業のうち往復{turns}回のセッションが1件あり、"
+            f"当日の編集の{share_txt}を占めた"
+        )
+    return f"- AI作業のうち往復{turns}回のセッションが1件あった"
+
+
 def generate_nippou_deterministic(
     stats: dict,
     tz: tzinfo,
@@ -500,14 +643,19 @@ def generate_nippou_deterministic(
     for t in unchecked[:2]:
         tomorrow.append(f"- {t}")
     if not tomorrow and open_kzn_actions:
-        body = " ".join(str(open_kzn_actions[0][1]).split())
-        # 60字超は末尾優先（先頭切りで行動が消えない）
-        if len(body) > 60:
-            body = "…" + body[-59:]
+        body = _truncate_action_for_tomorrow(str(open_kzn_actions[0][1]))
         if body:
             tomorrow.append(f"- {body}")
     if not tomorrow:
         tomorrow.append("- 引き続き上記対応")
     lines.extend(tomorrow)
     lines.append("")
+
+    # ---- 【所感】----
+    impression = _impression_line(stats)
+    if impression:
+        lines.append("【所感】")
+        lines.append(impression)
+        lines.append("")
+
     return "\n".join(lines)

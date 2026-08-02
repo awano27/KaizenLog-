@@ -54,10 +54,10 @@ def test_render_markdown_contains_sections():
     md = render_markdown(_summary(), TZ)
     assert "## 📊 Activity Log" in md
     assert "### カテゴリ別" in md
-    assert "🤖 AI作業の内訳" in md
-    assert "AI関連画面の前景ブロック数（推定）: 1回（会話数・往復数ではありません）" in md
+    # 第48弾 §D3: AI作業の内訳は Activity Log から削り参照行へ
+    assert "🤖 AI作業の内訳" not in md
+    assert "AI作業の質" in md or "ツール別内訳" in md or "参照" in md
     assert "セッション数:" not in md
-    assert "claude" in md
     assert "### タイムライン" in md
 
 

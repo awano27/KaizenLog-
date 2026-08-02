@@ -169,8 +169,8 @@ def test_r2_status_line_plain_terms_and_numbers():
 # ---------- §R3 ----------
 
 
-def test_r3_nippou_tomorrow_plain_no_id_tail_truncate():
-    """日報の明日予定は KZN-ID なし平文。60字超は末尾優先。"""
+def test_r3_nippou_tomorrow_plain_no_id_head_truncate():
+    """日報の明日予定は KZN-ID なし平文。60字超は先頭優先（第48弾: 末尾優先廃止）。"""
     tz = ZoneInfo("Asia/Tokyo")
     stats = {
         "day": "2026-08-02",
@@ -192,7 +192,8 @@ def test_r3_nippou_tomorrow_plain_no_id_tail_truncate():
     assert body60 in tomorrow60
     tomorrow61 = md61.split("【明日の予定】", 1)[1]
     line = next(ln for ln in tomorrow61.splitlines() if ln.startswith("- "))
-    # 末尾優先: 「…」+ 末尾59字
-    assert line.startswith("- …")
-    assert line.endswith("あ")
-    assert len(line[2:]) == 60  # ellipsis + 59
+    # 先頭優先: 行頭が … で始まらない
+    assert line.startswith("- あ")
+    assert not line.startswith("- …")
+    assert line.endswith("…")
+    assert len(line[2:]) == 60  # 59字 + ellipsis

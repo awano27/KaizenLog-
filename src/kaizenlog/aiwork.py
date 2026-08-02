@@ -413,13 +413,47 @@ def _cmd_head(cmd: str) -> str | None:
     return head or None
 
 
+_PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _basenames_from_patch_text(tool_input: object) -> list[str]:
+    """Codex の apply_patch 形式からファイル名を集める。
+
+    Codex は `file_path` キーではなく、パッチ本文の
+    `*** Update File: C:\\path\\to\\x.py` でファイルを指定する。
+    1回の呼び出しで複数ファイルを含みうるため list で返す（basename のみ）。
+    """
+    text = ""
+    if isinstance(tool_input, str):
+        text = tool_input
+    elif isinstance(tool_input, dict):
+        text = str(tool_input.get("input") or tool_input.get("patch") or "")
+    if "*** " not in text:
+        return []
+    out: list[str] = []
+    for m in _PATCH_FILE_RE.finditer(text):
+        base = Path(m.group(1).replace("\\", "/")).name
+        if base and base not in out:
+            out.append(base)
+    return out
+
+
 def _note_tool_use(session: AISession, name: str, tool_input: object = None) -> None:
     session.tool_counts[str(name or "unknown")] += 1
     if _count_edit_tool(str(name or "")):
         session.edits += 1
-        base = _basename_from_tool_input(tool_input)
-        if base and base not in session._files_order:
-            session._files_order.append(base)
+        # Codex の apply_patch は file_path を持たずパッチ本文にファイル名がある。
+        # 本文を素の文字列として _basename_from_tool_input に渡すと壊れた値になるため、
+        # パッチ形式を認識できたときはそちらだけを使う。
+        patch_files = _basenames_from_patch_text(tool_input)
+        if patch_files:
+            for extra in patch_files:
+                if extra not in session._files_order:
+                    session._files_order.append(extra)
+        else:
+            base = _basename_from_tool_input(tool_input)
+            if base and base not in session._files_order:
+                session._files_order.append(base)
     # Bash / Codex shell 等のコマンドから head を記録
     # shell_command は digests 用のみ。tests_run は従来どおり Bash 系名のみ
     # （既存集計を変えない）
@@ -1380,6 +1414,7 @@ def render_aiwork_markdown(
     structured_cli_sessions: int | None = None,
     screen_samples: Sequence[Mapping[str, Any]] | None = None,
     session_details: bool = True,
+    stats_history: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     """「AI作業の質」セクションのMarkdownを生成する。セッションが無ければ空文字。
 
@@ -1555,10 +1590,59 @@ def render_aiwork_markdown(
         if len(retry_sources) == retry_chain_count and all(source in measurable_sources for source in retry_sources):
             retry_counts = {source: retry_sources.count(source) for source in measurable_sources}
             retry_part += f"（{_source_detail(retry_counts)}）"
+    # 基準線（直近7日中央値）を主要3指標へ
+    prior = list(stats_history or [])
+    try:
+        from .baseline import baseline, format_with_baseline
+
+        err_m, err_l = baseline(
+            prior, "ai.tool_errors", today_value=float(tool_errors_m)
+        )
+        errors_disp = format_with_baseline(
+            f"{tool_errors_m}回", err_m, err_l
+        )
+        # errors_part の先頭「ツールエラー: N回」を基準線付きに置換
+        if errors_part.startswith(f"ツールエラー: {tool_errors_m}回"):
+            errors_part = "ツールエラー: " + errors_disp + errors_part[
+                len(f"ツールエラー: {tool_errors_m}回") :
+            ]
+        ret_m, ret_l = baseline(
+            prior, "ai.retry_chains", today_value=float(retry_chain_count)
+        )
+        if ret_m is not None and ret_l:
+            retry_part = format_with_baseline(
+                f"リトライ連鎖: {retry_chain_count}回", ret_m, ret_l
+            )
+        tok_m, tok_l = baseline(
+            prior, "ai.output_tokens", today_value=float(output_tokens)
+        )
+        tok_disp = format_with_baseline(
+            f"{output_tokens:,}",
+            tok_m,
+            tok_l,
+            median_fmt=f"{int(tok_m):,}" if tok_m is not None else None,
+        )
+    except Exception:
+        tok_disp = f"{output_tokens:,}"
     lines.append(
         f"{errors_part} / {interruptions_part} / {retry_part}"
-        f" / 出力トークン: {output_tokens:,}"
+        f" / 出力トークン: {tok_disp}"
     )
+    # 画面分類によるツール別内訳（Activity Log から移設 §D3）
+    if screen_tool_minutes:
+        from .report import _fmt_minutes as _fmt_m
+
+        tool_items = sorted(
+            (
+                (str(t), float(m))
+                for t, m in _normalize_screen_tool_minutes(screen_tool_minutes).items()
+                if float(m) >= 0.5
+            ),
+            key=lambda x: -x[1],
+        )
+        if tool_items:
+            bits = " / ".join(f"{t} {_fmt_m(m)}" for t, m in tool_items[:6])
+            lines.append(f"画面分類のツール別内訳: {bits}")
     # 対象外トークンが計上分を上回る日は $ 額を出さない。
     # 総量の大半が単価不明だと「$0.04」がほぼ無意味で誤解を招くため。
     costed_tokens = max(0, int(output_tokens) - int(uncosted))

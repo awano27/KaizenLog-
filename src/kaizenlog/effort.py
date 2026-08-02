@@ -374,14 +374,24 @@ def render_effort_markdown(
         "| つけ先 | 時間 | 割合 | 根拠 |",
         "| --- | ---: | ---: | --- |",
     ]
+    # 丸め誤差を最大要素で吸収し、整数%合計を必ず100にする
+    raw_pcts: list[float] = []
     for name, mins in shown:
-        pct = mins / total * 100 if total else 0.0
+        raw_pcts.append((mins / total * 100) if total else 0.0)
+    int_pcts = [int(round(p)) for p in raw_pcts]
+    if shown and total > 0 and int_pcts:
+        drift = 100 - sum(int_pcts)
+        if drift != 0:
+            # 最大時間の行で調整
+            max_i = max(range(len(shown)), key=lambda i: (shown[i][1], -i))
+            int_pcts[max_i] = max(0, int_pcts[max_i] + drift)
+    for (name, mins), pct in zip(shown, int_pcts if int_pcts else [0] * len(shown)):
         if name == "（ほか）":
             ev = "少額合算"
         else:
             ev = _primary_evidence(report.evidence.get(name, {}))
         lines.append(
-            f"| {name} | {_fmt_minutes(mins)} | {pct:.0f}% | {ev} |"
+            f"| {name} | {_fmt_minutes(mins)} | {pct}% | {ev} |"
         )
     lines.append("")
 

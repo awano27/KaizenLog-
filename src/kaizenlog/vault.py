@@ -71,9 +71,25 @@ GOAL_MARKER = "kaizenlog:goal"  # 今日の作業目標（所有: goal コマン
 WEEKLY_CONTEXT_MARKER = "kaizenlog:weekly-context"  # 週次スコアカード（決定論）
 AGENT_CONTEXT_MARKER = "kaizenlog:agent-context"  # handoff が CLAUDE.md/AGENTS.md へ注入
 COACH_MARKER = "kaizenlog:coach"  # coach --apply が追記する調教区間
-DIGEST_MARKER = "kaizenlog:digest"  # 冒頭30秒サマリ（決定論・advise が所有）
+DIGEST_MARKER = "kaizenlog:digest"  # 冒頭30秒サマリ（決定論・generate/advise が所有）
 EFFORT_MARKER = "kaizenlog:effort"  # 工数のつけ先（決定論・generate が所有）
 MONTHLY_MARKER = "kaizenlog:monthly"  # 月次実績（決定論・monthly が所有）
+NIPPOU_MARKER = "kaizenlog:nippou"  # 日報ドラフト
+FOOTNOTES_MARKER = "kaizenlog:footnotes"  # 免責注釈の集約
+
+# 日誌区間の正準順序（未知マーカー・手書き・frontmatter は触らない）
+SECTION_ORDER: tuple[str, ...] = (
+    DIGEST_MARKER,
+    GOAL_MARKER,
+    ACTIONS_MARKER,
+    ADVICE_MARKER,
+    NIPPOU_MARKER,
+    EFFORT_MARKER,
+    WEEKLY_CONTEXT_MARKER,
+    ACTIVITY_MARKER,
+    COACH_MARKER,
+    FOOTNOTES_MARKER,
+)
 
 
 def _start_tag(marker: str) -> str:
@@ -82,6 +98,177 @@ def _start_tag(marker: str) -> str:
 
 def _end_tag(marker: str) -> str:
     return f"<!-- {marker}:end -->"
+
+
+def _find_section_span(content: str, marker: str) -> tuple[int, int] | None:
+    """マーカー区間の [start_tag 開始, end_tag 終了直後) を返す。無ければ None。"""
+    start_tag, end_tag = _start_tag(marker), _end_tag(marker)
+    start_idx = content.find(start_tag)
+    if start_idx < 0:
+        return None
+    end_idx = content.find(end_tag, start_idx + len(start_tag))
+    if end_idx < 0:
+        return None
+    return start_idx, end_idx + len(end_tag)
+
+
+def reorder_sections(content: str) -> str:
+    """既知マーカー区間だけを SECTION_ORDER 順に並べ替える。
+
+    - frontmatter / 未知マーカー / 手書き本文の**内容**は変えない・複製しない
+    - 既知区間は「最初の既知区間があった位置」に正準順でまとめて置き直す
+    - 区間の間にあった非空白テキストは ordered ブロック直後に残す
+    - べき等（2回適用で差分ゼロ）
+    """
+    if not content:
+        return content
+    nl = detect_newline(content)
+    found: list[tuple[int, int, str, str]] = []
+    for marker in SECTION_ORDER:
+        span = _find_section_span(content, marker)
+        if span is None:
+            continue
+        s, e = span
+        found.append((s, e, marker, content[s:e]))
+    if not found:
+        return content
+    found.sort(key=lambda x: x[0])
+
+    by_marker = {m: b for _s, _e, m, b in found}
+    ordered_blocks = [by_marker[m] for m in SECTION_ORDER if m in by_marker]
+    ordered_blob = (nl + nl).join(ordered_blocks)
+
+    first_s = found[0][0]
+    last_e = found[-1][1]
+    prefix = content[:first_s]
+    suffix = content[last_e:]
+
+    # 区間の間の手書き（空白のみは捨てて、セパレータは ordered_blob 側）
+    hand_bits: list[str] = []
+    for i in range(len(found) - 1):
+        gap = content[found[i][1] : found[i + 1][0]]
+        if gap.strip():
+            # 前後の余分な空行を1つに
+            hand_bits.append(gap.strip("\r\n") + nl)
+
+    mid = ""
+    if hand_bits:
+        mid = nl + nl.join(hand_bits)
+        if not mid.endswith(nl):
+            mid += nl
+
+    # prefix が区間直前で空行無しなら区切りを足す
+    pieces = [prefix]
+    if prefix and not prefix.endswith(nl) and not prefix.endswith("\n"):
+        pieces.append(nl)
+    if prefix and not (prefix.endswith(nl + nl) or prefix.endswith("\n\n")):
+        if prefix.endswith(nl) or prefix.endswith("\n"):
+            pieces.append(nl)
+    pieces.append(ordered_blob)
+    if mid:
+        if not ordered_blob.endswith(nl):
+            pieces.append(nl)
+        pieces.append(nl)
+        pieces.append(mid.lstrip("\r\n") if mid.startswith(nl) else mid)
+    if suffix:
+        if not ("".join(pieces)).endswith(nl) and not suffix.startswith("\n") and not suffix.startswith("\r"):
+            pieces.append(nl)
+        pieces.append(suffix)
+    return "".join(pieces)
+
+
+def consolidate_disclaimers(content: str, *, max_inline: int = 1) -> str:
+    """各既知区間の ※ 始まり行を最大 max_inline 本残し、残りを footnotes へ。
+
+    本文側は [^n] 参照のみ。注釈内容は削除しない。
+    """
+    if not content or max_inline < 0:
+        return content
+    nl = detect_newline(content)
+    footnotes: list[str] = []
+    # 既存 footnotes を読み込んで継続番号
+    existing_fn = extract_section(content, FOOTNOTES_MARKER)
+    if existing_fn:
+        for line in existing_fn.splitlines():
+            line = line.strip()
+            if line.startswith("[^") and "]:" in line:
+                # [^1]: text
+                try:
+                    body = line.split("]:", 1)[1].strip()
+                except IndexError:
+                    continue
+                if body:
+                    footnotes.append(body)
+
+    def _process_body(body: str) -> str:
+        lines = body.splitlines()
+        out: list[str] = []
+        seen = 0
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped.startswith("※"):
+                note = stripped[1:].strip() if stripped.startswith("※") else stripped
+                # "※ " または "※"
+                if stripped.startswith("※"):
+                    note = stripped[1:].lstrip()
+                seen += 1
+                if seen <= max_inline:
+                    out.append(line)
+                else:
+                    footnotes.append(note)
+                    # インデントを保った参照
+                    indent = line[: len(line) - len(line.lstrip())]
+                    out.append(f"{indent}[^{len(footnotes)}]")
+            else:
+                out.append(line)
+        return "\n".join(out)
+
+    updated = content
+    for marker in SECTION_ORDER:
+        if marker == FOOTNOTES_MARKER:
+            continue
+        span = _find_section_span(updated, marker)
+        if span is None:
+            continue
+        s, e = span
+        block = updated[s:e]
+        start_tag, end_tag = _start_tag(marker), _end_tag(marker)
+        inner_start = len(start_tag)
+        # start_tag 直後の改行をスキップ
+        rest = block[inner_start:]
+        if rest.startswith("\r\n"):
+            head_nl, rest = "\r\n", rest[2:]
+        elif rest.startswith("\n"):
+            head_nl, rest = "\n", rest[1:]
+        else:
+            head_nl = ""
+        if not rest.endswith(end_tag):
+            continue
+        body = rest[: -len(end_tag)]
+        # body 末尾改行保持
+        body_stripped = body
+        trailing = ""
+        if body_stripped.endswith("\r\n"):
+            trailing = "\r\n"
+            body_stripped = body_stripped[:-2]
+        elif body_stripped.endswith("\n"):
+            trailing = "\n"
+            body_stripped = body_stripped[:-1]
+        new_body = _process_body(body_stripped.replace("\r\n", "\n"))
+        if nl == "\r\n":
+            new_body = new_body.replace("\n", "\r\n")
+        new_block = f"{start_tag}{head_nl}{new_body}{trailing}{end_tag}"
+        updated = updated[:s] + new_block + updated[e:]
+
+    if not footnotes:
+        return updated
+
+    # footnotes 区間を組み立て（重複除去はしない＝本文参照と1:1）
+    fn_lines = ["## 注釈", ""]
+    for i, text in enumerate(footnotes, 1):
+        fn_lines.append(f"[^{i}]: {text}")
+    fn_body = "\n".join(fn_lines) + "\n"
+    return upsert_section(updated, FOOTNOTES_MARKER, fn_body, position="bottom")
 
 
 def default_frontmatter(day: date) -> str:

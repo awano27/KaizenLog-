@@ -63,7 +63,8 @@ def test_f1_private_title_hidden_counts_unchanged():
     ]
     s = _summary(blocks, total=35.0)
     md = render_markdown(s, TZ, min_block_minutes=3.0, hide_private_titles=True)
-    assert "（私的・非表示）" in md
+    # 第48弾 §D3: 私的はタイムラインで（私的）集計1行
+    assert "（私的）" in md
     assert "自作クーラー" not in md
     assert "エンタメ" in md
     # カテゴリ表の分数は不変
@@ -300,9 +301,11 @@ def test_f4_nippou_effort_based_no_prompt_fragments():
     md = generate_nippou_deterministic(stats, TZ)
     assert "本日の業務" in md
     assert "KaizenLog-" in md
-    assert "nippou.py" in md
+    # 第48弾 §B2: subject が無いとき prompts_digest をテーマに（ファイル名羅列ではない）
+    assert "長いプロンプト断片は出さないこと" in md
+    assert "nippou.py" not in md
     assert "コミット11件" in md
-    assert "評価して改善案" not in md  # no prompt fragment
+    assert "評価して改善案" not in md  # title 断片は出さない
     assert "エンタメ" not in md
     assert "私的" not in md
     assert "調査・未分類" in md
@@ -362,16 +365,18 @@ def test_g2_collapse_split_by_fragment():
     blocks = [a1, a2, frag, a3]
     s = _summary(blocks, total=16.0)
     md = render_markdown(s, TZ, min_block_minutes=3.0)
-    # 3回圧縮は出ない（細切れが境界）
-    assert "(3回)" not in md
+    # 第48弾 §D1 で細切れを表外へ出したため、細切れは圧縮の境界にならない。
+    # 第47弾 §G2 の「細切れが挟まれば分割」は要求として失効し、
+    # 現仕様では表に載る3件が1行へ融合するのが正しい挙動。
+    # （両方を通す `in (1, 3)` は退行を検出できないため値を1つに固定する）
     content_rows = [
         ln for ln in md.splitlines()
         if "same-dup-content-zzz" in ln and ln.startswith("|")
     ]
-    # 前2件は圧縮されず2行、後1件は単独 → 計3行
-    assert len(content_rows) == 3, content_rows
-    # 細切れバケット行が存在する
-    assert "件）" in md or "細切れ" in md or "1m未満" in md or "未満" in md
+    assert len(content_rows) == 1, content_rows
+    assert "(3回)" in md, "表に載る3件が圧縮されていない"
+    # 細切れ自体は表外のサマリ行で説明される
+    assert "細切れ" in md
 
 
 def test_g2_collapse_aaa_still_collapses():
@@ -424,7 +429,7 @@ def test_g3_private_before_truncate():
     blocks = [_block(17, 5, "ブラウジング", "brave.exe", title)]
     s = _summary(blocks, total=5.0)
     md = render_markdown(s, TZ, min_block_minutes=3.0, hide_private_titles=True)
-    assert "（私的・非表示）" in md
+    assert "（私的）" in md
     assert "youtube" not in md.lower()
     assert "a" * 20 not in md  # 原文のプレフィックスも出ない
 
@@ -576,3 +581,77 @@ def test_g1_browser_prompts_saved_vs_unsaved(tmp_path: Path):
     assert by_src["chatgpt-web"].commands_run == []
     assert by_src["claude-web"].title == "（本文未保存）"
     assert by_src["claude-web"].prompts_digest == []
+
+
+def test_g1_codex_apply_patch_files_extracted():
+    """Codex の apply_patch はパッチ本文からファイル名を拾う（file_path キーが無い）。"""
+    from kaizenlog.aiwork import _note_tool_use
+
+    s = AISession(
+        session_id="cx",
+        project="p",
+        start=datetime(2026, 8, 2, 10, tzinfo=TZ),
+        end=datetime(2026, 8, 2, 11, tzinfo=TZ),
+    )
+    patch = (
+        "*** Begin Patch\n"
+        + r"*** Update File: C:\develop\KaizenLog\PLAN.md" + "\n"
+        + "@@\n-old\n+new\n"
+        + r"*** Add File: C:\develop\KaizenLog\src\kaizenlog\newmod.py" + "\n"
+        + "+x = 1\n"
+        + "*** End Patch\n"
+    )
+    _note_tool_use(s, "apply_patch", patch)
+    finalize_session_io_digest(s)
+    assert s.files_touched == ["PLAN.md", "newmod.py"]
+    assert not any("\\" in f or "/" in f for f in s.files_touched)
+    # 編集回数は 1 呼び出し = 1（既存集計を変えない）
+    assert s.edits == 1
+
+
+def test_g1_patch_text_without_marker_is_ignored():
+    from kaizenlog.aiwork import _basenames_from_patch_text
+
+    assert _basenames_from_patch_text("just a normal string") == []
+    assert _basenames_from_patch_text({"command": "pytest -q"}) == []
+
+
+def test_g1_codex_tests_run_not_regressed():
+    """arguments を dict にパースしても Codex の pytest 検出が落ちない（退行ガード）。"""
+    acc = _SessionAccum(session_id="cx2", project="p")
+    acc.start = datetime(2026, 8, 2, 10, tzinfo=UTC)
+    acc.end = datetime(2026, 8, 2, 11, tzinfo=UTC)
+
+    # 旧: 素の文字列で渡っていた経路
+    acc_str = _SessionAccum(session_id="cx3", project="p")
+    acc_str.note_tool("shell_command", "pytest -q tests/")
+    assert acc_str.tests_run is True
+
+    # 新: JSON パース後の dict で渡る経路（第47弾で追加されたもの）
+    acc.note_tool("shell_command", {"command": "pytest -q tests/"})
+    assert acc.tests_run is True, "dict 経路で tests_run が検出されない（退行）"
+
+    # テストでないコマンドでは立たない
+    acc_other = _SessionAccum(session_id="cx4", project="p")
+    acc_other.note_tool("shell_command", {"command": "git status"})
+    assert acc_other.tests_run is False
+
+
+def test_g1_tests_run_not_triggered_by_patch_body():
+    """apply_patch のパッチ本文に pytest の語があるだけでは tests_run を立てない。"""
+    acc = _SessionAccum(session_id="pt", project="p")
+    patch = (
+        "*** Begin Patch\n"
+        + r"*** Update File: C:\dev\proj\tests\test_pytest_helpers.py" + "\n"
+        + "+def test_x():\n+    assert pytest\n"
+        + "*** End Patch\n"
+    )
+    acc.note_tool("apply_patch", patch)
+    assert acc.tests_run is False, "編集系ツールで tests_run が誤検知している"
+    # ファイル名は拾えている（機能は維持）
+    assert acc._files_order == ["test_pytest_helpers.py"]
+
+    # コマンド実行系なら従来どおり立つ
+    run = _SessionAccum(session_id="pt2", project="p")
+    run.note_tool("exec", {"command": "pytest -q"})
+    assert run.tests_run is True

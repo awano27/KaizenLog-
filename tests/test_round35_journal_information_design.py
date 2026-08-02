@@ -620,22 +620,23 @@ def test_c1_reports_under_threshold_blocks_in_jst_with_dynamic_threshold() -> No
     )
 
     assert "3分以上の画面ブロックを時刻順に表示。" in markdown
-    assert "表示外: 3分未満のブロック 5件・計7分（合計 20m の35%）。" in markdown
-    assert "内訳は AI作業 3分 / ブラウジング 2分 / エンタメ 1分 / コミュニケーション 1分。" in markdown
-    assert "細切れが集中した時間帯: 1時台 2件・3分、8時台 1件・2分、6時台 1件・1分。" in markdown
+    # 第48弾 §D1: 細切れは表ではなく3行サマリ
+    assert "細切れ（3分未満）5件・7分（合計の35%）" in markdown
+    assert "AI作業3分" in markdown
+    assert "集中を妨げた時間帯:" in markdown
+    assert "1時台" in markdown
 
 
 def test_c1_shows_explanation_without_timeline_rows_and_keeps_overflow_separate() -> None:
-    # 第40弾 §A1: eligible 0 でも細切れバケット行は表に載る。eligible 説明文は出ない。
+    # 第48弾 §D1: eligible 0 でも細切れは表に載らずサマリのみ。
     all_under = render_markdown(
         _summary(blocks=[_block(0, 2, "AI作業"), _block(1, 1, "開発")], total_minutes=3.0),
         ZoneInfo("Asia/Tokyo"),
         min_block_minutes=4.0,
     )
-    assert "表示外: 4分未満のブロック 2件・計3分（合計 3m の100%）。" in all_under
+    assert "細切れ（4分未満）2件・3分（合計の100%）" in all_under
     assert "4分以上の画面ブロックを時刻順に表示。" not in all_under
-    assert "| 時刻 | 時間 |" in all_under
-    assert "細切れ" in all_under
+    assert "| 細切れ |" not in all_under
 
     capped = render_markdown(
         _summary(
@@ -648,9 +649,9 @@ def test_c1_shows_explanation_without_timeline_rows_and_keeps_overflow_separate(
     )
     lines = capped.splitlines()
     overflow = next(line for line in lines if "対象内の1件を省略" in line)
-    under = next(line for line in lines if line.startswith("表示外:"))
+    under = next(line for line in lines if line.startswith("細切れ（"))
     assert overflow != under
-    assert "表示外: 3分未満のブロック 1件・計2分" in under
+    assert "細切れ（3分未満）1件・2分" in under
 
 
 def test_c1_omits_under_threshold_explanation_when_every_block_is_eligible() -> None:
@@ -660,9 +661,8 @@ def test_c1_omits_under_threshold_explanation_when_every_block_is_eligible() -> 
         min_block_minutes=3.0,
     )
 
-    assert "表示外:" not in markdown
-    assert "内訳は " not in markdown
-    assert "細切れが集中した時間帯:" not in markdown
+    assert "細切れ（" not in markdown
+    assert "集中を妨げた時間帯:" not in markdown
 
 
 def test_c2_change_table_omits_missing_metrics_and_absent_previous_day() -> None:
@@ -738,12 +738,18 @@ def test_c2_cmd_generate_uses_only_calendar_previous_stats_and_hashes_written_se
     # 呼び出し列の完全一致: 前日比 days=2 + ACTIONS 用 _actions_stats_history
     from kaizenlog.memory import ACTIONS_HANDOFF_DAYS
 
-    assert load_calls == [
-        {"days": 2, "end_day": day},
-        # §A3 判定カバレッジ用 prior stats
-        {"days": 8, "end_day": day - __import__("datetime").timedelta(days=1)},
-        {"days": ACTIONS_HANDOFF_DAYS + 14, "end_day": day + __import__("datetime").timedelta(days=1)},
-    ]
+    # 第48弾: 冒頭で基準線用 days=8、digest 用 days=1 が追加
+    assert {"days": 8, "end_day": day} in load_calls  # baseline prior
+    assert {"days": 2, "end_day": day} in load_calls  # 前日比
+    assert {
+        "days": 8,
+        "end_day": day - __import__("datetime").timedelta(days=1),
+    } in load_calls  # §A3 prior
+    assert {
+        "days": ACTIONS_HANDOFF_DAYS + 14,
+        "end_day": day + __import__("datetime").timedelta(days=1),
+    } in load_calls
+    assert {"days": 1, "end_day": day} in load_calls  # digest 用 stats 再読込
 
     stored = DailyNoteStore(cfg.daily_notes_path).read(day) or ""
     section = extract_section(stored, ACTIVITY_MARKER) or ""

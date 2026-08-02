@@ -1632,12 +1632,15 @@ def render_actions_section(
     target_day: date,
     note_content: str | None = None,
     stats_history: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    max_candidates: int | None = None,
 ) -> str | None:
     """翌日ノート用「今日のアクション」転記 Markdown。
 
     対象は proposed かつ提案日が target_day-ACTIONS_HANDOFF_DAYS 〜 target_day-1。
     チェックボックスは新しい提案から最大 TODAY_CANDIDATE_CAP 件
     （優先度推定ではなく、現在の文脈に近い候補を表示する決定論ルール）。
+    max_candidates で件数上限を上書き可能（朝ノートは1件）。
     0件なら None（既存セクションは消さない。ただし stale/older のみある場合は
     件数案内セクションを返す）。
     note_content に同じ KZN の [x] があればチェック状態を保持する。
@@ -1649,6 +1652,12 @@ def render_actions_section(
     )
     if buckets.total == 0:
         return None
+    # 表示上限の既定は1件（§D1）。max_candidates で上書き可。
+    candidate_cap = (
+        int(max_candidates)
+        if max_candidates is not None and max_candidates > 0
+        else 1
+    )
 
     checked_ids: set[str] = set()
     if note_content:
@@ -1733,9 +1742,8 @@ def render_actions_section(
             and e.id not in checked_ids
         )
     ]
-    # §D1: 未完了は最新1件のみ（件数算出は変えず表示上限だけ）
-    _OPEN_DISPLAY_CAP = 1
-    shown = still_open[:_OPEN_DISPLAY_CAP]
+    # §D1: 未完了は最新 N 件（既定1。朝ノートも同じ。件数算出は変えず表示上限だけ）
+    shown = still_open[:candidate_cap]
 
     # 読者UX: スコアボードより先に「今日の実験」を置く
     if shown:

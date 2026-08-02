@@ -518,7 +518,8 @@ def test_z4_friction_with_kaizen_word_drops_digest():
     )
 
 
-def test_z4_no_redactor_skips_goal():
+def test_z4_no_redactor_still_shows_goal_and_work():
+    """第48弾: redact_patterns=[] → redactor=None でも決定論行と目標は出す。"""
     stats = {
         "source_status": "verified",
         "activity_sha256": "x",
@@ -526,11 +527,11 @@ def test_z4_no_redactor_skips_goal():
         "by_category": {"AI作業": 10.0},
     }
     body = build_digest(
-        stats, [], today=date(2026, 8, 1), redactor=None, goal_text="改善する"
+        stats, [], today=date(2026, 8, 1), redactor=None, goal_text="日誌を整える"
     )
     assert body is not None
-    assert "目標:" not in body
-    assert "稼働:" in body
+    assert "目標: 日誌を整える" in body
+    assert "稼働" in body
 
 
 # ---------- §A1 / §A2 timeline ----------
@@ -551,36 +552,14 @@ def test_a1_fragment_rows_and_sum_and_order():
     # total = 2+1.5+10+1*4 = 17.5
     s = _summary_with_blocks(day, blocks, total=17.5)
     md = render_markdown(s, TZ, min_block_minutes=3.0)
-    assert "細切れ" in md
-    assert "08:00-08:59" in md
-    assert "10:00-10:59" in md
-    assert "ほか" in md  # 4 categories in hour 10
+    # 第48弾 §D1: 細切れは表ではなくサマリ。表には3分以上のみ
+    assert "細切れ（3分未満）" in md
+    assert "| 細切れ |" not in md
+    assert "集中を妨げた時間帯:" in md
     assert "この表は合計" in md and "%" in md
-    # 表の時間列総和 ≈ total_minutes（±1分）— タイムラインの HH:MM- 行のみ
-    import re
-
-    mins = 0.0
-    for ln in md.splitlines():
-        m = re.match(
-            r"\| \d{2}:\d{2}-\d{2}:\d{2} \| ([0-9.]+m|[0-9]+h[0-9]*m?) \|",
-            ln,
-        )
-        if not m:
-            continue
-        t = m.group(1)
-        if t.endswith("m") and "h" not in t:
-            mins += float(t[:-1])
-        elif "h" in t:
-            h, rest = t.split("h", 1)
-            mins += float(h) * 60
-            if rest.endswith("m") and rest[:-1]:
-                mins += float(rest[:-1])
-    assert abs(mins - 17.5) <= 1.0, f"table_sum={mins} total=17.5 md=\n{md}"
-    # order: 08 frag, 09 eligible, 10 frag
-    i08 = md.index("08:00-08:59")
-    i09 = md.index("09:00") if "09:00" in md else md.index("開発")
-    i10 = md.index("10:00-10:59")
-    assert i08 < i09 < i10
+    assert "開発" in md
+    # eligible の 10m 行が表にある
+    assert "| 10m |" in md or "10m" in md
 
 
 def test_a1_no_under_blocks_no_fragment_rows():
@@ -589,8 +568,7 @@ def test_a1_no_under_blocks_no_fragment_rows():
     blocks = [_block(base, 30.0, "開発")]
     s = _summary_with_blocks(day, blocks, total=30.0)
     md = render_markdown(s, TZ, min_block_minutes=3.0)
-    assert "細切れ" not in md
-    assert "表示外:" not in md
+    assert "細切れ（" not in md
     assert "100%" in md or "この表は合計" in md
 
 
@@ -604,8 +582,8 @@ def test_a1_max_timeline_rows_keeps_fragments():
     ]
     s = _summary_with_blocks(day, blocks, total=51.0)
     md = render_markdown(s, TZ, min_block_minutes=3.0, max_timeline_rows=2)
-    assert "細切れ" in md
-    assert "08:00-08:59" in md
+    assert "細切れ（3分未満）" in md
+    assert "| 細切れ |" not in md
 
 
 def test_a2_zero_total_no_coverage_line():

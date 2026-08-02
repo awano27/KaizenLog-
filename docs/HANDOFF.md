@@ -60,11 +60,13 @@ Windows のPC作業を ActivityWatch + AI CLIセッションログから自動�
 | 45 | **工数のつけ先と月次資料**: `effort.py`(カテゴリ別帰属・AI作業は**重なる区間のうち最短のセッション**を採用・パス抽出でファイル名を除外・つけ先名も redact)・日誌「⏱ 工数のつけ先」区間・stats["effort"]・`monthly.py` と `kaizenlog monthly`(既定 dry-run・`04 Monthly/YYYY-MM.md`・工数記録なしの日は件数を注記) |
 
 | 46 | **AI入出力の記録と振り返り強化**: 私的タイトルを`（私的・非表示）`へ(判定は `privacy_filter.py` に共通化・行と集計は不変)・連続重複3行以上を`計Nm (K回)`に圧縮・`AISession` に prompts_digest/files_touched/commands_run(basename・先頭語のみ・redact 済み)と日誌「主なセッションの中身」・日報の業務行を effort ベース(プロンプト断片を使わない) |
+| 48 | **日誌の読む価値の再設計**: 30秒サマリを generate でも書く(`digest_skipped` を runs.jsonl へ)・中身を稼働基準線/目標/摩擦数値/1手へ刷新・`SECTION_ORDER`+`reorder_sections` で区間順固定・朝ノートに昨日 digest 転記・日報の subject 切詰め/`→`分割/テーマ行/所感・`baseline.py` で7日中央値・タイムライン細切れを表外サマリへ・免責注釈を footnotes 集約・AI内訳を Activity から AI作業の質へ統合・私的を`（私的）`1行に畳む・工数%合計100固定 |
 
-テスト基準線: **pytest 978 passed**（2026-08-02 第46弾適用後・実行結果を正とする。**CI と同じ `pytest -q`（`python -m` なし）で確認すること**）。
-**HEAD**: `ee92d82`(第45弾までコミット)。第46弾はワーキングツリー適用済み・未コミット。
-既知の機能欠落(第46弾レビュー): **Codex / ブラウザ由来セッションでは prompts_digest / files_touched / commands_run が常に空**。`aiwork_codex.py:163-176` が `_note_tool_use` を使い捨ての一時 session に対して呼び、`_files_order`/`_cmd_counts` を親へ戻していないため(`note_user_message` も `_user_prompts_raw` に積まない)。当該セッションが往復上位3に入ると「主なセッションの中身」から丸ごと消える。次弾候補。
-既知の限界(第46弾): タイムラインの重複圧縮は細切れバケット行・`max_timeline_rows` 超過で省略された行を「間に挟まる別行」として扱わないため、非連続な区間を1行に融合しうる(`(K回)` 併記で緩和)。私的判定は60字に切詰めた後のタイトルを見るため、61字目以降にのみ私的キーワードがある場合は取りこぼす。
+テスト基準線: **pytest 996 passed**（2026-08-02 第48弾適用後・実行結果を正とする。**CI と同じ `pytest -q`（`python -m` なし）で確認すること**）。
+**HEAD**: `124d9a9` 相当（第46弾までコミット済みの前提）。第46〜48弾はワーキングツリー適用・未コミット。
+既知の機能欠落(第46弾レビュー・未解消): **Codex / ブラウザ由来セッションでは prompts_digest / files_touched / commands_run が常に空**（`aiwork_codex.py` の一時 session 問題）。
+**第48弾で次弾へ回したもの（§E）**: 提案の質 — 目標値を実測パーセンタイルから算出・同時アクティブ最大3・自動退役理由行・「チェックなしで達成」を失敗として週次抑制。現状の提案は桁違い目標と因果なし達成が残る。
+既知の限界(第48弾): 細切れを表から外したため、細切れを境界にした連続圧縮は効かない（eligible 同士は間の細切れを無視して融合しうる）。私的タイムラインは時刻を失い集計1行になる。既存 stats に保存済みの subject は旧ハード切詰めのまま（新規 generate から `…` 付き）。`reorder_sections` は区間の間の手書きを ordered ブロック直後へ寄せる（内容は保持・位置は正準順ブロックの後ろ）。
 
 ## 工数配分の設計メモ(第45弾)
 
@@ -72,7 +74,7 @@ Windows のPC作業を ActivityWatch + AI CLIセッションログから自動�
 - 帰属の優先順: エンタメ→AI作業(セッション突合)→開発/執筆(パス抽出)→ブラウジング→その他。帰属できないものは推測せず`（未分類）`に出す。
 - つけ先名は `redactor` を通す(工数表と stats の双方に出るため。`[privacy] redact_patterns` が効く)。
 - `<root>/<repo>/<file>` 構成でファイル名がつけ先にならないよう `_looks_like_filename` で除外する。
-- 日誌の並び順は `generate`(activity→effort) → `report`(nippou) の実行順に依存する。既存ノートへ後から effort を足すと末尾に付く(`upsert_section` の既定が bottom のため。実害は表示順のみ)。
+- 日誌の並び順は第48弾で `vault.SECTION_ORDER` + `reorder_sections` に固定（generate/advise/morning の最後に適用）。実行順への依存は解消。
 
 ## screenpipe 運用メモ(第42弾・2026-08-02 実機検証)
 

@@ -31,6 +31,22 @@ from .aiwork import (
     extract_session_title,
 )
 
+# tests_run を推定してよいツール名（コマンド実行系のみ）。
+# apply_patch のような編集系を含めると、テストファイルを編集しただけで
+# パッチ本文の "pytest" に反応して誤検知する。
+_TEST_PROBE_TOOLS = frozenset(
+    {
+        "Bash",
+        "bash",
+        "Shell",
+        "shell",
+        "local_shell",
+        "shell_command",
+        "exec",
+        "exec_command",
+    }
+)
+
 
 def _payload(record: dict) -> dict:
     p = record.get("payload")
@@ -185,8 +201,19 @@ class _SessionAccum:
         self.tests_run = tmp.tests_run
         self._files_order = list(tmp._files_order)
         self._cmd_counts = Counter(tmp._cmd_counts)
-        if isinstance(tool_input, str) and _looks_like_test_command(tool_input):
-            self.tests_run = True
+        # tests_run の既存挙動を維持する。arguments を dict へ事前パースするように
+        # なったため、素の文字列だけを見ていると Codex の pytest 実行を取りこぼす
+        # （共有側 aiwork.py は shell_command を tests_run 判定に含めない方針）。
+        # ツール名で絞らないと、apply_patch のパッチ本文に "pytest" の語が含まれる
+        # だけで（テストファイルを編集しただけで）誤検知する。
+        if str(name) in _TEST_PROBE_TOOLS:
+            probe = tool_input
+            if isinstance(probe, dict):
+                probe = str(
+                    probe.get("command") or probe.get("cmd") or probe.get("input") or ""
+                )
+            if isinstance(probe, str) and _looks_like_test_command(probe):
+                self.tests_run = True
 
     def to_session(self) -> AISession | None:
         if not self.touched or self.start is None or self.end is None:

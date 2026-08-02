@@ -341,7 +341,8 @@ def cmd_generate(
                         s = str(sub)
                         if title_redactor is not None:
                             s = title_redactor(s)
-                        subjs.append(s[:80])
+                        s = s if len(s) <= 80 else s[:79] + "…"
+                        subjs.append(s)
                     outcome_git_payload.append(
                         {
                             "repo_label": st.repo_label,
@@ -397,6 +398,12 @@ def cmd_generate(
             if client.last_warning:
                 print(f"⚠️  {client.last_warning}")
 
+    # 基準線用: 当日を除く直近7日
+    prior_for_baseline = [
+        item
+        for item in load_stats(cfg.stats_path, days=8, end_day=day)
+        if item.get("day") != day.isoformat()
+    ]
     section = render_markdown(
         summary,
         tz,
@@ -407,6 +414,7 @@ def cmd_generate(
         hide_private_titles=bool(
             getattr(cfg.privacy, "hide_private_titles", True)
         ),
+        stats_history=prior_for_baseline,
     )
 
     effort_payload: dict | None = None
@@ -480,6 +488,7 @@ def cmd_generate(
             session_details=bool(
                 getattr(cfg.aiwork, "session_details", True)
             ),
+            stats_history=prior_for_baseline,
         )
         if aiwork_md:
             section = section.rstrip() + "\n\n" + aiwork_md
@@ -816,7 +825,187 @@ def cmd_generate(
 
     # A2: 翌日ノートへ未完了アクションを転記（backfill で過去日を汚さない）
     _write_actions_handoff(cfg, store, day, list(by_id.values()))
+
+    # §A1/A2: 決定論 digest を generate でも書く（advise 失敗日でも冒頭サマリが出る）
+    try:
+        written_stats = load_stats(cfg.stats_path, days=1, end_day=day)
+        _write_digest_for_day(
+            cfg,
+            store,
+            day,
+            source_status="verified",  # 直前に activity と stats を同一 run で書いた
+            current_stats=written_stats[0] if written_stats else None,
+            entries=list(by_id.values()),
+            redactor=title_redactor,
+            commit_stats=commit_stats,
+            stats_history=prior_for_baseline,
+            log_skips=True,
+        )
+    except Exception as dig_err:
+        _log_digest_skipped(
+            cfg,
+            day=day,
+            reason=f"exception:{type(dig_err).__name__}:{dig_err}",
+        )
+        print(
+            f"⚠️  digest 書き込みをスキップ: {type(dig_err).__name__}",
+            file=sys.stderr,
+        )
+
+    # §A3/D2: 区間並び替え + 免責注釈の脚注集約
+    _finalize_note_layout(store, day)
     return path
+
+
+def _log_digest_skipped(
+    cfg: Config,
+    *,
+    day: date,
+    reason: str,
+) -> None:
+    try:
+        log_run(
+            cfg.logs_path,
+            "digest_skipped",
+            ok=False,
+            duration_seconds=0.0,
+            error=str(reason)[:500],
+            note=day.isoformat(),
+            retention_days=cfg.log_retention_days,
+        )
+    except Exception:
+        pass
+
+
+def _write_digest_for_day(
+    cfg: Config,
+    store: DailyNoteStore,
+    day: date,
+    *,
+    source_status: str,
+    current_stats: dict | None,
+    entries: list,
+    redactor,
+    commit_stats=None,
+    stats_history: list | None = None,
+    log_skips: bool = True,
+) -> bool:
+    """digest 区間を書く。書いたら True。スキップ時は理由を runs.jsonl へ。"""
+    from .digest import build_digest
+    from .vault import (
+        DIGEST_MARKER,
+        ACTIONS_MARKER as _AM,
+        ADVICE_MARKER as _ADM,
+        WEEKLY_CONTEXT_MARKER as _WCM,
+        GOAL_MARKER as _GM,
+        NIPPOU_MARKER as _NM,
+        _start_tag,
+        atomic_write_text,
+        _end_tag,
+    )
+
+    note_now = store.read(day) or ""
+    marker_candidates = (_ADM, _AM, _WCM, _GM, _NM, DIGEST_MARKER)
+    existing_markers = {m for m in marker_candidates if _start_tag(m) in note_now}
+
+    dig_stats = None
+    skip_reason = None
+    if source_status != "verified":
+        skip_reason = f"source_status={source_status}"
+    elif current_stats is None:
+        skip_reason = "current_stats is None"
+    else:
+        dig_stats = dict(current_stats)
+        dig_stats["source_status"] = "verified"
+
+    if log_skips and dig_stats is not None:
+        # ガード条件を可視化（verified 到達を確認）
+        try:
+            log_run(
+                cfg.logs_path,
+                "digest_guard",
+                ok=True,
+                duration_seconds=0.0,
+                note=(
+                    f"{day.isoformat()} source_status={source_status} "
+                    f"stats={'yes' if current_stats else 'no'}"
+                ),
+                retention_days=cfg.log_retention_days,
+            )
+        except Exception:
+            pass
+
+    goal_text = None
+    try:
+        from .goal import read_goal
+
+        g = read_goal(store.read(day), known_category_names(cfg.rules))
+        if g is not None and getattr(g, "text", None):
+            goal_text = str(g.text)
+    except Exception:
+        goal_text = None
+
+    if dig_stats is None:
+        if log_skips and skip_reason:
+            _log_digest_skipped(cfg, day=day, reason=skip_reason)
+        return False
+
+    digest_body = build_digest(
+        dig_stats,
+        entries,
+        today=day,
+        tz=ZoneInfo(cfg.timezone),
+        redactor=redactor,
+        existing_markers=existing_markers,
+        goal_text=goal_text,
+        commit_stats=commit_stats,
+        stats_history=stats_history,
+    )
+    if digest_body:
+        store.write_section(day, DIGEST_MARKER, digest_body, position="top")
+        return True
+
+    if log_skips:
+        _log_digest_skipped(cfg, day=day, reason="build_digest -> None")
+    # None のときは既存 digest だけ削除
+    content = store.read(day)
+    if content is not None and _start_tag(DIGEST_MARKER) in content:
+        start_tag = _start_tag(DIGEST_MARKER)
+        end_tag = _end_tag(DIGEST_MARKER)
+        s_idx = content.find(start_tag)
+        e_idx = content.find(end_tag)
+        if s_idx >= 0 and e_idx >= 0 and e_idx >= s_idx:
+            before = content[:s_idx]
+            after = content[e_idx + len(end_tag) :]
+            if before.endswith("\r\n"):
+                while before.endswith("\r\n\r\n"):
+                    before = before[:-2]
+            else:
+                while before.endswith("\n\n"):
+                    before = before[:-1]
+            if after.startswith("\r\n"):
+                after = after[2:]
+            elif after.startswith("\n"):
+                after = after[1:]
+            atomic_write_text(store.path_for(day), before + after)
+    return False
+
+
+def _finalize_note_layout(store: DailyNoteStore, day: date) -> None:
+    """区間の正準順並べ替え + 免責注釈の脚注集約。"""
+    from .vault import (
+        atomic_write_text,
+        consolidate_disclaimers,
+        reorder_sections,
+    )
+
+    content = store.read(day)
+    if content is None:
+        return
+    updated = reorder_sections(content)
+    updated = consolidate_disclaimers(updated, max_inline=1)
+    if updated != content:
+        atomic_write_text(store.path_for(day), updated)
 
 
 def _resync_measurement_day_actions(
@@ -1068,7 +1257,7 @@ def build_morning_notification(
 
 
 def cmd_morning(cfg: Config, day: date, *, skip_catch_up: bool = False) -> int:
-    """朝の到達性: 追いつき → 📌 再描画 → 通知。"""
+    """朝の到達性: 追いつき → 昨日サマリ転記 → 📌 再描画 → 通知。"""
     t0 = monotonic()
     try:
         if skip_catch_up:
@@ -1077,11 +1266,19 @@ def cmd_morning(cfg: Config, day: date, *, skip_catch_up: bool = False) -> int:
             catch_up = catch_up_yesterday(cfg, day)
         store = DailyNoteStore(cfg.daily_notes_path)
         entries = load_entries(cfg.memory_path)
+
+        # §A4: 前日 digest を「昨日のふりかえり」として転記（再計算しない）
+        try:
+            _write_morning_yesterday_brief(store, day)
+        except Exception as e:
+            print(f"⚠️  昨日サマリ転記をスキップ: {type(e).__name__}", file=sys.stderr)
+
         section = render_actions_section(
             entries,
             day,
             store.read(day),
             stats_history=_actions_stats_history(cfg, day),
+            max_candidates=1,  # 朝は今日の1手を1件だけ
         )
         if section:
             path = store.write_section(
@@ -1090,6 +1287,11 @@ def cmd_morning(cfg: Config, day: date, *, skip_catch_up: bool = False) -> int:
             print(f"📌 今日のアクションを更新しました: {path}")
         else:
             print("📌 今日の未完了アクションはありません")
+
+        try:
+            _finalize_note_layout(store, day)
+        except Exception:
+            pass
 
         if catch_up.has_failures:
             for step, _safe in catch_up.failures:
@@ -1129,6 +1331,27 @@ def cmd_morning(cfg: Config, day: date, *, skip_catch_up: bool = False) -> int:
         if cfg.notify_on_failure:
             _notify(cfg, "KaizenLog 失敗", f"morning: {e}")
         return 1
+
+
+def _write_morning_yesterday_brief(store: DailyNoteStore, day: date) -> None:
+    """前日 digest を DIGEST 区間へ転記。無ければ何もしない。"""
+    from .vault import DIGEST_MARKER, extract_section
+
+    yesterday = day - timedelta(days=1)
+    prev = store.read(yesterday)
+    if not prev:
+        return
+    prev_digest = extract_section(prev, DIGEST_MARKER)
+    if not prev_digest or not prev_digest.strip():
+        return
+    body = prev_digest.replace("## ⏱ 30秒サマリ", "## 🌅 昨日のふりかえり", 1)
+    if "## 🌅 昨日のふりかえり" not in body:
+        body = "## 🌅 昨日のふりかえり\n\n" + body.lstrip()
+    link = f"- 前日の日報: [[{yesterday.isoformat()}#📝 日報ドラフト]]"
+    if link not in body:
+        body = body.rstrip() + "\n" + link + "\n"
+    store.write_section(day, DIGEST_MARKER, body, position="top")
+    print(f"🌅 昨日のふりかえりを転記しました（{yesterday.isoformat()}）")
 
 
 def cmd_backfill(cfg: Config, days: int, end_day: date) -> int:
@@ -1437,81 +1660,38 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         print("🆔 アクションID: " + ", ".join(e.id for e in proposed_entries))
     # §B2: 冒頭 digest（失敗しても advise は成功扱い。日誌本体は触らない）
     try:
-        from .digest import build_digest
-        from .vault import (
-            DIGEST_MARKER,
-            ACTIONS_MARKER as _AM,
-            ADVICE_MARKER as _ADM,
-            WEEKLY_CONTEXT_MARKER as _WCM,
-            GOAL_MARKER as _GM,
-            _start_tag,
-            atomic_write_text,
-        )
-
-        note_now = store.read(day) or ""
-        marker_candidates = (_ADM, _AM, _WCM, _GM, DIGEST_MARKER)
-        existing_markers = {
-            m for m in marker_candidates if _start_tag(m) in note_now
-        }
-        dig_stats = None
-        if source_status == "verified" and current_stats is not None:
-            dig_stats = dict(current_stats)
-            dig_stats["source_status"] = "verified"
-        goal_text = None
-        try:
-            from .goal import read_goal
-
-            g = read_goal(store.read(day), known_category_names(cfg.rules))
-            if g is not None and getattr(g, "text", None):
-                goal_text = str(g.text)
-        except Exception:
-            goal_text = None
-        digest_body = build_digest(
-            dig_stats,
-            list(effective_by_id.values()) + list(new_entries),
-            today=day,
-            tz=ZoneInfo(cfg.timezone),
+        prior_hist = [
+            item
+            for item in load_stats(cfg.stats_path, days=8, end_day=day)
+            if item.get("day") != day.isoformat()
+        ]
+        _write_digest_for_day(
+            cfg,
+            store,
+            day,
+            source_status=source_status,
+            current_stats=current_stats,
+            entries=list(effective_by_id.values()) + list(new_entries),
             redactor=redactor,
-            existing_markers=existing_markers,
-            goal_text=goal_text,
-            commit_stats=None,  # advise 経路では generate 時の commit を再取得しない
+            commit_stats=None,
+            stats_history=prior_hist,
+            log_skips=True,
         )
-        if digest_body:
-            store.write_section(
-                day, DIGEST_MARKER, digest_body, position="top"
-            )
-        else:
-            # None のときは既存 digest だけ削除（他区間・手書きは保持）
-            content = store.read(day)
-            if content is not None and _start_tag(DIGEST_MARKER) in content:
-                from .vault import _end_tag
-
-                start_tag = _start_tag(DIGEST_MARKER)
-                end_tag = _end_tag(DIGEST_MARKER)
-                s_idx = content.find(start_tag)
-                e_idx = content.find(end_tag)
-                if s_idx >= 0 and e_idx >= 0 and e_idx >= s_idx:
-                    # 区間削除 + start_tag 直前の連続改行を1つに正規化（空行増殖防止）
-                    before = content[:s_idx]
-                    after = content[e_idx + len(end_tag) :]
-                    # before 末尾の連続空行を1改行に
-                    if before.endswith("\r\n"):
-                        while before.endswith("\r\n\r\n"):
-                            before = before[:-2]
-                    else:
-                        while before.endswith("\n\n"):
-                            before = before[:-1]
-                    if after.startswith("\r\n"):
-                        after = after[2:]
-                    elif after.startswith("\n"):
-                        after = after[1:]
-                    atomic_write_text(store.path_for(day), before + after)
     except Exception as dig_err:
+        _log_digest_skipped(
+            cfg,
+            day=day,
+            reason=f"exception:{type(dig_err).__name__}:{dig_err}",
+        )
         print(f"⚠️  digest 書き込みをスキップ: {type(dig_err).__name__}", file=sys.stderr)
     # A2: ID 採番後の最新集合で翌日へ転記（dry_run ではここまで来ない）
     merged = {e.id: e for e in effective_entries}
     merged.update({e.id: e for e in new_entries})
     _write_actions_handoff(cfg, store, day, list(merged.values()))
+    try:
+        _finalize_note_layout(store, day)
+    except Exception:
+        pass
     _safe_log_advise_health(
         cfg,
         day=day,
