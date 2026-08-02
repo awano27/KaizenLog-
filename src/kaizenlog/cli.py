@@ -1839,8 +1839,16 @@ def cmd_today(
                 print(format_today_action_line(e))
         return 0
 
-    # 既定: 今日の候補（recent 先頭 max 3）+ 残件数
-    candidates = buckets.recent[:TODAY_CANDIDATE_CAP]
+    # 既定: display_cap + 表示順（📌 主面と揃える。TODAY_CANDIDATE_CAP は上限ガード）
+    from .memory import order_still_open_for_display, resolve_display_cap
+
+    ordered = order_still_open_for_display(list(buckets.recent))
+    display_n = min(
+        resolve_display_cap(stats),
+        TODAY_CANDIDATE_CAP,
+        len(ordered),
+    )
+    candidates = ordered[:display_n]
     rest_recent = max(0, len(buckets.recent) - len(candidates))
     if candidates:
         print(f"今日の候補 {len(candidates)}件")

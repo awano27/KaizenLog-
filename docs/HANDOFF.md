@@ -63,10 +63,14 @@ Windows のPC作業を ActivityWatch + AI CLIセッションログから自動�
 | 47 | **第46弾レビュー残件**: Codex/browser の I/O digest 充填・タイムライン圧縮を frag/gap 境界付きに・私的判定を切詰め前へ・F2/G2 関連テスト |
 | 48 | **日誌の読む価値の再設計**: 30秒サマリを generate でも書く(`digest_skipped` を runs.jsonl へ)・中身を稼働基準線/目標/摩擦数値/1手へ刷新・`SECTION_ORDER`+`reorder_sections` で区間順固定・朝ノートに昨日 digest 転記・日報の subject 切詰め/`→`分割/テーマ行/所感・`baseline.py` で7日中央値・タイムライン細切れを表外サマリへ・免責注釈を footnotes 集約・AI内訳を Activity から AI作業の質へ統合・私的を`（私的）`1行に畳む・工数%合計100固定 |
 
-テスト基準線: **pytest 998 passed**（2026-08-02 第48弾コミット後 + Phase0 衛生: `config.example` コメント同期・`test_f2_collapse_split_by_different_content_row`。**CI と同じ `pytest -q`（`python -m` なし）で確認すること**。適用後の実測を正とする）。
-**HEAD**: 第48弾 `7dd0bf5` のうえに Phase0 衛生コミット（example コメント・F2 分割回帰・本 HANDOFF）。第46〜48弾 + Phase0 はコミット済み。
+テスト基準線: **pytest 1007 passed**（2026-08-02・ACTION-UX P0/P1 後の実測を正とする。**CI と同じ `pytest -q`（`python -m` なし）で確認すること**）。
+**HEAD**: 第48弾 + Phase0 衛生 + ACTION-UX（`resolve_display_cap` / `backlog_generation_cap` / today 表示揃え）。コミット SHA は `git rev-parse --short HEAD` を正とする。
 **第47弾で解消済み**: Codex/browser 由来の prompts_digest/files_touched/commands_run 空問題、細切れ/省略を境界にしない旧圧縮、60字切詰め後の私的判定。通常の別内容 eligible 行による分割は `test_f2_collapse_split_by_different_content_row` で固定。
-**第48弾で次弾へ回したもの（§E）**: 提案の質 — 目標値を実測パーセンタイルから算出・同時アクティブ最大3・自動退役理由行・「チェックなしで達成」を失敗として週次抑制。現状の提案は桁違い目標と因果なし達成が残る。
+**ACTION-UX（📌 今日のアクション）**:
+- P0: `display_cap`（低消化時強制1）・still_open 表示順（provisional 後置）・日誌📌主面
+- P1: `backlog_generation_cap` で advise `max_actions` を未チェック溜まり時に1へ（dosing の proposed≥6 より早く絞る）・`daily_advisor` に「いつ→何を→確認」契約・CLI `today` を display_cap/平文に揃え
+- 未着手: 台帳既存文の一括再生成、パーセンタイル目標（§E）、atomic rename（WinError 5）
+**第48弾で次弾へ回したもの（§E）**: 提案の質 — 目標値を実測パーセンタイルから算出・同時アクティブ最大3・自動退役理由行・「チェックなしで達成」を失敗として週次抑制。現状の提案は桁違い目標と因果なし達成が残る（P1 は件数・表示・プロンプト契約の改善のみ）。
 既知の限界(第48弾): 細切れを表から外したため、細切れを境界にした連続圧縮は効かない（eligible 同士は間の細切れを無視して融合しうる）。私的タイムラインは時刻を失い集計1行になる。既存 stats に保存済みの subject は旧ハード切詰めのまま（新規 generate から `…` 付き）。`reorder_sections` は区間の間の手書きを ordered ブロック直後へ寄せる（内容は保持・位置は正準順ブロックの後ろ）。
 
 ## 工数配分の設計メモ(第45弾)

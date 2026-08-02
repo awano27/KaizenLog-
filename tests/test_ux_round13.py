@@ -354,11 +354,12 @@ def test_x4_today_default_cap_and_all(tmp_path, capsys):
     mem_before = cfg.memory_path.joinpath("suggestions.jsonl").read_text(encoding="utf-8")
     assert cli_mod.cmd_today(cfg, day, no_sync=True) == 0
     out = capsys.readouterr().out
-    assert "今日の候補 3件" in out
-    assert "ほか直近7日の未完了 2件" in out
-    # 新しい ID が先（005,004,003）
+    # ACTION-UX: done=0 のバックログ時は display_cap=1（📌 主面と揃える）
+    assert "今日の候補 1件" in out
+    assert "ほか直近7日の未完了 4件" in out
+    # 新しい ID が先（005）
     assert "KZN-20260725-005" in out
-    assert "KZN-20260725-001" not in out  # 既定では 3 件のみ
+    assert "KZN-20260725-001" not in out  # 既定では display_cap 件のみ
     assert cli_mod.cmd_today(cfg, day, no_sync=True, show_all=True) == 0
     out_all = capsys.readouterr().out
     for i in range(1, 6):

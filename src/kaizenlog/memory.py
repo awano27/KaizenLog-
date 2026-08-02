@@ -415,6 +415,26 @@ def dosing_max_actions(stats: ActionStats) -> int:
     return 3
 
 
+def backlog_generation_cap(stats: ActionStats) -> int:
+    """未消化バックログ時の advise 件数上限（1 or 3）。
+
+    dosing_max_actions（proposed≥6 ゲート）より早く絞る。
+    display_cap の強制1条件と揃える（generation_cap / display_cap の同時超過を防ぐ）。
+    - proposed≥1 かつ done==0 → 1
+    - done_rate<0.4 かつ proposed≥3 → 1
+    - それ以外 → 3（short_record / dosing と min 合成する側の責務）
+    """
+    if stats.proposed >= 1 and stats.done == 0:
+        return 1
+    if (
+        stats.done_rate is not None
+        and stats.done_rate < _DOSING_DONE_RATE
+        and stats.proposed >= 3
+    ):
+        return 1
+    return 3
+
+
 # 📌 主面の表示上限ハードキャップ（generation_cap / TODAY_CANDIDATE_CAP とは別）
 _DISPLAY_CAP_HARD_MAX = 3
 
@@ -882,8 +902,14 @@ def _estimate_action_minutes_hint(action: str) -> str | None:
     return None
 
 
-def format_today_action_line(entry: MemoryEntry) -> str:
-    """today 一覧の1行。ID は done へコピペできる完全形。"""
+def format_today_action_line(
+    entry: MemoryEntry, *, reader_friendly: bool = True
+) -> str:
+    """today 一覧の1行。ID は done へコピペできる完全形。
+
+    reader_friendly=True（既定）: ｜PASS: 以降を落とした平文（日誌📌とトーン揃え）。
+    False: 台帳原文（デバッグ・機械構文確認用）。
+    """
     try:
         d = date.fromisoformat(entry.date)
         md = f"{d.month}/{d.day}"
@@ -897,8 +923,11 @@ def format_today_action_line(entry: MemoryEntry) -> str:
         v = "❌FAIL"
     else:
         v = "     "
-    # 本文は1行に圧縮
-    action = " ".join(entry.action.split())
+    # 本文は1行に圧縮（読者向けは機械 PASS を前面に出さない）
+    if reader_friendly:
+        action = " ".join(humanize_action_body(entry.action).split())
+    else:
+        action = " ".join(entry.action.split())
     return f"{entry.id}  [{md}]  {v}  {action}"
 
 
@@ -1155,8 +1184,20 @@ def summarize_for_prompt(
             f"⚠️ 行動せずに達成された条件が {stats.undone_passed} 件ある。"
             "目標が緩いか、指標が行動と無関係の可能性を検討する。"
         )
-    # 適応投与: システムが件数を制限する前提の理由説明（決定論は evidence.max_actions）
-    if (
+    # 適応投与 / 未消化バックログ: システムが件数を制限する前提の理由説明
+    # （決定論は evidence.max_actions = min(short, dosing, backlog)）
+    if backlog_generation_cap(stats) == 1 and not (
+        stats.proposed >= _DOSING_MIN_PROPOSED
+        and stats.done_rate is not None
+        and stats.done_rate < _DOSING_DONE_RATE
+    ):
+        # dosing 未発動でも done=0 等で1件制限（ACTION-UX P1）
+        lines.append(
+            "⚠️ 未チェックの提案が溜まっているため、システムが件数を1件に制限する。"
+            "新規は最も小さく始められる1件のみ。既存の未完了を繰り返さない。"
+            "action 文は「いつ→何をする→どう確認するか」が1行で分かる形にすること。"
+        )
+    elif (
         stats.proposed >= _DOSING_MIN_PROPOSED
         and stats.done_rate is not None
         and stats.done_rate < _DOSING_DONE_RATE
@@ -1164,6 +1205,7 @@ def summarize_for_prompt(
         lines.append(
             "⚠️ 消化率が低いため、システムが件数を1件に制限する。"
             "「今日の改善提案」と「明日の最小アクション」は最も小さく始められる1件にすること。"
+            "action 文は「いつ→何をする→どう確認するか」が1行で分かる形にすること。"
         )
     elif (
         stats.proposed >= _DOSING_MIN_PROPOSED

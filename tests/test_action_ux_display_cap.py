@@ -3,13 +3,18 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from kaizenlog.advice_evidence import build_advice_evidence
 from kaizenlog.memory import (
     ActionStats,
     MemoryEntry,
+    backlog_generation_cap,
+    format_today_action_line,
     order_still_open_for_display,
     render_actions_section,
     resolve_display_cap,
+    summarize_for_prompt,
 )
+from tests.test_advice_evidence import CURRENT, HISTORY
 
 
 def test_resolve_display_cap_default_one():
@@ -173,3 +178,70 @@ def test_render_actions_single_checkbox_when_backlog():
     open_boxes = [ln for ln in out.splitlines() if ln.startswith("- [ ]")]
     assert len(open_boxes) == 1
     assert "今週の提案は" in out or "提案" in out
+
+
+def test_backlog_generation_cap_and_evidence_max_actions():
+    zero_done = ActionStats(
+        window_days=14,
+        proposed=5,
+        done=0,
+        judged=0,
+        passed=0,
+        done_judged=0,
+        done_passed=0,
+        undone_judged=0,
+        undone_passed=0,
+        skipped=0,
+    )
+    assert backlog_generation_cap(zero_done) == 1
+    # dosing は proposed≥6 未満でも backlog で1
+    ev = build_advice_evidence(
+        {**CURRENT, "total_minutes": 400.0},
+        HISTORY,
+        action_stats=zero_done,
+    )
+    assert ev.max_actions == 1
+
+    healthy = ActionStats(
+        window_days=14,
+        proposed=10,
+        done=8,
+        judged=5,
+        passed=4,
+        done_judged=4,
+        done_passed=3,
+        undone_judged=1,
+        undone_passed=1,
+        skipped=0,
+    )
+    assert backlog_generation_cap(healthy) == 3
+
+
+def test_summarize_prompt_mentions_backlog_cap():
+    today = date(2026, 8, 2)
+    entries = [
+        MemoryEntry(
+            id=f"KZN-2026072{i}-001",
+            date=f"2026-07-2{i}",
+            action="x｜PASS: context_switches <= 10｜FAIL: 11",
+            status="proposed",
+        )
+        for i in range(5, 9)
+    ]
+    text = summarize_for_prompt(entries, today)
+    assert "未チェックの提案が溜まっている" in text or "件数を1件に制限" in text
+    assert "どう確認するか" in text or "1件" in text
+
+
+def test_format_today_action_line_hides_pass_machine_syntax():
+    e = MemoryEntry(
+        id="KZN-20260801-001",
+        date="2026-08-01",
+        action="朝のセッション前→目標を1行書く｜PASS: category_minutes:執筆・ノート >= 7｜FAIL: 7未満",
+        status="proposed",
+    )
+    line = format_today_action_line(e)
+    assert "｜PASS:" not in line
+    assert "目標を1行書く" in line
+    raw = format_today_action_line(e, reader_friendly=False)
+    assert "｜PASS:" in raw

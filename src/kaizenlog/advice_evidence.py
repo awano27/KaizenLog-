@@ -1116,12 +1116,17 @@ def build_advice_evidence(
         browser_category_minutes is not None and browser_category_minutes >= 30
     )
     max_actions = 1 if short_record else 3
-    # 適応投与（消化率帯）と short_record は min で合成
+    # 適応投与・未消化バックログ・short_record は min で合成
+    # （dosing は proposed≥6、backlog は done=0 等でより早く1件に絞る）
     if action_stats is not None:
         try:
-            from .memory import dosing_max_actions
+            from .memory import backlog_generation_cap, dosing_max_actions
 
-            max_actions = min(max_actions, dosing_max_actions(action_stats))
+            max_actions = min(
+                max_actions,
+                dosing_max_actions(action_stats),
+                backlog_generation_cap(action_stats),
+            )
         except Exception:
             pass
 
