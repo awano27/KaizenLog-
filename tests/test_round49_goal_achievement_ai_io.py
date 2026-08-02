@@ -347,7 +347,7 @@ def test_d1_last_reply_digest_redact_then_truncate():
         user_turns=3,
     )
     # T3: SECRET を 120 字境界を跨ぐ位置に置く（先頭配置だと truncate-first 変異が生存する）
-    secret = ("x" * 115) + "SECRET_TOKEN" + ("y" * 50)
+    secret = ("x" * 110) + "SECRET_TOKEN" + ("y" * 50)
     s._last_assistant_raw = secret
     finalize_session_io_digest(
         s, redactor=lambda t: t.replace("SECRET_TOKEN", "[R]")
@@ -486,9 +486,10 @@ def test_d4_advice_evidence_friction_io_lines():
     assert "[F20]" in ev.markdown
     assert "依頼「fix the fingerprint" in ev.markdown
     assert "成果「moved write_stats" in ev.markdown
-    # T4 / R3: F20・F21 が citable fact_ids に入る（F14b は正規表現外で失格）
+    # T4 / R3: F20・F22 が citable fact_ids に入る（F14b は正規表現外で失格。
+    # F21 は並行作業のパーセンタイル指示行が使用中のため達成度は F22）
     assert "[F20]" in ev.fact_ids
-    assert "[F21]" in ev.fact_ids
+    assert "[F22]" in ev.fact_ids
     assert "[F14b]" not in ev.markdown
 
 
@@ -606,7 +607,7 @@ def test_r1_patch_stats_preserves_redacted_goal_text(tmp_path: Path):
     ev = build_advice_evidence(stats)
     assert "ACME-SECRET" not in ev.markdown
     assert "[REDACTED]" in ev.markdown
-    assert "[F21]" in ev.fact_ids
+    assert "[F22]" in ev.fact_ids
 
 
 def test_r2_prompt_digest_redact_before_truncate_80():
@@ -619,14 +620,15 @@ def test_r2_prompt_digest_redact_before_truncate_80():
         user_turns=2,
     )
     # SECRET_TOKEN が 80 字境界を跨ぐ
-    raw = ("a" * 75) + "SECRET_TOKEN" + ("b" * 20)
+    raw = ("a" * 70) + "SECRET_TOKEN" + ("b" * 20)
     s._user_prompts_raw = [raw]
     finalize_session_io_digest(
         s, redactor=lambda t: t.replace("SECRET_TOKEN", "[R]")
     )
     assert s.prompts_digest
     p0 = s.prompts_digest[0]
-    assert len(p0) <= 80
+    # redact 後 93 字の入力なので、80字キャップならちょうど 80（60字への退行を検知）
+    assert len(p0) == 80
     assert "SECRET_TOKEN" not in p0
     assert "SECRET_T" not in p0
     digests = session_digests_for_stats(
@@ -698,6 +700,59 @@ def test_r4_digest_note_achieved_beats_stale_stats(tmp_path: Path):
     assert "目標B" in body or "目標: 目標B" in body
     assert "80%" not in body
     assert "未申告" in body
+
+
+def test_r4_digest_stats_fallback_without_goal_section(tmp_path: Path):
+    """R4: ノートに GOAL 区間が無い日は stats の目標/達成度に fallback する。"""
+    from kaizenlog.cli import _write_digest_for_day
+    from kaizenlog.config import Config
+    from kaizenlog.vault import DailyNoteStore, DIGEST_MARKER
+
+    vault = tmp_path / "v"
+    notes = vault / "notes"
+    notes.mkdir(parents=True)
+    stats_dir = vault / "stats"
+    stats_dir.mkdir()
+    (vault / "logs").mkdir()
+    (vault / "mem").mkdir()
+    cfg = Config(
+        vault_dir=vault,
+        daily_notes_dir="notes",
+        stats_dir="stats",
+        logs_dir="logs",
+        memory_dir="mem",
+    )
+    day = DAY
+    # GOAL 区間なし。stats のみに目標A・達成度80
+    write_stats(
+        stats_dir,
+        day,
+        _summary(),
+        [],
+        activity_md="### activity\n",
+        goal_text="目標A",
+        goal_achieved=80,
+    )
+    store = DailyNoteStore(notes)
+    dig_stats = json.loads(
+        (stats_dir / f"{day.isoformat()}.json").read_text(encoding="utf-8")
+    )
+    dig_stats["source_status"] = "verified"
+    dig_stats["activity_sha256"] = dig_stats.get("activity_sha256") or "x"
+    ok = _write_digest_for_day(
+        cfg,
+        store,
+        day,
+        source_status="verified",
+        current_stats=dig_stats,
+        entries=[],
+        redactor=None,
+        log_skips=False,
+    )
+    assert ok
+    body = extract_section(store.read(day) or "", DIGEST_MARKER) or ""
+    assert "目標A" in body
+    assert "80%（自己申告）" in body
 
 
 def test_r5_codex_agent_message_fills_last_reply(tmp_path: Path):

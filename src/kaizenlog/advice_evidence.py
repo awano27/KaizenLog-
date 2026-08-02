@@ -785,7 +785,7 @@ def build_advice_evidence(
         raw_ach = stats.get("goal_achieved")
         if isinstance(raw_ach, (int, float)):
             n = max(0, min(100, int(raw_ach)))
-            lines.append(f"- [F21] 目標達成度（自己申告）: {n}%")
+            lines.append(f"- [F22] 目標達成度（自己申告）: {n}%")
         n_goal, n_win = _count_goal_days(history, stats, window=7)
         lines.append(f"- [F16] 目標記入: {n_win}日中{n_goal}日")
 
