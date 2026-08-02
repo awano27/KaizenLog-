@@ -274,12 +274,20 @@ def test_g4_weekly_goal_section_empty_and_filled(tmp_path: Path):
 
 def test_goal_stats_fields_applies_redactor():
     """generate 経路の redact 適用（goal_stats_fields が唯一の入口）。"""
+    # 第49弾: 戻り値に goal_achieved を追加（3-tuple）
     from kaizenlog.goal import DayGoal, goal_stats_fields
 
     goal = DayGoal(text="ACME-SECRET の提案書を仕上げる", category="執筆・ノート")
-    text, cat = goal_stats_fields(goal, lambda t: t.replace("ACME-SECRET", "[REDACTED]"))
+    text, cat, ach = goal_stats_fields(
+        goal, lambda t: t.replace("ACME-SECRET", "[REDACTED]")
+    )
     assert text == "[REDACTED] の提案書を仕上げる"
     assert cat == "執筆・ノート"
+    assert ach is None
     # redactor なし・目標なしの両端
-    assert goal_stats_fields(goal, None) == ("ACME-SECRET の提案書を仕上げる", "執筆・ノート")
-    assert goal_stats_fields(None, str.upper) == (None, None)
+    assert goal_stats_fields(goal, None) == (
+        "ACME-SECRET の提案書を仕上げる",
+        "執筆・ノート",
+        None,
+    )
+    assert goal_stats_fields(None, str.upper) == (None, None, None)

@@ -755,6 +755,10 @@ def build_advice_evidence(
                 lines.append(
                     f"- [F15] 目標カテゴリ『{goal_cat.strip()}』の実測: {_fmt(gm)}分"
                 )
+        raw_ach = stats.get("goal_achieved")
+        if isinstance(raw_ach, (int, float)):
+            n = max(0, min(100, int(raw_ach)))
+            lines.append(f"- [F14b] 目標達成度（自己申告）: {n}%")
         n_goal, n_win = _count_goal_days(history, stats, window=7)
         lines.append(f"- [F16] 目標記入: {n_win}日中{n_goal}日")
 
@@ -1268,6 +1272,31 @@ def build_advice_evidence(
         lines.extend(format_f18_lines(list(coach_entries or [])))
     except Exception:
         pass
+
+    # D4: 摩擦ワーストセッションの 依頼/成果 digest（redact 済みのみ）
+    if ai_stats_valid:
+        digests = ai_telemetry.get("session_digests")
+        if isinstance(digests, list) and digests:
+            from .aiwork import top_friction_sessions
+
+            for i, d in enumerate(top_friction_sessions(digests, limit=2), 1):
+                if not isinstance(d, dict):
+                    continue
+                prompts = d.get("prompts_digest") if isinstance(d.get("prompts_digest"), list) else []
+                first = ""
+                if prompts:
+                    first = str(prompts[0] or "")[:80]
+                elif d.get("title"):
+                    first = str(d.get("title") or "")[:80]
+                reply = str(d.get("last_reply_digest") or "")[:120]
+                proj = str(d.get("project") or "—")
+                if not first and not reply:
+                    continue
+                req = f"依頼「{first}」" if first else "依頼（記録なし）"
+                res = f"成果「{reply}」" if reply else "成果（記録なし）"
+                lines.append(
+                    f"- [F20] 摩擦セッション{i}（{proj}）: {req} / {res}"
+                )
 
     # §S6: screenpipe 画面観測（参考・推定）。redact 済み行のみ受け取る
     if screenpipe_lines:

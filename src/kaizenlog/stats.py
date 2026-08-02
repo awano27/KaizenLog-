@@ -56,6 +56,7 @@ def build_stats(
     title_redactor: Callable[[str], str] | None = None,
     goal_text: str | None = None,
     goal_category: str | None = None,
+    goal_achieved: int | None = None,
     internal_ai_sessions: int = 0,
     loop_tax_summary: LoopTaxSummary | None = None,
     outcome_git: list[dict] | None = None,
@@ -267,6 +268,14 @@ def build_stats(
         stats["goal_text"] = str(goal_text)
         if goal_category:
             stats["goal_category"] = str(goal_category)
+    # 自己申告達成度（0-100）。後方互換の追加キーのみ。
+    if goal_achieved is not None:
+        try:
+            n = int(goal_achieved)
+            if 0 <= n <= 100:
+                stats["goal_achieved"] = n
+        except (TypeError, ValueError):
+            pass
     return stats
 
 
@@ -283,6 +292,7 @@ def write_stats(
     title_redactor: Callable[[str], str] | None = None,
     goal_text: str | None = None,
     goal_category: str | None = None,
+    goal_achieved: int | None = None,
     internal_ai_sessions: int = 0,
     loop_tax_summary: LoopTaxSummary | None = None,
     outcome_git: list[dict] | None = None,
@@ -306,6 +316,7 @@ def write_stats(
                 pricing=pricing,
                 goal_text=goal_text,
                 goal_category=goal_category,
+                goal_achieved=goal_achieved,
                 internal_ai_sessions=internal_ai_sessions,
                 loop_tax_summary=loop_tax_summary,
                 outcome_git=outcome_git,

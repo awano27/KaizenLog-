@@ -465,6 +465,16 @@ def _outcome_lines(
     if test_n > 0:
         lines.append(f"- テスト実行を伴うセッション {test_n}回")
 
+    # 目標カテゴリ実測（カテゴリ指定がある日のみ）
+    goal_cat = stats.get("goal_category")
+    if isinstance(goal_cat, str) and goal_cat.strip():
+        by_cat = stats.get("by_category") if isinstance(stats.get("by_category"), Mapping) else {}
+        raw_m = by_cat.get(goal_cat.strip()) if isinstance(by_cat, Mapping) else None
+        if isinstance(raw_m, (int, float)):
+            lines.append(
+                f"- 目標カテゴリ実測: {goal_cat.strip()} {_fmt_minutes(float(raw_m))}"
+            )
+
     if include_total:
         private = sum(
             float(m)
@@ -616,7 +626,14 @@ def generate_nippou_deterministic(
     work: list[str] = []
     goal = stats.get("goal_text")
     if isinstance(goal, str) and goal.strip():
-        work.append(f"- 目標: {goal.strip()}")
+        ach = stats.get("goal_achieved")
+        ach_part = ""
+        if isinstance(ach, (int, float)):
+            n = max(0, min(100, int(ach)))
+            ach_part = f" ｜ 達成度: {n}%（自己申告）"
+        else:
+            ach_part = " ｜ 達成度: 未申告（kaizenlog goal --achieved N で記録）"
+        work.append(f"- 目標: {goal.strip()}{ach_part}")
     work.extend(_project_work_lines(stats))
     work.extend(_screenpipe_work_lines(stats, activity_md))
     # スクリーン補完（15分以上・エンタメ除外・最大3）

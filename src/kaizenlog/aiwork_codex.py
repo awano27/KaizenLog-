@@ -137,6 +137,7 @@ class _SessionAccum:
     _files_order: list[str] = field(default_factory=list, repr=False)
     _cmd_counts: Counter = field(default_factory=Counter, repr=False)
     _user_prompts_raw: list[str] = field(default_factory=list, repr=False)
+    _last_assistant_raw: str = field(default="", repr=False)
 
     def add_token(self, ts: datetime, ot: int, day_start: datetime, day_end: datetime) -> None:
         if ts < day_start:
@@ -245,6 +246,7 @@ class _SessionAccum:
             _user_prompts_raw=list(self._user_prompts_raw),
             _files_order=list(self._files_order),
             _cmd_counts=Counter(self._cmd_counts),
+            _last_assistant_raw=self._last_assistant_raw or "",
         )
         finalize_session_io_digest(session)
         return session
@@ -412,6 +414,20 @@ class CodexAdapter:
                     if pt == "message" and payload.get("role") == "assistant":
                         a.has_response_item_assistant = True
                         a.api_calls_response_item += 1
+                        # D1: 最終アシスタント本文
+                        bits: list[str] = []
+                        content = payload.get("content")
+                        if isinstance(content, str) and content.strip():
+                            bits.append(content.strip())
+                        elif isinstance(content, list):
+                            for item in content:
+                                if not isinstance(item, dict):
+                                    continue
+                                t = item.get("text") or item.get("output_text")
+                                if isinstance(t, str) and t.strip():
+                                    bits.append(t.strip())
+                        if bits:
+                            a._last_assistant_raw = " ".join(bits)
                     elif pt == "function_call":
                         name = str(payload.get("name") or "function")
                         args = payload.get("arguments") or payload.get("input")

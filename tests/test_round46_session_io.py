@@ -257,9 +257,9 @@ def test_f3_redact_in_digests():
 
 
 def test_f3_session_details_top3_and_toggle():
-    # 往復が十分な4件: 4件目は詳細に出ない（tiny除外ではない境界）
+    # 第49弾 §D2: 編集>0 または往復上位の最大5。旧: 往復上位3のみ
     sessions = []
-    for i, turns in enumerate((15, 12, 10, 8)):
+    for i, turns in enumerate((15, 12, 10, 8, 6, 4)):
         s = AISession(
             session_id=f"s{i}",
             project=f"proj{i}",
@@ -275,7 +275,9 @@ def test_f3_session_details_top3_and_toggle():
     assert "主なセッションの中身" in md
     detail = md.split("#### 主なセッションの中身", 1)[1]
     assert "proj0" in detail and "proj1" in detail and "proj2" in detail
-    assert "proj3" not in detail  # only top 3 by turns in detail section
+    assert "proj3" in detail and "proj4" in detail  # max 5
+    assert "proj5" not in detail  # 6件目は省略
+    assert "- 依頼:" in detail and "- 成果:" in detail
     md_off = render_aiwork_markdown(sessions, TZ, session_details=False)
     assert "主なセッションの中身" not in md_off
 

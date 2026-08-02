@@ -175,10 +175,13 @@ class AISession:
     prompts_digest: list[str] = field(default_factory=list)
     files_touched: list[str] = field(default_factory=list)
     commands_run: list[str] = field(default_factory=list)
+    # セッション最後のアシスタント本文（redact→120字切詰め後）。ブラウザは未設定
+    last_reply_digest: str | None = None
     # 走査中の収集バッファ（表示用に finalize する）
     _user_prompts_raw: list[str] = field(default_factory=list, repr=False)
     _files_order: list[str] = field(default_factory=list, repr=False)
     _cmd_counts: Counter = field(default_factory=Counter, repr=False)
+    _last_assistant_raw: str = field(default="", repr=False)
 
     @property
     def minutes(self) -> float:
@@ -553,8 +556,11 @@ def _update_session(session: AISession, record: dict, ts: datetime) -> None:
         if isinstance(model, str) and model and model != "<synthetic>":
             session.models.add(model)
         # tool_useブロックは行ごとに一度しか現れないため、行単位の計上でよい
+        reply_bits: list[str] = []
         for item in _content_items(record):
-            if isinstance(item, dict) and item.get("type") == "tool_use":
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "tool_use":
                 _note_tool_use(
                     session,
                     str(item.get("name", "unknown")),
@@ -563,6 +569,13 @@ def _update_session(session: AISession, record: dict, ts: datetime) -> None:
                 # ツール起動時点では未解決扱いに戻す（結果待ち）
                 session._last_tool_error = False
                 session.ended_in_error = False
+            elif item.get("type") == "text":
+                t = item.get("text")
+                if isinstance(t, str) and t.strip():
+                    reply_bits.append(t)
+        # D1: セッション最後のアシスタント本文を保持（finalize で redact→120字）
+        if reply_bits:
+            session._last_assistant_raw = " ".join(reply_bits)
 
 
 def scan_sessions(
@@ -1298,8 +1311,15 @@ def _retry_touch_for_session(
     return touch
 
 
-def finalize_session_io_digest(session: AISession) -> None:
-    """走査バッファから prompts_digest / files / commands を確定する。"""
+def finalize_session_io_digest(
+    session: AISession,
+    *,
+    redactor: Callable[[str], str] | None = None,
+) -> None:
+    """走査バッファから prompts_digest / files / commands / last_reply を確定する。
+
+    last_reply_digest は **redact → 先頭120字切詰め** の順（境界漏れ防止）。
+    """
     raw = list(session._user_prompts_raw or [])
     if not raw:
         session.prompts_digest = []
@@ -1314,6 +1334,14 @@ def finalize_session_io_digest(session: AISession) -> None:
     session.commands_run = [
         name for name, _n in session._cmd_counts.most_common(5)
     ]
+    # D1: アシスタント最終本文
+    reply = (session._last_assistant_raw or "").strip()
+    if reply:
+        if redactor is not None:
+            reply = redactor(reply)
+        session.last_reply_digest = reply[:120] if reply else None
+    else:
+        session.last_reply_digest = None
 
 
 def session_digests_for_stats(
@@ -1327,7 +1355,7 @@ def session_digests_for_stats(
     chains = list(retry_chains or [])
     digests: list[dict] = []
     for s in sessions:
-        finalize_session_io_digest(s)
+        finalize_session_io_digest(s, redactor=redactor)
         title = s.title or ""
         if redactor is not None and title:
             title = redactor(title)
@@ -1338,6 +1366,7 @@ def session_digests_for_stats(
             prompts = [redactor(p) for p in prompts if p]
             files = [redactor(f) for f in files if f]
             cmds = [redactor(c) for c in cmds if c]
+        reply = s.last_reply_digest
         retry_touch = _retry_touch_for_session(s, chains)
         tools_total = (
             sum(s.tool_counts.values()) if s.tools_measurable else None
@@ -1364,6 +1393,8 @@ def session_digests_for_stats(
                 "prompts_digest": prompts[:3],
                 "files_touched": files[:5],
                 "commands_run": cmds[:5],
+                "last_reply_digest": reply,
+                "assistant_chars": int(s.assistant_chars or 0),
                 "start": s.start.isoformat() if s.start else None,
                 "end": s.end.isoformat() if s.end else None,
             }
@@ -1834,23 +1865,44 @@ def render_aiwork_markdown(
             bits.append(f"ほか短小セッション {tiny_n}件")
         lines.append(f"（{' / '.join(bits)}）")
 
-    # §F3: 往復上位セッションの入出力詳細（表の下）
+    # §D2: 編集>0 または往復上位の最大5セッションを入出力対で表示
     if session_details:
-        detail_src = sorted(
+        ranked = sorted(
             table_sessions,
             key=lambda s: (-int(s.user_turns or 0), s.session_id),
-        )[:3]
+        )
+        edited = [s for s in table_sessions if int(s.edits or 0) > 0]
+        # 編集ありを優先しつつ、往復上位で埋めて最大5
+        seen_ids: set[str] = set()
+        detail_src: list[AISession] = []
+        for s in edited + ranked:
+            if s.session_id in seen_ids:
+                continue
+            seen_ids.add(s.session_id)
+            detail_src.append(s)
+            if len(detail_src) >= 5:
+                break
         detail_blocks: list[str] = []
         for s in detail_src:
-            finalize_session_io_digest(s)
+            finalize_session_io_digest(s, redactor=redactor)
             prompts = list(s.prompts_digest or [])
             files = list(s.files_touched or [])
-            cmds = list(s.commands_run or [])
             if redactor is not None:
                 prompts = [redactor(p) for p in prompts if p]
                 files = [redactor(f) for f in files if f]
-                cmds = [redactor(c) for c in cmds if c]
-            if not prompts and not files and not cmds:
+            # 依頼: first prompt digest 80字（title フォールバックは session_titles 時のみ・redact 必須）
+            first_prompt = ""
+            if prompts:
+                first_prompt = prompts[0][:80]
+            elif session_titles and s.title:
+                t = str(s.title or "")
+                if redactor is not None and t not in ("—", "（本文未保存）"):
+                    t = redactor(t)
+                first_prompt = t[:80]
+            reply = s.last_reply_digest or ""
+            is_browser = str(s.source or "").endswith("-web") or not s.tools_measurable
+            has_io = bool(first_prompt or reply or files or is_browser)
+            if not has_io:
                 continue
             start = s.start.astimezone(tz).strftime("%H:%M")
             end = s.end.astimezone(tz).strftime("%H:%M")
@@ -1862,17 +1914,22 @@ def render_aiwork_markdown(
                 f"・編集{int(s.edits)}）**"
             )
             body_lines = [head]
-            if prompts:
-                body_lines.append(
-                    "- 依頼: " + " → ".join(f"「{p}」" for p in prompts)
-                )
+            if first_prompt:
+                body_lines.append(f"- 依頼: 「{first_prompt}」")
+            # 成果: last_reply + 変更ファイル + テスト有無
+            outcome_bits: list[str] = []
+            if is_browser and not reply:
+                chars = int(s.assistant_chars or 0)
+                outcome_bits.append(f"出力 {chars}字（本文ログなし）")
+            elif reply:
+                outcome_bits.append(f"「{reply}」")
             if files:
                 more = " ほか" if len(s._files_order or []) > len(files) else ""
-                body_lines.append(
-                    "- 触ったファイル: " + ", ".join(files) + more
-                )
-            if cmds:
-                body_lines.append("- 実行: " + ", ".join(cmds))
+                outcome_bits.append("変更: " + ", ".join(files[:5]) + more)
+            if s.tests_run:
+                outcome_bits.append("テスト実行あり")
+            if outcome_bits:
+                body_lines.append("- 成果: " + " ｜ ".join(outcome_bits))
             detail_blocks.append("\n".join(body_lines))
         if detail_blocks:
             lines.append("")

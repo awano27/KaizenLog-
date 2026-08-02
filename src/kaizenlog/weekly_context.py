@@ -442,10 +442,11 @@ def render_weekly_context(
     except OSError:
         pass
 
-    # 目標トレース（観察のみ・達成判定なし）
+    # 目標トレース（自己申告達成度は転記可。AI による達成/未達の断定はしない）
     lines.extend(["", "## 目標", ""])
     goal_days = 0
     goal_rows: list[str] = []
+    achieved_vals: list[int] = []
     for s in week_stats:
         gt = s.get("goal_text")
         if not (isinstance(gt, str) and gt.strip()):
@@ -454,18 +455,29 @@ def render_weekly_context(
         d = s.get("day") or "?"
         gc = s.get("goal_category")
         mins = _goal_minutes_for_day(s, gc if isinstance(gc, str) else None)
+        raw_ach = s.get("goal_achieved")
+        ach_label = "—"
+        if isinstance(raw_ach, (int, float)):
+            n = max(0, min(100, int(raw_ach)))
+            ach_label = f"{n}%（自己申告）"
+            achieved_vals.append(n)
+        mid = ""
         if isinstance(gc, str) and gc.strip() and mins is not None:
-            goal_rows.append(
-                f"- {d}: {gt.strip()} @{gc.strip()}（実測 {mins:.1f}分）"
-            )
+            mid = f" @{gc.strip()}（実測 {mins:.1f}分）"
         elif isinstance(gc, str) and gc.strip():
-            goal_rows.append(f"- {d}: {gt.strip()} @{gc.strip()}")
-        else:
-            goal_rows.append(f"- {d}: {gt.strip()}")
+            mid = f" @{gc.strip()}"
+        goal_rows.append(f"- {d}: {gt.strip()}{mid} ｜ 達成度: {ach_label}")
     if goal_days == 0:
         lines.append("- 目標記入なし")
     else:
         lines.append(f"- 目標設定日数: 7日中{goal_days}日")
+        if achieved_vals:
+            avg = sum(achieved_vals) / len(achieved_vals)
+            lines.append(
+                f"- 申告あり日の平均達成度: {avg:.0f}%（{len(achieved_vals)}日）"
+            )
+        else:
+            lines.append("- 申告あり日の平均達成度: —（未申告）")
         lines.extend(goal_rows)
     lines.append("")
     return "\n".join(lines)

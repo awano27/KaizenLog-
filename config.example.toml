@@ -56,6 +56,10 @@ enabled = true
 claude_projects_dir = "~/.claude/projects"
 # session_details = true   # 往復上位セッションの依頼・ファイル・コマンド詳細
 
+[nippou]
+# kaizenlog run 後に決定論日報ドラフトを自動書き込み（既定 ON）
+auto_write = true
+
 # 空転ブレーカー（Claude Code UserPromptSubmit / Stop フック）
 # [guard]
 # enabled = true

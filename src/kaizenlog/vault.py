@@ -7,8 +7,12 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import date
 from pathlib import Path
+
+_FOOTNOTE_DEF_RE = re.compile(r"^\[\^(\d+)\]:\s*(.*)$")
+_FOOTNOTE_REF_RE = re.compile(r"\[\^(\d+)\]")
 
 
 def atomic_write_bytes(path: Path, content: bytes) -> None:
@@ -67,7 +71,7 @@ def _normalize_section_newlines(section_md: str, nl: str) -> str:
 ACTIVITY_MARKER = "kaizenlog:activity"
 ADVICE_MARKER = "kaizenlog:advice"
 ACTIONS_MARKER = "kaizenlog:actions"  # 朝の引き継ぎ（未完了アクション転記）
-GOAL_MARKER = "kaizenlog:goal"  # 今日の作業目標（所有: goal コマンドのみ。generate/advise は読取）
+GOAL_MARKER = "kaizenlog:goal"  # 今日の作業目標（所有: goal コマンド + morning プレースホルダ。generate/advise は読取）
 WEEKLY_CONTEXT_MARKER = "kaizenlog:weekly-context"  # 週次スコアカード（決定論）
 AGENT_CONTEXT_MARKER = "kaizenlog:agent-context"  # handoff が CLAUDE.md/AGENTS.md へ注入
 COACH_MARKER = "kaizenlog:coach"  # coach --apply が追記する調教区間
@@ -180,25 +184,45 @@ def reorder_sections(content: str) -> str:
 def consolidate_disclaimers(content: str, *, max_inline: int = 1) -> str:
     """各既知区間の ※ 始まり行を最大 max_inline 本残し、残りを footnotes へ。
 
-    本文側は [^n] 参照のみ。注釈内容は削除しない。
+    脚注ブロックは毎回ゼロから再構築する:
+    - 本文に参照が残る注のみ保持（orphan 定義は破棄）
+    - 同一文面は1定義に統合して複数参照で共有
+    - 番号は 1 から振り直し
+    べき等（同一ノートに2回適用しても本文・脚注が変化しない）。
     """
     if not content or max_inline < 0:
         return content
     nl = detect_newline(content)
-    footnotes: list[str] = []
-    # 既存 footnotes を読み込んで継続番号
+
+    existing_defs: dict[int, str] = {}
     existing_fn = extract_section(content, FOOTNOTES_MARKER)
     if existing_fn:
         for line in existing_fn.splitlines():
-            line = line.strip()
-            if line.startswith("[^") and "]:" in line:
-                # [^1]: text
-                try:
-                    body = line.split("]:", 1)[1].strip()
-                except IndexError:
-                    continue
-                if body:
-                    footnotes.append(body)
+            m = _FOOTNOTE_DEF_RE.match(line.strip())
+            if m and m.group(2).strip():
+                existing_defs[int(m.group(1))] = m.group(2).strip()
+
+    # 初出順のユニーク注釈文面 → 最終番号は 1 始まり
+    ref_texts: list[str] = []
+    text_to_num: dict[str, int] = {}
+
+    def _ref_for(text: str) -> str:
+        key = text.strip()
+        if key not in text_to_num:
+            text_to_num[key] = len(ref_texts) + 1
+            ref_texts.append(key)
+        return f"[^{text_to_num[key]}]"
+
+    def _rewrite_refs(line: str) -> str:
+        def repl(m: re.Match[str]) -> str:
+            n = int(m.group(1))
+            text = existing_defs.get(n)
+            if text is None:
+                # 定義の無い参照は破棄（汚染ノートの orphan 参照掃除）
+                return ""
+            return _ref_for(text)
+
+        return _FOOTNOTE_REF_RE.sub(repl, line)
 
     def _process_body(body: str) -> str:
         lines = body.splitlines()
@@ -207,20 +231,15 @@ def consolidate_disclaimers(content: str, *, max_inline: int = 1) -> str:
         for line in lines:
             stripped = line.lstrip()
             if stripped.startswith("※"):
-                note = stripped[1:].strip() if stripped.startswith("※") else stripped
-                # "※ " または "※"
-                if stripped.startswith("※"):
-                    note = stripped[1:].lstrip()
+                note = stripped[1:].lstrip()
                 seen += 1
                 if seen <= max_inline:
                     out.append(line)
                 else:
-                    footnotes.append(note)
-                    # インデントを保った参照
                     indent = line[: len(line) - len(line.lstrip())]
-                    out.append(f"{indent}[^{len(footnotes)}]")
+                    out.append(f"{indent}{_ref_for(note)}")
             else:
-                out.append(line)
+                out.append(_rewrite_refs(line))
         return "\n".join(out)
 
     updated = content
@@ -234,7 +253,6 @@ def consolidate_disclaimers(content: str, *, max_inline: int = 1) -> str:
         block = updated[s:e]
         start_tag, end_tag = _start_tag(marker), _end_tag(marker)
         inner_start = len(start_tag)
-        # start_tag 直後の改行をスキップ
         rest = block[inner_start:]
         if rest.startswith("\r\n"):
             head_nl, rest = "\r\n", rest[2:]
@@ -245,7 +263,6 @@ def consolidate_disclaimers(content: str, *, max_inline: int = 1) -> str:
         if not rest.endswith(end_tag):
             continue
         body = rest[: -len(end_tag)]
-        # body 末尾改行保持
         body_stripped = body
         trailing = ""
         if body_stripped.endswith("\r\n"):
@@ -260,12 +277,20 @@ def consolidate_disclaimers(content: str, *, max_inline: int = 1) -> str:
         new_block = f"{start_tag}{head_nl}{new_body}{trailing}{end_tag}"
         updated = updated[:s] + new_block + updated[e:]
 
-    if not footnotes:
-        return updated
+    if not ref_texts:
+        # 参照が無ければ footnotes 区間ごと除去（孤児定義の掃除）
+        span = _find_section_span(updated, FOOTNOTES_MARKER)
+        if span is None:
+            return updated
+        s, e = span
+        before = updated[:s].rstrip("\r\n")
+        after = updated[e:].lstrip("\r\n")
+        if before and after:
+            return before + nl + nl + after
+        return before + (nl if before and not before.endswith("\n") else "") + after
 
-    # footnotes 区間を組み立て（重複除去はしない＝本文参照と1:1）
     fn_lines = ["## 注釈", ""]
-    for i, text in enumerate(footnotes, 1):
+    for i, text in enumerate(ref_texts, 1):
         fn_lines.append(f"[^{i}]: {text}")
     fn_body = "\n".join(fn_lines) + "\n"
     return upsert_section(updated, FOOTNOTES_MARKER, fn_body, position="bottom")

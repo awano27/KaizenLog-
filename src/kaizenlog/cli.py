@@ -575,9 +575,12 @@ def cmd_generate(
 
     note_after = store.read(day)
     day_goal = read_goal(note_after, known_cats)
-    goal_text_stat, goal_cat_stat = goal_stats_fields(day_goal, title_redactor)
+    goal_text_stat, goal_cat_stat, goal_achieved_stat = goal_stats_fields(
+        day_goal, title_redactor
+    )
 
     # パターン検出用の機械可読な統計を蓄積する
+    # activity_sha256 は _finalize_note_layout 後の本文と整合させる（下で更新）
     write_stats(
         cfg.stats_path,
         day,
@@ -591,6 +594,7 @@ def cmd_generate(
         title_redactor=title_redactor if cfg.aiwork.enabled else None,
         goal_text=goal_text_stat,
         goal_category=goal_cat_stat,
+        goal_achieved=goal_achieved_stat,
         internal_ai_sessions=internal_ai_n,
         loop_tax_summary=loop_tax,
         outcome_git=outcome_git_payload,
@@ -854,7 +858,42 @@ def cmd_generate(
 
     # §A3/D2: 区間並び替え + 免責注釈の脚注集約
     _finalize_note_layout(store, day)
+    # A1: finalize 後の ACTIVITY 本文で activity_sha256 を確定（advise 照合と一致させる）
+    _resync_stats_activity_fingerprint(cfg, store, day)
     return path
+
+
+def _resync_stats_activity_fingerprint(
+    cfg: Config, store: DailyNoteStore, day: date
+) -> None:
+    """stats の activity_sha256 を finalize 後の ACTIVITY 本文に合わせる。"""
+    import json
+
+    content = store.read(day)
+    if content is None:
+        return
+    activity_md = extract_section(content, ACTIVITY_MARKER)
+    if activity_md is None:
+        return
+    path = cfg.stats_path / f"{day.isoformat()}.json"
+    if not path.is_file():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+    new_fp = activity_fingerprint(activity_md)
+    if data.get("activity_sha256") == new_fp:
+        return
+    data["activity_sha256"] = new_fp
+    from .vault import atomic_write_text
+
+    atomic_write_text(
+        path,
+        json.dumps(data, ensure_ascii=False, indent=1),
+    )
 
 
 def _log_digest_skipped(
@@ -936,14 +975,24 @@ def _write_digest_for_day(
             pass
 
     goal_text = None
+    goal_achieved = None
     try:
         from .goal import read_goal
 
         g = read_goal(store.read(day), known_category_names(cfg.rules))
         if g is not None and getattr(g, "text", None):
             goal_text = str(g.text)
+            if getattr(g, "achieved", None) is not None:
+                goal_achieved = int(g.achieved)
     except Exception:
         goal_text = None
+        goal_achieved = None
+    # stats に保存済みの達成度を優先（goal 区間と乖離しても stats は自己申告の記録）
+    if dig_stats is not None and dig_stats.get("goal_achieved") is not None:
+        try:
+            goal_achieved = int(dig_stats["goal_achieved"])
+        except (TypeError, ValueError):
+            pass
 
     if dig_stats is None:
         if log_skips and skip_reason:
@@ -958,6 +1007,7 @@ def _write_digest_for_day(
         redactor=redactor,
         existing_markers=existing_markers,
         goal_text=goal_text,
+        goal_achieved=goal_achieved,
         commit_stats=commit_stats,
         stats_history=stats_history,
     )
@@ -1272,6 +1322,14 @@ def cmd_morning(cfg: Config, day: date, *, skip_catch_up: bool = False) -> int:
             _write_morning_yesterday_brief(store, day)
         except Exception as e:
             print(f"⚠️  昨日サマリ転記をスキップ: {type(e).__name__}", file=sys.stderr)
+
+        # C6: GOAL 区間が無ければプレースホルダ（実テキストの唯一のライターは cmd_goal）
+        try:
+            from .goal import ensure_goal_placeholder
+
+            ensure_goal_placeholder(cfg.daily_notes_path, day)
+        except Exception as e:
+            print(f"⚠️  目標プレースホルダをスキップ: {type(e).__name__}", file=sys.stderr)
 
         section = render_actions_section(
             entries,
@@ -1753,35 +1811,99 @@ def _sync_checkbox_statuses(cfg: Config, day: date) -> tuple[list, int]:
     return sorted(by_id.values(), key=lambda e: e.id), len(status_updates)
 
 
-def cmd_goal(cfg: Config, day: date, goal_arg: str | None) -> int:
+def cmd_goal(
+    cfg: Config,
+    day: date,
+    goal_arg: str | None,
+    *,
+    achieved: int | None = None,
+) -> int:
     """今日の作業目標を設定/表示する（goal マーカー区間の唯一の書き手）。"""
-    from .goal import format_goal_section, read_goal, write_goal
+    from .goal import read_goal, write_goal, write_goal_achieved
 
     known = known_category_names(cfg.rules)
     store = DailyNoteStore(cfg.daily_notes_path)
-    if not goal_arg or not str(goal_arg).strip():
+
+    if achieved is not None:
+        if not (0 <= int(achieved) <= 100):
+            print("❌ --achieved は 0〜100 の整数で指定してください", file=sys.stderr)
+            return 1
+
+    has_text = bool(goal_arg and str(goal_arg).strip())
+    if not has_text and achieved is None:
         content = store.read(day)
         g = read_goal(content, known)
         if g is None:
             print("🎯 目標: 未設定（`kaizenlog goal \"...\"` で設定）")
             return 0
         cat = f" @{g.category}" if g.category else ""
-        print(f"🎯 今日の目標: {g.text}{cat}")
-        return 0
-    try:
-        path, g = write_goal(
-            cfg.daily_notes_path,
-            day,
-            goal_arg,
-            known_categories=known,
+        ach = (
+            f" ｜ 達成度: {g.achieved}%（自己申告）"
+            if g.achieved is not None
+            else ""
         )
+        print(f"🎯 今日の目標: {g.text}{cat}{ach}")
+        return 0
+
+    try:
+        if has_text:
+            path, g = write_goal(
+                cfg.daily_notes_path,
+                day,
+                goal_arg,
+                known_categories=known,
+                achieved=achieved,
+            )
+        else:
+            path, g = write_goal_achieved(
+                cfg.daily_notes_path,
+                day,
+                int(achieved),  # type: ignore[arg-type]
+                known_categories=known,
+            )
     except ValueError as e:
         print(f"❌ {e}", file=sys.stderr)
         return 1
+
+    # stats に goal_achieved を後方互換で追記（generate 前でも digest/nippou が読める）
+    if g.achieved is not None:
+        _patch_stats_goal_achieved(cfg, day, g)
+
     cat = f" @{g.category}" if g.category else ""
+    ach = (
+        f" ｜ 達成度: {g.achieved}%（自己申告）"
+        if g.achieved is not None
+        else ""
+    )
     print(f"✅ 目標を書き込みました: {path}")
-    print(f"🎯 今日の目標: {g.text}{cat}")
+    print(f"🎯 今日の目標: {g.text}{cat}{ach}")
     return 0
+
+
+def _patch_stats_goal_achieved(cfg: Config, day: date, day_goal) -> None:
+    """既存 stats があれば goal_text / goal_achieved を更新（無ければ何もしない）。"""
+    import json
+
+    path = cfg.stats_path / f"{day.isoformat()}.json"
+    if not path.is_file():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+    from .goal import goal_stats_fields
+    from .vault import atomic_write_text
+
+    text, cat, ach = goal_stats_fields(day_goal, None)
+    if text:
+        data["goal_text"] = text
+    if cat:
+        data["goal_category"] = cat
+    if ach is not None:
+        data["goal_achieved"] = int(ach)
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=1))
 
 
 def cmd_today(
@@ -2348,6 +2470,31 @@ def cmd_rehumanize(
     if write and backup_root is not None and backup_root.is_dir():
         print(f"バックアップ: {backup_root}")
     return 0
+
+
+def _auto_write_nippou(cfg: Config, day: date) -> bool:
+    """決定論 nippou をノートへ書く。成功 True。stats 欠落などは False（例外にしない）。"""
+    tz = ZoneInfo(cfg.timezone)
+    store = DailyNoteStore(cfg.daily_notes_path)
+    content = store.read(day) or ""
+    intent = _extract_intent(content)
+    open_kzn = _open_kzn_for_nippou(cfg, day, content)
+    stats_list = load_stats(cfg.stats_path, days=1, end_day=day)
+    if not stats_list:
+        print(f"⚠️  日報自動書き込みスキップ: {day} の統計がありません", file=sys.stderr)
+        return False
+    activity_md = extract_section(content, ACTIVITY_MARKER)
+    section = generate_nippou_deterministic(
+        stats_list[0],
+        tz,
+        intent,
+        min_block_minutes=cfg.min_block_minutes,
+        open_kzn_actions=open_kzn,
+        activity_md=activity_md,
+    )
+    path = store.write_section(day, NIPPOU_MARKER, section)
+    print(f"✅ 日報ドラフトを自動書き込みしました: {path}")
+    return True
 
 
 def cmd_report(cfg: Config, day: date, use_llm: bool, write: bool) -> None:
@@ -3595,6 +3742,13 @@ def main(argv: list[str] | None = None) -> int:
         help='目標文（例: "リリースノート下書き @執筆・ノート"）。省略時は表示のみ',
     )
     gl.add_argument("--date", help="対象日 YYYY-MM-DD（省略時は今日）")
+    gl.add_argument(
+        "--achieved",
+        type=int,
+        default=None,
+        metavar="N",
+        help="達成度 0〜100（自己申告）。既存目標に追記可",
+    )
 
     ho = sub.add_parser(
         "handoff",
@@ -3850,7 +4004,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "goal":
         tz = ZoneInfo(cfg.timezone)
         day = _parse_date(args.date, tz)
-        return cmd_goal(cfg, day, getattr(args, "text", None))
+        return cmd_goal(
+            cfg,
+            day,
+            getattr(args, "text", None),
+            achieved=getattr(args, "achieved", None),
+        )
 
     if args.command == "done":
         tz = ZoneInfo(cfg.timezone)
@@ -4161,6 +4320,19 @@ def main(argv: list[str] | None = None) -> int:
                 cmd_generate(cfg, day, skip_verdict_ids=skip_verdict or None)
         if args.command in ("advise", "run"):
             cmd_advise(cfg, day, dry_run=dry_run)
+        # E1: run 後に nippou 決定論版を自動書き込み（LLM 変種は呼ばない）
+        if (
+            args.command == "run"
+            and not dry_run
+            and bool(getattr(getattr(cfg, "nippou", None), "auto_write", True))
+        ):
+            try:
+                _auto_write_nippou(cfg, day)
+            except Exception as nip_err:
+                print(
+                    f"⚠️  日報自動書き込みをスキップ: {type(nip_err).__name__}",
+                    file=sys.stderr,
+                )
     except (ActivityWatchError, AdvisorError, PrivacyError) as e:
         print(f"❌ {e}", file=sys.stderr)
         if not dry_run:

@@ -200,6 +200,14 @@ class GuardConfig:
 
 
 @dataclass
+class NippouConfig:
+    """日報ドラフト自動書き込み。"""
+
+    # run 後に決定論 nippou を自動書き込み（既定 ON・OFF 可）
+    auto_write: bool = True
+
+
+@dataclass
 class Config:
     timezone: str = "Asia/Tokyo"
     vault_dir: Path = Path(".")
@@ -219,6 +227,7 @@ class Config:
     effort: EffortConfig = field(default_factory=EffortConfig)
     handoff: HandoffConfig = field(default_factory=HandoffConfig)
     guard: GuardConfig = field(default_factory=GuardConfig)
+    nippou: NippouConfig = field(default_factory=NippouConfig)
     min_block_minutes: float = 3.0  # タイムラインに載せる最小ブロック長
     session_gap_minutes: float = 5.0  # この間隔以上空いたら別画面ブロック扱い
     # 「📌 今日のアクション」の初回挿入位置（既存区間は移動しない）
@@ -667,6 +676,11 @@ def load_config(path: str | None = None) -> Config:
             cfg.guard.debounce_seconds = _coerce(
                 int, guard.get("debounce_seconds"), "guard.debounce_seconds"
             )
+
+    nippou = data.get("nippou", {})
+    if isinstance(nippou, dict):
+        if "auto_write" in nippou:
+            cfg.nippou.auto_write = bool(nippou.get("auto_write"))
 
     cats = data.get("categories", {})
     user_rules = cats.get("rules", [])

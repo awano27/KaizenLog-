@@ -106,6 +106,7 @@ def build_digest(
     redactor: Callable[[str], str] | None = None,
     existing_markers: Collection[str] | None = None,
     goal_text: str | None = None,
+    goal_achieved: int | None = None,
     commit_stats: Sequence[Any] | None = None,
     stats_history: Sequence[Mapping[str, Any]] | None = None,
 ) -> str | None:
@@ -169,15 +170,39 @@ def build_digest(
     if stats_derived == 0:
         return None
 
-    # 目標（redactor 必須 — 自由記述）
+    # 目標（redactor 必須 — 自由記述）+ 達成度（自己申告）
+    # stats の goal_achieved をフォールバック
+    ach = goal_achieved
+    if ach is None and isinstance(stats.get("goal_achieved"), (int, float)):
+        try:
+            ach = int(stats["goal_achieved"])
+        except (TypeError, ValueError):
+            ach = None
+    if ach is not None:
+        ach = max(0, min(100, int(ach)))
+    ach_part = (
+        f" ｜ 達成度: {ach}%（自己申告）"
+        if ach is not None
+        else " ｜ 達成度: 未申告（kaizenlog goal --achieved N で記録）"
+    )
+    # 目標カテゴリ実測（ある場合）
+    cat_part = ""
+    goal_cat = stats.get("goal_category")
+    if isinstance(goal_cat, str) and goal_cat.strip():
+        by_cat = stats.get("by_category")
+        if isinstance(by_cat, Mapping):
+            raw_m = by_cat.get(goal_cat.strip())
+            if isinstance(raw_m, (int, float)):
+                cat_part = f" ｜ {goal_cat.strip()} {_fmt_minutes(float(raw_m))}"
+
     if goal_text and str(goal_text).strip() and redactor is not None:
         g = redactor(str(goal_text).strip())
         if g:
-            lines.append(f"- 目標: {g}")
+            lines.append(f"- 目標: {g}{ach_part}{cat_part}")
     elif goal_text and str(goal_text).strip() and redactor is None:
         # redact 無効設定（patterns=[] → redactor=None）でも目標は出す
         # 素通しは「秘匿パターン無し」の意味。評価語検査は目標対象外。
-        lines.append(f"- 目標: {str(goal_text).strip()}")
+        lines.append(f"- 目標: {str(goal_text).strip()}{ach_part}{cat_part}")
 
     # 手を動かした先（effort 上位2 + コミット数）
     tops = _effort_top_projects(stats, limit=2)
