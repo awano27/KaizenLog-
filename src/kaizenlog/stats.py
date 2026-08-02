@@ -44,6 +44,29 @@ def activity_fingerprint(activity_md: str) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def goal_category_minutes(
+    stats: Mapping[str, Any], category: str | None
+) -> float | None:
+    """目標カテゴリの by_category 実測分数。無ければ None。
+
+    R6: digest / nippou / advice_evidence が共有する単一ルックアップ。
+    """
+    if not category or not str(category).strip():
+        return None
+    by_cat = stats.get("by_category") if isinstance(stats, Mapping) else None
+    if not isinstance(by_cat, Mapping):
+        return None
+    v = by_cat.get(str(category).strip())
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        if f == f and abs(f) != float("inf"):  # finite
+            return f
+    return None
+
+
 def build_stats(
     day: date,
     summary: DailySummary,

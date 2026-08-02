@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Collection, Mapping, Sequence
 from datetime import date, tzinfo
@@ -9,7 +10,7 @@ from typing import Any, Callable
 
 from .aiwork import top_friction_sessions
 from .baseline import baseline, format_with_baseline
-from .memory import MemoryEntry
+from .memory import MemoryEntry, humanize_action_body
 from .report import _fmt_minutes
 from .vault import (
     ACTIONS_MARKER,
@@ -171,13 +172,8 @@ def build_digest(
         return None
 
     # 目標（redactor 必須 — 自由記述）+ 達成度（自己申告）
-    # stats の goal_achieved をフォールバック
+    # R4: goal_achieved は呼び出し側（ノート優先）が渡す。stats で埋め戻さない。
     ach = goal_achieved
-    if ach is None and isinstance(stats.get("goal_achieved"), (int, float)):
-        try:
-            ach = int(stats["goal_achieved"])
-        except (TypeError, ValueError):
-            ach = None
     if ach is not None:
         ach = max(0, min(100, int(ach)))
     ach_part = (
@@ -185,15 +181,15 @@ def build_digest(
         if ach is not None
         else " ｜ 達成度: 未申告（kaizenlog goal --achieved N で記録）"
     )
-    # 目標カテゴリ実測（ある場合）
+    # 目標カテゴリ実測（R6: stats.goal_category_minutes に集約）
     cat_part = ""
     goal_cat = stats.get("goal_category")
     if isinstance(goal_cat, str) and goal_cat.strip():
-        by_cat = stats.get("by_category")
-        if isinstance(by_cat, Mapping):
-            raw_m = by_cat.get(goal_cat.strip())
-            if isinstance(raw_m, (int, float)):
-                cat_part = f" ｜ {goal_cat.strip()} {_fmt_minutes(float(raw_m))}"
+        from .stats import goal_category_minutes as _gcm
+
+        raw_m = _gcm(stats, goal_cat.strip())
+        if raw_m is not None:
+            cat_part = f" ｜ {goal_cat.strip()} {_fmt_minutes(float(raw_m))}"
 
     if goal_text and str(goal_text).strip() and redactor is not None:
         g = redactor(str(goal_text).strip())
@@ -203,6 +199,25 @@ def build_digest(
         # redact 無効設定（patterns=[] → redactor=None）でも目標は出す
         # 素通しは「秘匿パターン無し」の意味。評価語検査は目標対象外。
         lines.append(f"- 目標: {str(goal_text).strip()}{ach_part}{cat_part}")
+
+    # ムダは直接計測のエンタメだけを根拠にする。ブラウジングは中立。
+    if isinstance(by_cat, Mapping):
+        entertainment = by_cat.get("エンタメ")
+        entertainment_is_finite_number = (
+            not isinstance(entertainment, bool)
+            and isinstance(entertainment, (int, float))
+            and math.isfinite(float(entertainment))
+        )
+        if "エンタメ" in by_cat and not entertainment_is_finite_number:
+            lines.append("- ムダ上位: 測定不能（エンタメカテゴリ値が不正）")
+        elif entertainment_is_finite_number and float(entertainment) > 0:
+            lines.append(
+                f"- ムダ上位: エンタメ {_fmt_minutes(float(entertainment))}（直接計測）"
+            )
+        else:
+            lines.append("- ムダ上位: 直接計測なし（ブラウジングは中立）")
+    else:
+        lines.append("- ムダ上位: 測定不能（カテゴリ統計なし）")
 
     # 手を動かした先（effort 上位2 + コミット数）
     tops = _effort_top_projects(stats, limit=2)
@@ -230,7 +245,7 @@ def build_digest(
         if parts:
             lines.append("- 手を動かした先: " + "・".join(parts))
 
-    # 今日いちばんの摩擦（数値は redactor 無しでも出す）
+    # AI作業の質は因果評価せず、構造化ログがあれば摩擦の代理指標だけを示す。
     ai = stats.get("ai") if isinstance(stats.get("ai"), Mapping) else {}
     digests = ai.get("session_digests") if isinstance(ai, Mapping) else None
     if isinstance(digests, list) and digests:
@@ -248,17 +263,28 @@ def build_digest(
                     what = f"{what}「{t}」"
                 elif title and _has_banned(title):
                     return None
-            lines.append(f"- 今日いちばんの摩擦: {what}")
+            lines.append(
+                f"- AI作業の質: 摩擦の代理指標（今日いちばんの摩擦）: {what}"
+            )
+        else:
+            lines.append("- AI作業の質: 大きな摩擦なし（摩擦の代理指標）")
+    elif ai_min is not None and ai_min > 0:
+        lines.append("- AI作業の質: 測定不能（構造化AIログなし）")
+    elif ai_min is not None:
+        lines.append("- AI作業の質: 対象なし（AI作業 0分）")
+    else:
+        lines.append("- AI作業の質: 測定不能（AI作業時間・構造化AIログなし）")
 
     # 今日の1手（1件・自由文のため redactor 必須）
     open_entries = [e for e in entries if e.status == "proposed"]
     if open_entries and redactor is not None:
         latest = sorted(open_entries, key=lambda e: e.id, reverse=True)[0]
-        body = " ".join((latest.action or "").split())
+        body = " ".join(humanize_action_body(latest.action or "").split())
         snippet = body if len(body) <= 40 else body[:39] + "…"
         snippet = redactor(snippet)
         if snippet:
-            lines.append(f"- 今日の1手: {latest.id} {snippet}")
+            label = "明日のフォーカス" if latest.date == today_s else "今日の1手"
+            lines.append(f"- {label}: {latest.id} {snippet}")
 
     # 内部リンク
     markers = set(existing_markers or ())

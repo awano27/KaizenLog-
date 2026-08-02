@@ -407,6 +407,36 @@ class CodexAdapter:
                         a.interruptions += 1
                     elif et == "agent_message":
                         a.api_calls_event_msg += 1
+                        # R5: event_msg 経路でも最終アシスタント本文を保持
+                        # （response_item が無いセッションで last_reply_digest が死ぬのを防ぐ）
+                        msg = payload.get("message")
+                        bits: list[str] = []
+                        if isinstance(msg, str) and msg.strip():
+                            bits.append(msg.strip())
+                        elif isinstance(msg, dict):
+                            t = msg.get("text") or msg.get("content")
+                            if isinstance(t, str) and t.strip():
+                                bits.append(t.strip())
+                            elif isinstance(t, list):
+                                for item in t:
+                                    if isinstance(item, dict):
+                                        tt = item.get("text") or item.get("output_text")
+                                        if isinstance(tt, str) and tt.strip():
+                                            bits.append(tt.strip())
+                                    elif isinstance(item, str) and item.strip():
+                                        bits.append(item.strip())
+                        if not bits:
+                            content = payload.get("content")
+                            if isinstance(content, str) and content.strip():
+                                bits.append(content.strip())
+                            elif isinstance(content, list):
+                                for item in content:
+                                    if isinstance(item, dict):
+                                        tt = item.get("text") or item.get("output_text")
+                                        if isinstance(tt, str) and tt.strip():
+                                            bits.append(tt.strip())
+                        if bits:
+                            a._last_assistant_raw = " ".join(bits)
                     continue
 
                 if top == "response_item":

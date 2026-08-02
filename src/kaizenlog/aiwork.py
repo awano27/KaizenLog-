@@ -1311,6 +1311,29 @@ def _retry_touch_for_session(
     return touch
 
 
+# 依頼 digest: redact 後の最大字数（表示・stats 共通）
+PROMPT_DIGEST_MAX = 80
+# 成果 digest: redact 後の最大字数
+REPLY_DIGEST_MAX = 120
+
+
+def _redact_then_truncate(
+    text: str,
+    *,
+    redactor: Callable[[str], str] | None,
+    max_chars: int,
+) -> str:
+    """R2/D1: **redact → 切詰め**（切詰め後 redact は境界漏れを起こす）。"""
+    t = (text or "").strip()
+    if not t:
+        return ""
+    if redactor is not None:
+        t = redactor(t)
+    if not t:
+        return ""
+    return t[:max_chars]
+
+
 def finalize_session_io_digest(
     session: AISession,
     *,
@@ -1318,30 +1341,38 @@ def finalize_session_io_digest(
 ) -> None:
     """走査バッファから prompts_digest / files / commands / last_reply を確定する。
 
-    last_reply_digest は **redact → 先頭120字切詰め** の順（境界漏れ防止）。
+    prompts_digest / last_reply_digest は **redact → 切詰め** の順（境界漏れ防止）。
+    依頼は PROMPT_DIGEST_MAX（80）字、成果は REPLY_DIGEST_MAX（120）字。
     """
     raw = list(session._user_prompts_raw or [])
+
+    def _p(t: str) -> str:
+        return _redact_then_truncate(
+            t, redactor=redactor, max_chars=PROMPT_DIGEST_MAX
+        )
+
     if not raw:
         session.prompts_digest = []
     elif len(raw) == 1:
-        session.prompts_digest = [raw[0][:60]]
+        session.prompts_digest = [p for p in (_p(raw[0]),) if p]
     elif len(raw) == 2:
-        session.prompts_digest = [raw[0][:60], raw[-1][:60]]
+        session.prompts_digest = [p for p in (_p(raw[0]), _p(raw[-1])) if p]
     else:
         mid = raw[len(raw) // 2]
-        session.prompts_digest = [raw[0][:60], mid[:60], raw[-1][:60]]
+        session.prompts_digest = [
+            p for p in (_p(raw[0]), _p(mid), _p(raw[-1])) if p
+        ]
     session.files_touched = list(session._files_order or [])[:5]
     session.commands_run = [
         name for name, _n in session._cmd_counts.most_common(5)
     ]
     # D1: アシスタント最終本文
-    reply = (session._last_assistant_raw or "").strip()
-    if reply:
-        if redactor is not None:
-            reply = redactor(reply)
-        session.last_reply_digest = reply[:120] if reply else None
-    else:
-        session.last_reply_digest = None
+    reply = _redact_then_truncate(
+        session._last_assistant_raw or "",
+        redactor=redactor,
+        max_chars=REPLY_DIGEST_MAX,
+    )
+    session.last_reply_digest = reply or None
 
 
 def session_digests_for_stats(
@@ -1359,11 +1390,11 @@ def session_digests_for_stats(
         title = s.title or ""
         if redactor is not None and title:
             title = redactor(title)
+        # prompts / last_reply は finalize で redact→切詰め済み（再 redact しない）
         prompts = list(s.prompts_digest or [])
         files = list(s.files_touched or [])
         cmds = list(s.commands_run or [])
         if redactor is not None:
-            prompts = [redactor(p) for p in prompts if p]
             files = [redactor(f) for f in files if f]
             cmds = [redactor(c) for c in cmds if c]
         reply = s.last_reply_digest
@@ -1885,20 +1916,21 @@ def render_aiwork_markdown(
         detail_blocks: list[str] = []
         for s in detail_src:
             finalize_session_io_digest(s, redactor=redactor)
+            # prompts / reply は finalize で redact→80/120 字済み
             prompts = list(s.prompts_digest or [])
             files = list(s.files_touched or [])
             if redactor is not None:
-                prompts = [redactor(p) for p in prompts if p]
                 files = [redactor(f) for f in files if f]
-            # 依頼: first prompt digest 80字（title フォールバックは session_titles 時のみ・redact 必須）
+            # 依頼: first prompt digest（80字）。title フォールバックは session_titles 時のみ
             first_prompt = ""
             if prompts:
-                first_prompt = prompts[0][:80]
+                first_prompt = prompts[0]
             elif session_titles and s.title:
                 t = str(s.title or "")
-                if redactor is not None and t not in ("—", "（本文未保存）"):
-                    t = redactor(t)
-                first_prompt = t[:80]
+                if t not in ("—", "（本文未保存）"):
+                    first_prompt = _redact_then_truncate(
+                        t, redactor=redactor, max_chars=PROMPT_DIGEST_MAX
+                    )
             reply = s.last_reply_digest or ""
             is_browser = str(s.source or "").endswith("-web") or not s.tools_measurable
             has_io = bool(first_prompt or reply or files or is_browser)

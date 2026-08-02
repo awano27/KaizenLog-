@@ -346,17 +346,17 @@ def test_d1_last_reply_digest_redact_then_truncate():
         end=datetime(2026, 8, 2, 11, tzinfo=TZ),
         user_turns=3,
     )
-    secret = "SECRET_TOKEN " + ("x" * 200)
+    # T3: SECRET を 120 字境界を跨ぐ位置に置く（先頭配置だと truncate-first 変異が生存する）
+    secret = ("x" * 115) + "SECRET_TOKEN" + ("y" * 50)
     s._last_assistant_raw = secret
     finalize_session_io_digest(
         s, redactor=lambda t: t.replace("SECRET_TOKEN", "[R]")
     )
     assert s.last_reply_digest is not None
     assert "SECRET_TOKEN" not in s.last_reply_digest
-    assert s.last_reply_digest.startswith("[R]")
+    assert "SECRET_T" not in s.last_reply_digest  # 境界部分漏れも禁止
     assert len(s.last_reply_digest) <= 120
-    # 切詰め後 redact ではないこと: redact が先なので [R] が先頭
-    # （旧: 切詰め後 redact だと境界漏れしうる）
+    # redact が先: 置換後に切詰め。truncate-first なら SECRET_T が残る
 
 
 def test_d1_assistant_text_captured_from_update():
@@ -396,8 +396,9 @@ def test_d1_assistant_text_captured_from_update():
 
 
 def test_d2_session_io_pairs_max5_and_browser_note():
+    # T4: 7セッション入力で 依頼 行がちょうど 5
     sessions = []
-    for i in range(6):
+    for i in range(7):
         s = AISession(
             session_id=f"s{i}",
             project=f"p{i}",
@@ -428,7 +429,7 @@ def test_d2_session_io_pairs_max5_and_browser_note():
     md = render_aiwork_markdown(sessions, TZ, session_details=True)
     assert "主なセッションの中身" in md
     detail = md.split("#### 主なセッションの中身", 1)[1]
-    assert detail.count("- 依頼:") <= 5
+    assert detail.count("- 依頼:") == 5
     assert "- 成果:" in detail
     # browser 表示
     md_b = render_aiwork_markdown([b], TZ, session_details=True)
@@ -461,6 +462,8 @@ def test_d4_advice_evidence_friction_io_lines():
         "by_app": {},
         "by_site": {},
         "blocks": [],
+        "goal_text": "仕上げる",
+        "goal_achieved": 70,
         "ai": {
             "sessions": 2,
             "fragmented": 0,
@@ -483,6 +486,10 @@ def test_d4_advice_evidence_friction_io_lines():
     assert "[F20]" in ev.markdown
     assert "依頼「fix the fingerprint" in ev.markdown
     assert "成果「moved write_stats" in ev.markdown
+    # T4 / R3: F20・F21 が citable fact_ids に入る（F14b は正規表現外で失格）
+    assert "[F20]" in ev.fact_ids
+    assert "[F21]" in ev.fact_ids
+    assert "[F14b]" not in ev.markdown
 
 
 # ---------------------------------------------------------------------------
@@ -543,3 +550,391 @@ def test_c1_parse_goal_with_achieved_line():
     assert g.achieved == 90
     assert g.category == "開発"
     assert g.text == "テストを通す"
+
+
+# ---------------------------------------------------------------------------
+# 第50弾: レビュー残件 R1–R6 / T1–T5
+# ---------------------------------------------------------------------------
+
+
+def test_r1_patch_stats_preserves_redacted_goal_text(tmp_path: Path):
+    """R1: goal --achieved が redact 済み goal_text を生に戻さない。"""
+    from kaizenlog.cli import _patch_stats_goal_achieved
+    from kaizenlog.config import Config
+    from kaizenlog.goal import DayGoal
+
+    vault = tmp_path / "vault"
+    stats_dir = vault / "stats"
+    stats_dir.mkdir(parents=True)
+    day = DAY
+    (stats_dir / f"{day.isoformat()}.json").write_text(
+        json.dumps(
+            {
+                "day": day.isoformat(),
+                "goal_text": "[REDACTED] の提案書",
+                "goal_category": "執筆・ノート",
+                "total_minutes": 10.0,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    cfg = Config(vault_dir=vault, stats_dir="stats")
+    _patch_stats_goal_achieved(
+        cfg,
+        day,
+        DayGoal(text="ACME-SECRET の提案書", category="執筆・ノート", achieved=55),
+    )
+    data = json.loads((stats_dir / f"{day.isoformat()}.json").read_text(encoding="utf-8"))
+    assert data["goal_text"] == "[REDACTED] の提案書"
+    assert data["goal_achieved"] == 55
+    assert "ACME-SECRET" not in data["goal_text"]
+    # [F14] にも生値が流れない
+    stats = {
+        "version": 2,
+        "day": day.isoformat(),
+        "total_minutes": 100.0,
+        "context_switches": 1,
+        "by_category": {"執筆・ノート": 10.0},
+        "by_app": {},
+        "by_site": {},
+        "blocks": [],
+        "ai": {"sessions": 0, "fragmented": 0, "tool_errors": 0, "interruptions": 0},
+        "goal_text": data["goal_text"],
+        "goal_achieved": data["goal_achieved"],
+    }
+    ev = build_advice_evidence(stats)
+    assert "ACME-SECRET" not in ev.markdown
+    assert "[REDACTED]" in ev.markdown
+    assert "[F21]" in ev.fact_ids
+
+
+def test_r2_prompt_digest_redact_before_truncate_80():
+    """R2/T3: 依頼 digests は redact→80字。境界跨ぎトークンを漏らさない。"""
+    s = AISession(
+        session_id="s1",
+        project="p",
+        start=datetime(2026, 8, 2, 10, tzinfo=TZ),
+        end=datetime(2026, 8, 2, 11, tzinfo=TZ),
+        user_turns=2,
+    )
+    # SECRET_TOKEN が 80 字境界を跨ぐ
+    raw = ("a" * 75) + "SECRET_TOKEN" + ("b" * 20)
+    s._user_prompts_raw = [raw]
+    finalize_session_io_digest(
+        s, redactor=lambda t: t.replace("SECRET_TOKEN", "[R]")
+    )
+    assert s.prompts_digest
+    p0 = s.prompts_digest[0]
+    assert len(p0) <= 80
+    assert "SECRET_TOKEN" not in p0
+    assert "SECRET_T" not in p0
+    digests = session_digests_for_stats(
+        [s], DAY.isoformat(), redactor=lambda t: t.replace("SECRET_TOKEN", "[R]")
+    )
+    assert "SECRET_T" not in json.dumps(digests, ensure_ascii=False)
+    md = render_aiwork_markdown(
+        [s],
+        TZ,
+        session_details=True,
+        redactor=lambda t: t.replace("SECRET_TOKEN", "[R]"),
+    )
+    assert "SECRET_T" not in md
+    assert "SECRET_TOKEN" not in md
+
+
+def test_r4_digest_note_achieved_beats_stale_stats(tmp_path: Path):
+    """R4: goal A→achieved 80→goal B の後、digest は B に旧達成度を付けない。"""
+    from kaizenlog.cli import _write_digest_for_day
+    from kaizenlog.config import Config
+    from kaizenlog.vault import DailyNoteStore, DIGEST_MARKER
+
+    vault = tmp_path / "v"
+    notes = vault / "notes"
+    notes.mkdir(parents=True)
+    stats_dir = vault / "stats"
+    stats_dir.mkdir()
+    logs = vault / "logs"
+    logs.mkdir()
+    mem = vault / "mem"
+    mem.mkdir()
+    cfg = Config(
+        vault_dir=vault,
+        daily_notes_dir="notes",
+        stats_dir="stats",
+        logs_dir="logs",
+        memory_dir="mem",
+    )
+    day = DAY
+    # ノートは新目標 B・達成度なし。stats は旧 80%
+    write_goal(notes, day, "目標B", known_categories=KNOWN)
+    write_stats(
+        stats_dir,
+        day,
+        _summary(),
+        [],
+        activity_md="### activity\n",
+        goal_text="目標A",
+        goal_achieved=80,
+    )
+    store = DailyNoteStore(notes)
+    dig_stats = json.loads(
+        (stats_dir / f"{day.isoformat()}.json").read_text(encoding="utf-8")
+    )
+    dig_stats["source_status"] = "verified"
+    dig_stats["activity_sha256"] = dig_stats.get("activity_sha256") or "x"
+    ok = _write_digest_for_day(
+        cfg,
+        store,
+        day,
+        source_status="verified",
+        current_stats=dig_stats,
+        entries=[],
+        redactor=None,
+        log_skips=False,
+    )
+    assert ok
+    body = extract_section(store.read(day) or "", DIGEST_MARKER) or ""
+    assert "目標B" in body or "目標: 目標B" in body
+    assert "80%" not in body
+    assert "未申告" in body
+
+
+def test_r5_codex_agent_message_fills_last_reply(tmp_path: Path):
+    """R5: event_msg/agent_message でも last_reply_digest が埋まる。"""
+    from kaizenlog.aiwork_codex import CodexAdapter
+
+    day = "2026-08-02"
+    sess_dir = tmp_path / "sessions" / "2026" / "08" / "02"
+    sess_dir.mkdir(parents=True)
+    lines = [
+        {
+            "timestamp": "2026-08-02T10:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": "sess-r5", "cwd": str(tmp_path / "proj")},
+        },
+        {
+            "timestamp": "2026-08-02T10:00:01Z",
+            "type": "event_msg",
+            "payload": {"type": "user_message", "message": "please fix the bug now"},
+        },
+        {
+            "timestamp": "2026-08-02T10:00:05Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "agent_message",
+                "message": "I fixed the bug by rewriting the fingerprint sync",
+            },
+        },
+    ]
+    path = sess_dir / "rollout-r5.jsonl"
+    path.write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in lines) + "\n",
+        encoding="utf-8",
+    )
+    start = datetime(2026, 8, 2, 0, 0, tzinfo=ZoneInfo("UTC"))
+    end = datetime(2026, 8, 3, 0, 0, tzinfo=ZoneInfo("UTC"))
+    sessions = CodexAdapter(tmp_path / "sessions").scan_sessions(start, end)
+    assert sessions, "session should be found"
+    s = sessions[0]
+    assert s.last_reply_digest
+    assert "fingerprint" in (s.last_reply_digest or "")
+    assert "I fixed" in (s._last_assistant_raw or "")
+
+
+def test_r6_shared_goal_category_minutes():
+    from kaizenlog.stats import goal_category_minutes
+    from kaizenlog.advice_evidence import _goal_category_minutes
+
+    stats = {"by_category": {"開発": 42.0, "AI作業": 10.0}}
+    assert goal_category_minutes(stats, "開発") == 42.0
+    assert _goal_category_minutes(stats, "開発") == 42.0
+    assert goal_category_minutes(stats, None) is None
+    assert goal_category_minutes(stats, "存在しない") is None
+
+
+def test_t5_empty_disclaimer_idempotent():
+    """T5: 素の「※」だけの行を含む本文でも consolidate が冪等。"""
+    body = "## Activity\n※ first real note\n※\n※ second real note\n"
+    content = upsert_section("", ACTIVITY_MARKER, body, position="bottom")
+    once = consolidate_disclaimers(content, max_inline=1)
+    twice = consolidate_disclaimers(once, max_inline=1)
+    assert once == twice
+    # 脚注は空定義を持たない
+    fn = extract_section(once, FOOTNOTES_MARKER) or ""
+    for line in fn.splitlines():
+        if line.startswith("[^") and "]:" in line:
+            assert line.split("]:", 1)[1].strip(), "empty footnote def"
+
+
+def test_t1_cmd_generate_resync_and_goal_achieved(tmp_path: Path, monkeypatch):
+    """T1: cmd_generate 統合 — resync と goal_achieved 保存が生きている。"""
+    from unittest.mock import MagicMock, patch
+
+    from kaizenlog.cli import cmd_generate
+    from kaizenlog.config import Config, AIWorkConfig
+    from kaizenlog.report import DailySummary
+    from kaizenlog.vault import DailyNoteStore, ACTIVITY_MARKER as AM
+
+    vault = tmp_path / "vault"
+    for d in ("notes", "stats", "mem", "logs", "exp"):
+        (vault / d).mkdir(parents=True)
+    cfg = Config(
+        vault_dir=vault,
+        daily_notes_dir="notes",
+        stats_dir="stats",
+        memory_dir="mem",
+        logs_dir="logs",
+        experiments_dir="exp",
+        aiwork=AIWorkConfig(enabled=False),
+        auto_backfill_days=0,
+    )
+    day = DAY
+    write_goal(
+        vault / "notes",
+        day,
+        "今日の目標テキスト @開発",
+        known_categories=KNOWN,
+        achieved=66,
+    )
+    # consolidate で変わる activity（※ が2本）
+    activity_md = (
+        "## Activity Log\n"
+        "※ first disclaimer about measurement limits\n"
+        "※ second disclaimer about causality\n"
+        "| 10:00 | 開発 | Code | main.py | 30m |\n"
+    )
+    summary = DailySummary(
+        day=day,
+        total_minutes=30.0,
+        by_category={"開発": 30.0},
+        by_app={},
+        blocks=[],
+        ai_tool_minutes={},
+        ai_sessions=0,
+        context_switches=0,
+        by_site={},
+    )
+    with (
+        patch("kaizenlog.cli.collect_day", return_value=([], True)),
+        patch("kaizenlog.cli.collect_input", return_value=None),
+        patch("kaizenlog.cli.summarize", return_value=summary),
+        patch("kaizenlog.cli.render_markdown", return_value=activity_md),
+        patch("kaizenlog.cli.available_adapters", return_value=[]),
+        patch("kaizenlog.cli.ActivityWatchClient"),
+        patch("kaizenlog.cli.Classifier") as Cls,
+        patch("kaizenlog.decay.run_decay_detection", return_value=[]),
+    ):
+        Cls.return_value.classify_all.return_value = []
+        cmd_generate(cfg, day)
+
+    store = DailyNoteStore(vault / "notes")
+    note = store.read(day) or ""
+    act = extract_section(note, AM) or ""
+    stats_path = vault / "stats" / f"{day.isoformat()}.json"
+    data = json.loads(stats_path.read_text(encoding="utf-8"))
+    # (a) resync が生きている: finalize 後本文と一致
+    assert data["activity_sha256"] == activity_fingerprint(act)
+    # (b) goal_achieved が stats に保存される
+    assert data.get("goal_achieved") == 66
+
+
+def test_t2_main_run_auto_nippou_gate(tmp_path: Path, monkeypatch):
+    """T2: main(run) で auto_write が効く / false と advise 単独では書かない。"""
+    from unittest.mock import patch
+
+    from kaizenlog.cli import main
+    from kaizenlog.vault import NIPPOU_MARKER, DailyNoteStore
+
+    def _setup(auto_write: bool) -> tuple[Path, Path, date]:
+        vault = tmp_path / f"v_{auto_write}"
+        for d in ("notes", ".kaizenlog/stats", "mem", "logs", "exp"):
+            (vault / d).mkdir(parents=True, exist_ok=True)
+        day = DAY
+        write_stats(
+            vault / ".kaizenlog" / "stats",
+            day,
+            _summary(),
+            [],
+            goal_text="x",
+        )
+        store = DailyNoteStore(vault / "notes")
+        store.path_for(day).write_text(
+            f"---\ndate: {day.isoformat()}\n---\n\n# d\n",
+            encoding="utf-8",
+        )
+        cfg_path = vault / "config.toml"
+        cfg_path.write_text(
+            "\n".join(
+                [
+                    "[general]",
+                    f'vault_dir = "{vault.as_posix()}"',
+                    'daily_notes_dir = "notes"',
+                    'stats_dir = ".kaizenlog/stats"',
+                    'logs_dir = "logs"',
+                    'memory_dir = "mem"',
+                    'experiments_dir = "exp"',
+                    "auto_backfill_days = 0",
+                    "",
+                    "[aiwork]",
+                    "enabled = false",
+                    "",
+                    "[llm]",
+                    'backend = "none"',
+                    "",
+                    "[nippou]",
+                    f"auto_write = {'true' if auto_write else 'false'}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return vault, cfg_path, day
+
+    vault, cfg_path, day = _setup(True)
+    with (
+        patch("kaizenlog.cli.cmd_generate", return_value=None),
+        patch("kaizenlog.cli.cmd_advise", return_value=None),
+        patch("kaizenlog.cli.missing_days", return_value=[]),
+        patch("kaizenlog.cli.catch_up_yesterday") as cu,
+    ):
+        from kaizenlog.cli import CatchUpResult
+
+        cu.return_value = CatchUpResult(generate="not-needed", advise="skipped")
+        rc = main(
+            [
+                "--config",
+                str(cfg_path),
+                "run",
+                "--date",
+                day.isoformat(),
+            ]
+        )
+    assert rc == 0
+    store = DailyNoteStore(vault / "notes")
+    assert extract_section(store.read(day) or "", NIPPOU_MARKER) is not None
+
+    # auto_write=false → 書かない
+    vault2, cfg2, day2 = _setup(False)
+    with (
+        patch("kaizenlog.cli.cmd_generate", return_value=None),
+        patch("kaizenlog.cli.cmd_advise", return_value=None),
+        patch("kaizenlog.cli.missing_days", return_value=[]),
+        patch("kaizenlog.cli.catch_up_yesterday") as cu2,
+    ):
+        from kaizenlog.cli import CatchUpResult
+
+        cu2.return_value = CatchUpResult(generate="not-needed", advise="skipped")
+        rc2 = main(["--config", str(cfg2), "run", "--date", day2.isoformat()])
+    assert rc2 == 0
+    store2 = DailyNoteStore(vault2 / "notes")
+    assert extract_section(store2.read(day2) or "", NIPPOU_MARKER) is None
+
+    # advise 単独では書かない
+    vault3, cfg3, day3 = _setup(True)
+    with patch("kaizenlog.cli.cmd_advise", return_value=None):
+        rc3 = main(["--config", str(cfg3), "advise", "--date", day3.isoformat()])
+    assert rc3 == 0
+    store3 = DailyNoteStore(vault3 / "notes")
+    assert extract_section(store3.read(day3) or "", NIPPOU_MARKER) is None
+

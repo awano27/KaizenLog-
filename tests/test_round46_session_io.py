@@ -190,7 +190,8 @@ def test_f3_prompts_digest_max_three():
     assert len(s.prompts_digest) == 3
     assert s.prompts_digest[0].startswith("first")
     assert s.prompts_digest[-1].startswith("fifth")
-    assert all(len(p) <= 60 for p in s.prompts_digest)
+    # 第50弾 R2: redact→切詰めの上限を 80 字に統一（旧 60）
+    assert all(len(p) <= 80 for p in s.prompts_digest)
 
 
 def test_f3_files_basename_only():
