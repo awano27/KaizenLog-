@@ -3,7 +3,7 @@
   "graph_id": "kaizenlog-practical-journal-advice-2026-08-02",
   "goal": "日誌を30秒で判断でき、アドバイスを1〜3件の証拠に紐づく5〜15分のPASS/FAILマイクロアクションにする",
   "created_at": "2026-08-02T23:01:07+09:00",
-  "updated_at": "2026-08-03T00:08:50+09:00",
+  "updated_at": "2026-08-03T00:13:06+09:00",
   "loop": {
     "pattern": "generate-critique-revise",
     "critique_revise_limit": 2,
@@ -1012,9 +1012,16 @@
     {
       "id": "F-ATOMICITY-001",
       "type": "Failure",
-      "status": "authorized-remediation-in-progress",
+      "status": "mitigated-by-cf8c5d0",
       "claim": "共有worktreeの並行commitがproduction validatorだけを先にorigin/mainへ取り込み、必要なfixture、prompt、digest、graphを未コミットに残したため、remote revision単体はテスト可能なatomic changeではない。現在worktreeの統合状態はGREENである。",
       "mitigation": "2026-08-03の明示的push指示に基づき、非所有dirty artifactを除外してGraph Engineering所有差分だけをcommit/pushし、remote SHAとclean revisionを再検証する。",
+      "resolution": {
+        "commit": "cf8c5d0ad664f6da726ad7d5d73819ab3a222b2d",
+        "remote": "origin/main",
+        "remote_sha_matches": true,
+        "full_tests": "1061 passed in 101.96s",
+        "clean_advice_contract": "74 passed in 1.20s"
+      },
       "provenance": {
         "sources": [
           "E-CLEAN-HEAD-RED-001",
@@ -1306,7 +1313,7 @@
     {
       "id": "D-RELEASE-AUTHORIZATION-001",
       "type": "DesignDecision",
-      "status": "accepted",
+      "status": "evaluated",
       "claim": "ユーザーの『pushしてください』を、直前に報告したorigin/main非atomic状態を解消するため、現在mainへGraph Engineering所有差分だけをcommit/pushする明示承認として扱う。",
       "scope": {
         "include": [
@@ -1339,6 +1346,68 @@
         ],
         "step": "phase5-release-authorization",
         "timestamp": "2026-08-03T00:08:50+09:00"
+      }
+    },
+    {
+      "id": "C-RELEASE-001",
+      "type": "CodeChange",
+      "status": "pushed",
+      "claim": "Graph Engineering所有13パスだけをcommit cf8c5d0ad664f6da726ad7d5d73819ab3a222b2dとしてmainへpushし、非所有の.grok/とscripts/self_improve_graph.pyは未追跡のまま除外した。",
+      "files": [
+        ".kaizenlog/improvement_graph.json",
+        "PLAN.md",
+        "src/kaizenlog/digest.py",
+        "src/kaizenlog/prompts/daily_advisor.md",
+        "src/kaizenlog/prompts/privacy_safe.md",
+        "tests/test_advice_evidence.py",
+        "tests/test_advice_format.py",
+        "tests/test_graph_engineering_journal_advice.py",
+        "tests/test_round16_journal_value.py",
+        "tests/test_round35_journal_information_design.py",
+        "tests/test_round37_proposal_quality.py",
+        "tests/test_round39_metric_actionability.py",
+        "tests/test_round44_rehumanize.py"
+      ],
+      "provenance": {
+        "sources": [
+          "git commit cf8c5d0",
+          "git push origin main",
+          "git diff --cached --name-only exact-scope comparison"
+        ],
+        "step": "phase5-release-push",
+        "timestamp": "2026-08-03T00:13:06+09:00"
+      }
+    },
+    {
+      "id": "T-REMOTE-PUSH-001",
+      "type": "TestResult",
+      "status": "passed-ci-in-progress",
+      "claim": "commit cf8c5d0はローカル全1061件とclean worktree advice契約74件を通過し、HEAD、origin/main、GitHub commit APIが同一SHAを返した。GitHub Actions Tests run 30753830384は確認時in_progressである。",
+      "data": {
+        "commit": "cf8c5d0ad664f6da726ad7d5d73819ab3a222b2d",
+        "full_tests": "1061 passed in 101.96s",
+        "clean_advice_tests": "74 passed in 1.20s",
+        "compileall": "passed",
+        "head_equals_origin_main": true,
+        "github_commit_visible": true,
+        "github_actions": {
+          "run_id": 30753830384,
+          "name": "Tests",
+          "status": "in_progress",
+          "url": "https://github.com/awano27/KaizenLog-/actions/runs/30753830384"
+        }
+      },
+      "provenance": {
+        "sources": [
+          "pytest release output",
+          "clean detached worktree pytest output",
+          "git rev-parse origin/main",
+          "git ls-remote origin refs/heads/main",
+          "gh api commit cf8c5d0",
+          "gh run list --commit cf8c5d0"
+        ],
+        "step": "phase5-release-verification",
+        "timestamp": "2026-08-03T00:13:06+09:00"
       }
     }
   ],
@@ -2377,6 +2446,48 @@
         ],
         "step": "phase5-release-authorization",
         "timestamp": "2026-08-03T00:08:50+09:00"
+      }
+    },
+    {
+      "id": "EDGE-075",
+      "source": "C-RELEASE-001",
+      "type": "implements",
+      "target": "D-RELEASE-AUTHORIZATION-001",
+      "provenance": {
+        "sources": [
+          "C-RELEASE-001",
+          "D-RELEASE-AUTHORIZATION-001"
+        ],
+        "step": "phase5-release-push",
+        "timestamp": "2026-08-03T00:13:06+09:00"
+      }
+    },
+    {
+      "id": "EDGE-076",
+      "source": "C-RELEASE-001",
+      "type": "improves",
+      "target": "F-ATOMICITY-001",
+      "provenance": {
+        "sources": [
+          "C-RELEASE-001",
+          "F-ATOMICITY-001"
+        ],
+        "step": "phase5-release-push",
+        "timestamp": "2026-08-03T00:13:06+09:00"
+      }
+    },
+    {
+      "id": "EDGE-077",
+      "source": "C-RELEASE-001",
+      "type": "evaluated-as",
+      "target": "T-REMOTE-PUSH-001",
+      "provenance": {
+        "sources": [
+          "C-RELEASE-001",
+          "T-REMOTE-PUSH-001"
+        ],
+        "step": "phase5-release-verification",
+        "timestamp": "2026-08-03T00:13:06+09:00"
       }
     }
   ]

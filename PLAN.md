@@ -978,7 +978,7 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 - [x] 独立reviewのprivacy schema、未来日focus、semantic graph test、負値fail-closedの4 Findingを限定TDDで修正し、再reviewは新規Critical/Importantなし・working-tree `ship`。
 - [x] 安定した `HEAD=8f9ff5a` と今回差分で全pytest `1061 passed in 86.85s`。開始・終了のHEAD/tracked/status/graph hashも一致した。
 - [x] `python -m compileall -q src`、Graph Engineering 21件、worktree全体の `git diff --check` は成功した。
-- [ ] `origin/main=8f9ff5a` は `estimated_minutes` validatorを含む一方、prompt/fixture migrationが未コミットでclean checkoutがRED。再reviewのremote-release verdictは `fix-first`。明示許可のないcommit/pushは実行しない。
+- [x] `origin/main=8f9ff5a` の非atomic状態は、prompt/fixture/graphを含む `cf8c5d0` の明示承認pushで解消した。clean checkoutのadvice契約は74件PASS。
 - [ ] 人による30秒読了計測と実ActivityWatch/Vault/LLMは、明示制約どおり未実施。4行fixtureを構造的proxyとして扱う。
 
 ### 2026-08-03 release authorization
@@ -987,3 +987,7 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 - `git fetch --prune origin` 後、`HEAD` と `origin/main` はともに `8f9ff5a`。今回所有するGraph Engineering差分だけを明示stageする。
 - `.grok/` と `scripts/self_improve_graph.py` は非所有artifactとしてstage・commit対象外のまま保護する。
 - commit後に全pytest、clean revision、remote SHAを確認し、release evidenceを永続グラフへ追記する。
+- [x] 所有13パスだけを `cf8c5d0`（`feat: make journal insights and advice actions practical`）としてcommitし、`origin/main` へpushした。
+- [x] commit済みrevisionで全pytest `1061 passed in 101.96s`、clean detached worktreeでadvice契約 `74 passed in 1.20s`、`compileall` 成功。
+- [x] `HEAD`・`origin/main`・GitHub commit APIは `cf8c5d0ad664f6da726ad7d5d73819ab3a222b2d` で一致。
+- [ ] GitHub Actions `Tests` run `30753830384` は確認時 `in_progress`。完了結果はpush後監視で確定する。
