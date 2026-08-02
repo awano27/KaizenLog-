@@ -169,7 +169,8 @@ def test_r2_status_line_plain_terms_and_numbers():
 # ---------- §R3 ----------
 
 
-def test_r3_nippou_truncation_ellipsis_boundary():
+def test_r3_nippou_tomorrow_plain_no_id_tail_truncate():
+    """日報の明日予定は KZN-ID なし平文。60字超は末尾優先。"""
     tz = ZoneInfo("Asia/Tokyo")
     stats = {
         "day": "2026-08-02",
@@ -178,20 +179,20 @@ def test_r3_nippou_truncation_ellipsis_boundary():
         "blocks": [],
         "ai": {},
     }
-    body40 = "あ" * 40
-    body41 = "あ" * 41
-    md40 = generate_nippou_deterministic(
-        stats, tz, open_kzn_actions=[("KZN-20260801-001", body40)]
+    body60 = "あ" * 60
+    body61 = "あ" * 61
+    md60 = generate_nippou_deterministic(
+        stats, tz, open_kzn_actions=[("KZN-20260801-001", body60)]
     )
-    md41 = generate_nippou_deterministic(
-        stats, tz, open_kzn_actions=[("KZN-20260801-001", body41)]
+    md61 = generate_nippou_deterministic(
+        stats, tz, open_kzn_actions=[("KZN-20260801-001", body61)]
     )
-    # 40字以内は無変換
-    assert f"KZN-20260801-001: {body40}" in md40
-    assert "…" not in md40.split("KZN-20260801-001:")[1].splitlines()[0]
-    # 41字は 39 + …
-    line = next(ln for ln in md41.splitlines() if "KZN-20260801-001" in ln)
-    snippet = line.split(": ", 1)[1]
-    assert snippet.endswith("…")
-    assert len(snippet) == 40  # 39 + 1 ellipsis char
-    assert snippet[:39] == "あ" * 39
+    tomorrow60 = md60.split("【明日の予定】", 1)[1]
+    assert "KZN-" not in tomorrow60
+    assert body60 in tomorrow60
+    tomorrow61 = md61.split("【明日の予定】", 1)[1]
+    line = next(ln for ln in tomorrow61.splitlines() if ln.startswith("- "))
+    # 末尾優先: 「…」+ 末尾59字
+    assert line.startswith("- …")
+    assert line.endswith("あ")
+    assert len(line[2:]) == 60  # ellipsis + 59

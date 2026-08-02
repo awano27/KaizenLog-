@@ -416,9 +416,9 @@ def test_c2_nippou_project_facts_and_commits():
     # ③ commit subjects
     assert "fix readability" in md
     assert "主な内容:" in md
-    # ④ open KZN + intent
-    assert "KZN-20260801-001" in md
+    # ④ intent の手書きを優先（KZN-ID は日報に出さずアクション節側）
     assert "明日やる手書き" in md
+    assert "KZN-20260801-001" not in md.split("【明日の予定】", 1)[1]
     # goal first-ish
     assert "目標: 日誌を読みやすくする" in md
     assert "テスト実行を伴うセッション 1回" in md
