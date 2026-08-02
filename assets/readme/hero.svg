@@ -1,42 +1,61 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
-  <title id="title">KaizenLog — PCの作業を日誌に残し、AIのやり直しを測って次に活かす</title>
-  <desc id="desc">PC作業を日誌にし、やり直しのムダを測り、学びを次のAIへ渡し、効いたかを確かめる。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img" aria-labelledby="title desc">
+  <title id="title">KaizenLog — 今日の PC 作業が、毎晩そのまま日誌になる</title>
+  <desc id="desc">ActivityWatch が記録した PC 作業を KaizenLog が集計し、Obsidian のデイリーノートへ書き込む。LLM は任意で、提案が欲しい日だけ使う。</desc>
   <defs>
     <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#75CFA3" stroke-opacity=".055"/></pattern>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#75CFA3"/></marker>
+    <marker id="arrowAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#F0B667"/></marker>
   </defs>
-  <rect width="1200" height="620" rx="30" fill="#0B1211"/>
-  <rect width="1200" height="620" rx="30" fill="url(#grid)"/>
+  <rect width="1200" height="640" rx="30" fill="#0B1211"/>
+  <rect width="1200" height="640" rx="30" fill="url(#grid)"/>
   <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Yu Gothic UI', sans-serif">
-    <text x="60" y="68" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="20" font-weight="800" letter-spacing="3">KAIZENLOG / DAILY WORK LEDGER</text>
-    <text x="60" y="130" fill="#F4F0E8" font-size="42" font-weight="800">PCの作業を日誌に残し、</text>
-    <text x="60" y="185" fill="#F4F0E8" font-size="42" font-weight="800">AIのやり直しを測って次に活かす。</text>
-    <text x="62" y="230" fill="#B7C6BE" font-size="26" font-weight="600">記録して測る。学びを次へ渡し、効いたか確かめる。</text>
-    <path d="M60 258H1140" stroke="#315244" stroke-width="2"/>
-    <path d="M390 430H426" fill="none" stroke="#75CFA3" stroke-width="5" marker-end="url(#arrow)"/>
-    <path d="M774 430H810" fill="none" stroke="#75CFA3" stroke-width="5" marker-end="url(#arrow)"/>
+
+    <text x="60" y="66" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="19" font-weight="800" letter-spacing="3">KAIZENLOG · WINDOWS CLI · JOURNAL FIRST</text>
+
+    <text x="60" y="128" fill="#F4F0E8" font-size="44" font-weight="800">今日の PC 作業が、</text>
+    <text x="60" y="184" fill="#F4F0E8" font-size="44" font-weight="800">毎晩そのまま日誌になる。</text>
+    <text x="62" y="230" fill="#B7C6BE" font-size="24" font-weight="600">集計はコードが行い、LLM は「明日試す1件」が欲しい日だけ。</text>
+
+    <path d="M60 262H1140" stroke="#315244" stroke-width="2"/>
+
+    <path d="M390 400H430" fill="none" stroke="#75CFA3" stroke-width="5" marker-end="url(#arrow)"/>
+    <path d="M774 400H814" fill="none" stroke="#75CFA3" stroke-width="5" marker-end="url(#arrow)"/>
+
     <g transform="translate(60 300)">
-      <rect width="330" height="218" rx="20" fill="#111D1A" stroke="#75CFA3" stroke-width="3"/>
-      <text x="28" y="45" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800">01 MEASURE</text>
-      <text x="28" y="96" fill="#F4F0E8" font-size="35" font-weight="800">Loop Tax</text>
-      <text x="28" y="132" fill="#D7E2DC" font-size="25" font-weight="700">Prompt ROI</text>
-      <text x="28" y="180" fill="#81958C" font-size="20" font-weight="600">やり直しのコストを記録</text>
+      <rect width="330" height="200" rx="20" fill="#111D1A" stroke="#75CFA3" stroke-width="3"/>
+      <text x="28" y="44" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="21" font-weight="800">01 RECORD</text>
+      <text x="28" y="94" fill="#F4F0E8" font-size="32" font-weight="800">ActivityWatch</text>
+      <text x="28" y="132" fill="#D7E2DC" font-size="21" font-weight="700">前景アプリを自動記録</text>
+      <text x="28" y="170" fill="#81958C" font-size="19" font-weight="600">常駐するのは AW だけ</text>
     </g>
+
     <g transform="translate(444 300)">
-      <rect width="330" height="218" rx="20" fill="#17150F" stroke="#F0B667" stroke-width="3"/>
-      <text x="28" y="45" fill="#F0B667" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800">02 TEACH</text>
-      <text x="28" y="96" fill="#F4F0E8" font-size="35" font-weight="800">handoff</text>
-      <text x="28" y="132" fill="#F0B667" font-size="25" font-weight="700">coach</text>
-      <text x="28" y="180" fill="#B7A782" font-size="20" font-weight="600">次のAIへ教訓を渡す</text>
+      <rect width="330" height="200" rx="20" fill="#111D1A" stroke="#D7E2DC" stroke-width="3"/>
+      <text x="28" y="44" fill="#F4F0E8" font-family="ui-monospace, Consolas, monospace" font-size="21" font-weight="800">02 SUMMARIZE</text>
+      <text x="28" y="94" fill="#F4F0E8" font-size="32" font-weight="800">kaizenlog</text>
+      <text x="28" y="132" fill="#D7E2DC" font-size="21" font-weight="700">カテゴリ・時間・流れ</text>
+      <text x="28" y="170" fill="#81958C" font-size="19" font-weight="600">数値は決定論で計算</text>
     </g>
+
     <g transform="translate(828 300)">
-      <rect width="312" height="218" rx="20" fill="#111D1A" stroke="#D7E2DC" stroke-width="3"/>
-      <text x="28" y="45" fill="#F4F0E8" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800">03 VERIFY</text>
-      <text x="28" y="96" fill="#75CFA3" font-size="30" font-weight="800">predict</text>
-      <text x="28" y="132" fill="#F0B667" font-size="25" font-weight="700">felt / measured</text>
-      <text x="28" y="171" fill="#B7C6BE" font-size="18" font-weight="600">効果を予測・体感・</text>
-      <text x="28" y="197" fill="#B7C6BE" font-size="18" font-weight="600">数字で確認</text>
+      <rect width="312" height="200" rx="20" fill="#111D1A" stroke="#75CFA3" stroke-width="3"/>
+      <text x="28" y="44" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="21" font-weight="800">03 JOURNAL</text>
+      <text x="28" y="94" fill="#F4F0E8" font-size="32" font-weight="800">Obsidian</text>
+      <text x="28" y="132" fill="#D7E2DC" font-size="21" font-weight="700">デイリーノートへ追記</text>
+      <text x="28" y="170" fill="#81958C" font-size="19" font-weight="600">手書き部分は残る</text>
     </g>
-    <text x="60" y="575" fill="#B7C6BE" font-family="ui-monospace, Consolas, monospace" font-size="20" font-weight="700">Windows · ActivityWatch · Obsidian · journal first</text>
+
+    <path d="M984 500V536H1030" fill="none" stroke="#F0B667" stroke-width="4" stroke-dasharray="8 7" marker-end="url(#arrowAmber)"/>
+    <g transform="translate(1040 514)">
+      <rect width="100" height="44" rx="12" fill="#17150F" stroke="#F0B667" stroke-width="2.5"/>
+      <text x="18" y="29" fill="#F0B667" font-family="ui-monospace, Consolas, monospace" font-size="18" font-weight="800">LLM 任意</text>
+    </g>
+
+    <g transform="translate(60 512)">
+      <rect width="840" height="52" rx="14" fill="#0F1917" stroke="#315244" stroke-width="2"/>
+      <text x="24" y="33" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="17" font-weight="700">$ kaizenlog setup  →  kaizenlog doctor  →  kaizenlog generate --date …</text>
+    </g>
+
+    <text x="60" y="600" fill="#81958C" font-family="ui-monospace, Consolas, monospace" font-size="18" font-weight="700">Windows 10/11 · Python 3.11+ · MIT · no cloud required</text>
   </g>
 </svg>
