@@ -1872,7 +1872,7 @@
     {
       "id": "D-ACTION-MONITOR-SPLIT-001",
       "type": "DesignDecision",
-      "status": "recommended-awaiting-user-approval",
+      "status": "approved",
       "claim": "actions区間を『今日やる1件』『効果モニタリング』『状況/全件導線』の順にし、confirmed-passは今日のcheckboxへ戻さない。主カードはいつ・何を・所要・完了操作・効果目標・測定状態を分離し、監視カードは最新観測・達成率・集計範囲・行動実施/因果のUnknownを非checkboxで示す。",
       "output_contract": {
         "primary_checkbox_default": 1,
@@ -1897,6 +1897,14 @@
         ],
         "step": "action-clarity-phase1-recommended-design",
         "timestamp": "2026-08-03T00:48:32+09:00"
+      },
+      "approval_provenance": {
+        "sources": [
+          "E-ACTION-MONITOR-DESIGN-APPROVAL-001",
+          "user response: はい"
+        ],
+        "step": "action-clarity-written-spec-approval",
+        "timestamp": "2026-08-03T07:16:00+09:00"
       }
     },
     {
@@ -1955,6 +1963,21 @@
         ],
         "step": "action-clarity-design-spec",
         "timestamp": "2026-08-03T07:09:32+09:00"
+      }
+    },
+    {
+      "id": "C-ACTION-MONITOR-IMPLEMENTATION-PLAN-001",
+      "type": "CodeChange",
+      "status": "documented",
+      "claim": "承認済み仕様を docs/superpowers/plans/2026-08-03-action-monitoring-clarity.md の4つのTDD Taskへ分解し、候補分離、structured trajectory、3主ブロック、CLI整合、実日誌marker保護、Graph評価、push検証を具体化した。",
+      "provenance": {
+        "sources": [
+          "docs/superpowers/plans/2026-08-03-action-monitoring-clarity.md",
+          "C-ACTION-MONITOR-DESIGN-SPEC-001",
+          "E-ACTION-MONITOR-DESIGN-APPROVAL-001"
+        ],
+        "step": "action-clarity-implementation-plan",
+        "timestamp": "2026-08-03T07:29:59+09:00"
       }
     }
   ],
@@ -3567,6 +3590,34 @@
         ],
         "step": "action-clarity-design-spec",
         "timestamp": "2026-08-03T07:09:32+09:00"
+      }
+    },
+    {
+      "id": "EDGE-116",
+      "source": "C-ACTION-MONITOR-IMPLEMENTATION-PLAN-001",
+      "type": "derived-from",
+      "target": "C-ACTION-MONITOR-DESIGN-SPEC-001",
+      "provenance": {
+        "sources": [
+          "C-ACTION-MONITOR-IMPLEMENTATION-PLAN-001",
+          "C-ACTION-MONITOR-DESIGN-SPEC-001"
+        ],
+        "step": "action-clarity-implementation-plan",
+        "timestamp": "2026-08-03T07:29:59+09:00"
+      }
+    },
+    {
+      "id": "EDGE-117",
+      "source": "C-ACTION-MONITOR-IMPLEMENTATION-PLAN-001",
+      "type": "implements",
+      "target": "D-ACTION-MONITOR-SPLIT-001",
+      "provenance": {
+        "sources": [
+          "C-ACTION-MONITOR-IMPLEMENTATION-PLAN-001",
+          "D-ACTION-MONITOR-SPLIT-001"
+        ],
+        "step": "action-clarity-implementation-plan",
+        "timestamp": "2026-08-03T07:29:59+09:00"
       }
     }
   ]

@@ -1039,3 +1039,9 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 - ユーザーは2026-08-03に、実行対象・効果観測・日次目標を3ブロックへ分ける推奨案Bを承認した。
 - 正式仕様は `docs/superpowers/specs/2026-08-03-action-monitoring-clarity-design.md`。書面レビュー後にimplementation planとTDDへ進む。
 - confirmed PASSはcheckboxを持たない観測対象とし、最新FAIL時だけ警告する。日次目標は既存GOAL区間の読み取り専用サマリとする。
+
+### Approved spec and implementation plan
+
+- ユーザーは書面仕様を2026-08-03に承認した。
+- TDD実装計画は `docs/superpowers/plans/2026-08-03-action-monitoring-clarity.md`。4 Taskで候補状態、Markdown、CLI、実日誌/Graph/pushを順に完結させる。
+- サブスク制約と共有dirty treeのため、実行方式は最小並列のinline executionを推奨し、実装方式の確認後にproduction codeへ着手する。
