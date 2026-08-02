@@ -3,7 +3,7 @@
   "graph_id": "kaizenlog-practical-journal-advice-2026-08-02",
   "goal": "日誌を30秒で判断でき、アドバイスを1〜3件の証拠に紐づく5〜15分のPASS/FAILマイクロアクションにする",
   "created_at": "2026-08-02T23:01:07+09:00",
-  "updated_at": "2026-08-03T08:29:55+09:00",
+  "updated_at": "2026-08-03T08:35:46+09:00",
   "loop": {
     "pattern": "generate-critique-revise",
     "critique_revise_limit": 2,
@@ -2121,6 +2121,100 @@
         "step": "action-clarity-phase4-full-verification",
         "timestamp": "2026-08-03T08:29:55+09:00"
       }
+    },
+    {
+      "id": "F-ACTION-MONITOR-EXTERNAL-NOTE-DRIFT-001",
+      "type": "Failure",
+      "status": "observed-rebaselined",
+      "claim": "f4676d2のpost-commit検証中、外部自動更新が実日誌を08:30:03 JSTに書き換え、全文SHA-256を38296d...から03806b...へ、marker外SHA-256を601394...から5da2f2...へ変更し、legacy ACTIONS layoutを再導入した。以前の実日誌証拠はその時点で最新状態を表さなくなった。",
+      "data": {
+        "observed_at_jst": "2026-08-03T08:30:03+09:00",
+        "previous_full_sha256": "38296d3291b2a9173f37789a46e2a133fe08675ff527cc994ba8f41c2d1e0eca",
+        "previous_marker_external_sha256": "601394f3b98424ba339ca502d497fb2415bbd92f4c62a78e8b6a9443d4efa616",
+        "observed_full_sha256": "03806bb2739ed44274072c1e345f6613057bc18df02ae2d86188b2d3eeeec5ba",
+        "observed_marker_external_sha256": "5da2f29758164463ebaff253e99ef63737051aea95d409deb6cd62b0a807570b",
+        "observed_line_endings": "0 CRLF / 205 LF",
+        "observed_length_bytes": 11565
+      },
+      "provenance": {
+        "sources": [
+          "post-commit SHA-256 validation",
+          "C:/develop/obsidian/2026/01 Daily Notes/2026-08-03.md LastWriteTime 2026-08-03T08:30:03+09:00",
+          "controller external-state rebaseline instruction"
+        ],
+        "step": "action-clarity-phase4-external-note-drift",
+        "timestamp": "2026-08-03T08:35:46+09:00"
+      }
+    },
+    {
+      "id": "E-ACTION-MONITOR-REAL-NOTE-REBASELINE-002",
+      "type": "Evidence",
+      "status": "verified",
+      "claim": "controller承認済みの最新外側5da2f2...をbaselineとして、現行Memory/statsと1615529 rendererからACTIONS本文だけを再描画した。最終日誌はKZN-20260801-001を唯一のcheckbox行、KZN-20260727-002を効果モニタリング、未設定の日次目標として表示し、renderer出力と完全一致する。",
+      "data": {
+        "journal": "C:/develop/obsidian/2026/01 Daily Notes/2026-08-03.md",
+        "full_sha256": "d2a4fe3fd7f7138537d186b996280697f543be22103206c78d6e94aafab54c7c",
+        "marker_external_sha256": "5da2f29758164463ebaff253e99ef63737051aea95d409deb6cd62b0a807570b",
+        "primary_action_id": "KZN-20260801-001",
+        "monitoring_id": "KZN-20260727-002",
+        "daily_goal_state": "unset",
+        "renderer_section_exact_match": true,
+        "line_endings": "0 CRLF / 216 LF"
+      },
+      "provenance": {
+        "sources": [
+          "kaizenlog.config.load_config(C:/develop/KaizenLog/KaizenLog-/kaizenlog.toml)",
+          "kaizenlog.memory.load_entries",
+          "kaizenlog.stats.load_stats",
+          "kaizenlog.memory.render_actions_section",
+          "kaizenlog.vault.extract_section"
+        ],
+        "step": "action-clarity-phase4-external-note-rebaseline-render",
+        "timestamp": "2026-08-03T08:35:46+09:00"
+      }
+    },
+    {
+      "id": "E-ACTION-MONITOR-MARKER-PRESERVED-002",
+      "type": "Evidence",
+      "status": "verified",
+      "claim": "最新外側baseline 5da2f2...に対し、ACTIONS本文の再置換前後でmarker外SHA-256は不変だった。最終bodyだけがcurrent renderer出力へ更新され、外部自動更新後のprefix/suffixは保護された。",
+      "data": {
+        "marker_external_sha256_before": "5da2f29758164463ebaff253e99ef63737051aea95d409deb6cd62b0a807570b",
+        "marker_external_sha256_after": "5da2f29758164463ebaff253e99ef63737051aea95d409deb6cd62b0a807570b",
+        "final_full_sha256": "d2a4fe3fd7f7138537d186b996280697f543be22103206c78d6e94aafab54c7c",
+        "line_endings": "0 CRLF / 216 LF",
+        "marker_pair_count": 1
+      },
+      "provenance": {
+        "sources": [
+          "SHA-256(raw[:start] + raw[end:]) before rebaseline apply_patch",
+          "SHA-256(raw[:start] + raw[end:]) after rebaseline apply_patch",
+          "kaizenlog.vault.extract_section"
+        ],
+        "step": "action-clarity-phase4-external-note-rebaseline-preservation",
+        "timestamp": "2026-08-03T08:35:46+09:00"
+      }
+    },
+    {
+      "id": "T-ACTION-MONITOR-POSTCOMMIT-FULL-002",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "最初のTask 4 evidence commit f4676d2上でfull pytestを再実行し、1077件すべてが成功した。",
+      "data": {
+        "command": "C:/develop/KaizenLog/KaizenLog-/.venv/Scripts/python.exe -m pytest --basetemp <OS-temp> -q",
+        "passed": 1077,
+        "failed": 0,
+        "exit_code": 0,
+        "duration_seconds": 87.25,
+        "revision": "f4676d2feb375ae6a228c353f38512bec31a7d2c"
+      },
+      "provenance": {
+        "sources": [
+          "post-commit full pytest output on f4676d2feb375ae6a228c353f38512bec31a7d2c"
+        ],
+        "step": "action-clarity-phase4-postcommit-full-verification",
+        "timestamp": "2026-08-03T08:35:46+09:00"
+      }
     }
   ],
   "edges": [
@@ -3844,6 +3938,76 @@
         ],
         "step": "action-clarity-phase4-full-verification",
         "timestamp": "2026-08-03T08:29:55+09:00"
+      }
+    },
+    {
+      "id": "EDGE-124",
+      "source": "F-ACTION-MONITOR-EXTERNAL-NOTE-DRIFT-001",
+      "type": "causes",
+      "target": "E-ACTION-MONITOR-REAL-NOTE-REBASELINE-002",
+      "provenance": {
+        "sources": [
+          "F-ACTION-MONITOR-EXTERNAL-NOTE-DRIFT-001",
+          "E-ACTION-MONITOR-REAL-NOTE-REBASELINE-002"
+        ],
+        "step": "action-clarity-phase4-external-note-rebaseline",
+        "timestamp": "2026-08-03T08:35:46+09:00"
+      }
+    },
+    {
+      "id": "EDGE-125",
+      "source": "E-ACTION-MONITOR-REAL-NOTE-REBASELINE-002",
+      "type": "supports",
+      "target": "G-ACTION-SEPARATION-001",
+      "provenance": {
+        "sources": [
+          "E-ACTION-MONITOR-REAL-NOTE-REBASELINE-002",
+          "G-ACTION-SEPARATION-001"
+        ],
+        "step": "action-clarity-phase4-external-note-rebaseline-render",
+        "timestamp": "2026-08-03T08:35:46+09:00"
+      }
+    },
+    {
+      "id": "EDGE-126",
+      "source": "E-ACTION-MONITOR-MARKER-PRESERVED-002",
+      "type": "supports",
+      "target": "C-ACTION-MONITOR-IMPLEMENTATION-001",
+      "provenance": {
+        "sources": [
+          "E-ACTION-MONITOR-MARKER-PRESERVED-002",
+          "C-ACTION-MONITOR-IMPLEMENTATION-001"
+        ],
+        "step": "action-clarity-phase4-external-note-rebaseline-preservation",
+        "timestamp": "2026-08-03T08:35:46+09:00"
+      }
+    },
+    {
+      "id": "EDGE-127",
+      "source": "T-ACTION-MONITOR-POSTCOMMIT-FULL-002",
+      "type": "supports",
+      "target": "C-ACTION-MONITOR-IMPLEMENTATION-001",
+      "provenance": {
+        "sources": [
+          "T-ACTION-MONITOR-POSTCOMMIT-FULL-002",
+          "C-ACTION-MONITOR-IMPLEMENTATION-001"
+        ],
+        "step": "action-clarity-phase4-postcommit-full-verification",
+        "timestamp": "2026-08-03T08:35:46+09:00"
+      }
+    },
+    {
+      "id": "EDGE-128",
+      "source": "C-ACTION-MONITOR-IMPLEMENTATION-001",
+      "type": "evaluated-as",
+      "target": "T-ACTION-MONITOR-POSTCOMMIT-FULL-002",
+      "provenance": {
+        "sources": [
+          "C-ACTION-MONITOR-IMPLEMENTATION-001",
+          "T-ACTION-MONITOR-POSTCOMMIT-FULL-002"
+        ],
+        "step": "action-clarity-phase4-postcommit-full-verification",
+        "timestamp": "2026-08-03T08:35:46+09:00"
       }
     }
   ]

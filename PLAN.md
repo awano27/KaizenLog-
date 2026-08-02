@@ -1053,3 +1053,9 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 - 当初briefの `d0ecbc...` は同じ外側式の監査値と一致せず、旧実日誌は `full=b2e126...` / `external=9153a097...` だった。初回 `apply_patch` が混在EOLを全LFへ正規化して旧raw外側を復元不能にしたため、controllerが現行 `601394f3...` を新baselineとして明示承認した。この失敗と緩和はGraphの `F-ACTION-MONITOR-MARKER-BASELINE-DISCREPANCY-001` にprovenance付きで記録する。
 - renderer互換修正 `16155295b91c82b97725eb39991a83291560224d` を含む最終revisionでfocused regressionは `101 passed in 2.82s`、full pytestは `1077 passed in 90.23s`。focused対象はRound 50/40/45、display cap、UX13、verdict stage、rehumanizeである。
 - ActivityWatch、screenpipe、LLM、`generate`、`advise`、`morning`、`done`、fetch、push、GitHub ActionsはTask 4で実行しない。repository側はGraph/PLANの証拠だけをcommitし、実Vaultはcommitしない。
+
+### Task 4 — 外部日誌再変動の再baseline（2026-08-03 08:30 JST）
+
+- `f4676d2` のpost-commit検証中、外部自動更新が日誌を `08:30:03 JST` に書き換えた。全文SHA-256は `38296d...` から `03806bb2739ed44274072c1e345f6613057bc18df02ae2d86188b2d3eeeec5ba` へ、marker外SHA-256は `601394...` から `5da2f29758164463ebaff253e99ef63737051aea95d409deb6cd62b0a807570b` へ変化し、legacy ACTIONS layoutへ戻った。controllerはこの最新外側hash（`0 CRLF / 205 LF`）を新baselineとして明示承認した。
+- 最新のMemory/statsと `1615529` rendererからACTIONS本文だけを再描画した。最終全文SHA-256は `d2a4fe3fd7f7138537d186b996280697f543be22103206c78d6e94aafab54c7c`、marker外SHA-256は新baselineの `5da2f297...` と一致、改行は `0 CRLF / 216 LF`。`extract_section` はrenderer出力と一致し、今日やることはcheckbox 1件の `KZN-20260801-001:`、`KZN-20260727-002` はcheckboxなしの効果モニタリングである。
+- 外部変動はGraphの `F-ACTION-MONITOR-EXTERNAL-NOTE-DRIFT-001`、最新実日誌とmarker保護は `E-ACTION-MONITOR-REAL-NOTE-REBASELINE-002` / `E-ACTION-MONITOR-MARKER-PRESERVED-002` にprovenance付きで記録する。`f4676d2` 上のpost-commit full pytestは `1077 passed in 87.25s` だった。
