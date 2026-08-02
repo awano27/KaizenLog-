@@ -9,10 +9,12 @@ LLMには「未完了・提案済み・完了済み」の要約を渡して重�
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date, timedelta
+from numbers import Real
 from pathlib import Path
 from typing import Any
 
@@ -1851,7 +1853,13 @@ def _metric_scope_note(
     if metric == "ai_avg_turns":
         ai = latest_stats.get("ai") if latest_stats else None
         sessions = ai.get("sessions") if isinstance(ai, Mapping) else None
-        count = f"{int(sessions)}セッション。" if isinstance(sessions, (int, float)) else ""
+        count = (
+            f"{int(sessions)}セッション。"
+            if isinstance(sessions, Real)
+            and not isinstance(sessions, bool)
+            and math.isfinite(sessions)
+            else ""
+        )
         return f"全AI {count}特定AIツール単独の効果は判定できません"
     if metric == "context_switches_per_hour":
         return "日全体の観測値。特定の実施区間だけの効果は判定できません"
@@ -1892,7 +1900,7 @@ def _action_card_lines(
         lines.append(f"  - 効果目標: {effect}")
     shortfall = _denominator_shortfall_note(entry, stats_by_day)
     if shortfall:
-        lines.append(f"  - 測定: 集計待ち（{shortfall}）")
+        lines.append(f"  - 測定: 未判定（集計待ち・{shortfall}）")
     else:
         lines.append(
             f"  - 測定: {format_action_verdict_tag(entry, thin_coverage=thin_coverage)}"
@@ -1941,6 +1949,8 @@ def _status_and_all_lines(
     actionable: Sequence[MemoryEntry],
     shown: Sequence[MemoryEntry],
     monitoring: Sequence[MemoryEntry],
+    *,
+    monitoring_shown: int = 2,
 ) -> list[str]:
     """週次の投与状況と省略した一覧への導線を最後に置く。"""
     lines = ["## 🗂 状況・全件", ""]
@@ -1971,7 +1981,7 @@ def _status_and_all_lines(
         f" / 8〜30日前 {len(buckets.stale)}件"
         f" / 31日以上 {len(buckets.older)}件"
     )
-    monitoring_extra = max(0, len(monitoring) - 2)
+    monitoring_extra = max(0, len(monitoring) - monitoring_shown)
     if monitoring_extra:
         lines.append(f"ほか効果モニタリング {monitoring_extra}件")
     lines.append("全件表示: `kaizenlog today --all`")
@@ -2049,17 +2059,28 @@ def render_actions_section(
         lines.append("- 今日の実行候補はありません")
 
     lines.extend(["", "## 📈 効果モニタリング（今日やることではない）", ""])
-    monitoring_cards = 0
-    for entry in monitoring[:2]:
-        card = _monitoring_card_lines(entry, target_day, stats_by_day)
-        if card:
-            lines.extend(card)
-            monitoring_cards += 1
-    if monitoring_cards == 0:
+    renderable_monitoring = [
+        (entry, card)
+        for entry in monitoring
+        if (card := _monitoring_card_lines(entry, target_day, stats_by_day))
+    ]
+    shown_monitoring = renderable_monitoring[:2]
+    for _entry, card in shown_monitoring:
+        lines.extend(card)
+    if not shown_monitoring:
         lines.append("- 確認できる効果モニタリングはありません")
 
     lines.extend([""])
     lines.extend(_goal_monitoring_lines(note_content))
     lines.extend([""])
-    lines.extend(_status_and_all_lines(stats, buckets, actionable, shown, monitoring))
+    lines.extend(
+        _status_and_all_lines(
+            stats,
+            buckets,
+            actionable,
+            shown,
+            monitoring,
+            monitoring_shown=len(shown_monitoring),
+        )
+    )
     return "\n".join(lines)

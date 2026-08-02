@@ -9,6 +9,7 @@ from kaizenlog.cli import cmd_today
 from kaizenlog.config import Config
 from kaizenlog.memory import (
     MemoryEntry,
+    _metric_scope_note,
     _post_verdict_trajectory,
     append_entries,
     render_actions_section,
@@ -195,9 +196,92 @@ def test_action_keeps_effect_target_when_denominator_is_short():
     assert out is not None
     assert "効果目標:" in out
     assert "65 以下" in out
-    assert "測定: 集計待ち" in out
+    assert "測定: 未判定（集計待ち" in out
     assert "稼働22.7分" in out
     assert "分母不足" in out
+
+
+def test_session_denominator_shortfall_is_explicitly_unknown():
+    entry = MemoryEntry(
+        id="KZN-20260802-002",
+        date="2026-08-02",
+        action=(
+            "開始前→エラーを確認する"
+            "｜PASS: ai_tool_errors_per_session <= 1"
+            "｜FAIL: ai_tool_errors_per_session > 1"
+        ),
+    )
+
+    out = render_actions_section(
+        [entry],
+        date(2026, 8, 3),
+        stats_history=[
+            {
+                "day": "2026-08-03",
+                "ai": {"tool_errors": 2, "sessions": 0},
+            }
+        ],
+    )
+
+    assert out is not None
+    assert "測定: 未判定（集計待ち" in out
+    assert "AIセッション0件/必要1件" in out
+
+
+def test_monitoring_keeps_two_renderable_cards_after_unmeasurable_newest():
+    entries = [
+        MemoryEntry(
+            id="KZN-20260802-001",
+            date="2026-08-02",
+            action="x｜PASS: ai_avg_turns >= 2.5｜FAIL: ai_avg_turns < 2.5",
+            verdict="pass",
+            verdict_date="2026-08-02",
+            verdict_stage="confirmed",
+        ),
+        MemoryEntry(
+            id="KZN-20260801-001",
+            date="2026-08-01",
+            action="x｜PASS: ai_avg_turns >= 2.5｜FAIL: ai_avg_turns < 2.5",
+            verdict="pass",
+            verdict_date="2026-07-31",
+            verdict_stage="confirmed",
+        ),
+        MemoryEntry(
+            id="KZN-20260731-001",
+            date="2026-07-31",
+            action="x｜PASS: ai_avg_turns >= 2.5｜FAIL: ai_avg_turns < 2.5",
+            verdict="pass",
+            verdict_date="2026-07-30",
+            verdict_stage="confirmed",
+        ),
+    ]
+    history = [
+        {"day": "2026-08-01", "ai": {"avg_turns": 3.0, "sessions": 1}},
+        {"day": "2026-08-02", "ai": {"avg_turns": 3.0, "sessions": 1}},
+    ]
+
+    out = render_actions_section(entries, date(2026, 8, 3), stats_history=history)
+
+    assert out is not None
+    assert "- KZN-20260801-001" in out
+    assert "- KZN-20260731-001" in out
+    assert "- KZN-20260802-001" not in out
+    assert "ほか効果モニタリング 1件" in out
+
+
+def test_metric_scope_note_omits_boolean_session_count():
+    scope = _metric_scope_note("ai_avg_turns", {"ai": {"sessions": True}})
+
+    assert scope is not None
+    assert "セッション" not in scope
+
+
+@pytest.mark.parametrize("sessions", [float("nan"), float("inf"), float("-inf")])
+def test_metric_scope_note_omits_nonfinite_session_count(sessions):
+    scope = _metric_scope_note("ai_avg_turns", {"ai": {"sessions": sessions}})
+
+    assert scope is not None
+    assert "セッション" not in scope
 
 
 def test_monitor_warns_only_when_latest_observation_fails():
