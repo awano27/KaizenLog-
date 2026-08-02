@@ -1,187 +1,134 @@
 # KaizenLog
 
 <p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="KaizenLog — AIとの仕事を、実測で調教する">
+  <img src="./assets/readme/hero.svg" width="100%" alt="KaizenLog — PCの作業記録をObsidianの日誌にし、改善を実測する">
 </p>
 
-**AIとの仕事を、実測で調教する。**
+**PCの作業記録を、Obsidianの日誌にして残す。必要なときだけ、明日試す改善を1件出す。**
 
-KaizenLogは、PC作業とAIセッションの記録から、やり直しのムダ、再利用できる依頼方法、改善ルールの効果を測るWindows向けCLIです。ActivityWatchの事実をObsidianへ残し、必要な場合だけLLMを使います。
+KaizenLog は Windows 向け CLI です。  
+[ActivityWatch](https://activitywatch.net/) が記録した前景アプリを集計し、Obsidian のデイリーノートへ書き込みます。数値の計算はコードが行い、LLM は任意（提案が欲しいときだけ）です。
 
-`Windows` · `Python 3.11+` · `ActivityWatch` · `Obsidian` · `MIT`
+`Windows` · `Python 3.11+` · `ActivityWatch` · `Obsidian` · `MIT` · 現行 `1.5.0rc1`
 
-[3コマンドで始める](#3コマンドで始める) · [改善ループ](#measure--teach--verify) · [データの扱い](#llmとデータの扱い) · [詳しい使い方](docs/USAGE.md)
+[3コマンドで始める](#3コマンドで始める) · [毎日の使い方](#毎日の使い方) · [データの扱い](#llmとデータの扱い) · [詳しい手順](docs/USAGE.md)
 
 ---
 
-## まず、何が変わるのか
+## これは何をするツールか
 
-KaizenLogは「AIをたくさん使ったか」ではなく、次の改善ループを実測します。
-
-| できること | 現行機能 |
+| やること | やらないこと |
 | --- | --- |
-| やり直しのムダを測る | **Loop Tax** — 最終試行を除くリトライ連鎖の時間・取得可能なトークン・推定費用 |
-| 効果の高い依頼方法を見つける | **Prompt ROI** — `kaizenlog prompts --roi` |
-| 学んだルールを次のAIへ渡す | **handoff / coach** — `kaizenlog handoff`、`kaizenlog coach` |
-| 改善効果を実測する | **A/B test** — `kaizenlog abtest` |
+| その日の PC 作業をカテゴリ・タイムライン付きで日誌にする | 生産性の「点数」や人格評価を出す |
+| 未完了の改善アクションを翌朝ノートに出す | 手書きメモを上書きする |
+| （任意）LLM で「明日試す1〜3件」を提案する | LLM に事実の集計やファイル全体の編集を任せる |
+| （発展）AI セッションの空転・依頼の再利用を測る | 効果を保証する・未知の数値を埋めて断定する |
 
-数値が取得できないとき、トークン数や費用は未知のまま扱います。推定値で穴埋めして効果を断定しません。
+**いちばん最初に欲しい成果**は、LLM なしでも動く **Activity Log（活動日誌）** です。  
+AI 改善ループ（Prompt ROI / handoff / A/B など）は、日誌が回り始めてからの**発展機能**です。
 
 ---
 
-## 実際に残る証拠
+## ノートにこう残る（イメージ）
 
-<p align="center">
-  <img src="./assets/readme/section-loop.svg" width="100%" alt="KaizenLogが実測、ルールの提案、検証をつなぐループ">
-</p>
+> 数値・文言は説明用の架空例です。利用者実績や効果保証ではありません。
 
-### 表示例
+```markdown
+## 📌 今日のアクション
+今日の実験: セッション終了時に git diff --stat を見る（目安1分）
+- [ ] KZN-20260801-001: …
+完了したら: `kaizenlog done KZN-20260801-001`
 
-以下は中立的なサンプル値です。ベンチマーク、利用者実績、効果保証ではありません。
+🎯 今日の目標: 提案書の初稿を出す
 
-```text
-Loop Tax
-  リトライ連鎖: 2件 / 最終試行を除く時間: 18分
-  tokens: 不明 / 推定費用: 不明
+## 📊 Activity Log
+合計 5h37m / 集中ブロック 3h02m
+AI作業 39% · ブラウジング 29% · …
 
-Prompt ROI
-  PRM-20260730-001  再発: 4回 / skilled効果: 確認待ち
-
-agent-context marker
-  <!-- kaizenlog:agent-context:start -->
-  - 実測された教訓: 繰り返しの失敗を先に確認する
-  <!-- kaizenlog:agent-context:end -->
-
-A/B result card
-  予測 +30% / 体感 +20% / 実測: 不成立（baseline不足）
+## 📝 日報ドラフト
+【本日の業務】プロジェクト別の依頼要約とセッション数
+【成果・進捗】コミット件数と主な内容（取得できた場合）
 ```
 
-Prompt ROIで`skilled`の効果を確定するには、比較対象となる完了済みの観測期間が必要です。`handoff`は自身のマーカー範囲だけを再生成します。`coach`は提案を作るだけで、明示的な`--apply`が必要です。A/B testはbaselineが不足すると、効果を作り出さず「不成立」として返します。
+- **管理マーカー区間**（`kaizenlog:…`）だけを自動更新します。その外側の手書きは残ります。
+- 「振り返り」「明日の目標」は本人が書く欄です。自動では書きません。
 
 ---
 
 ## 3コマンドで始める
 
 <p align="center">
-  <img src="./assets/readme/section-start.svg" width="100%" alt="KaizenLogの初回導線: setup、doctor、generate">
+  <img src="./assets/readme/section-start.svg" width="100%" alt="setup → doctor → generate">
 </p>
 
 ### 前提
 
 - Windows 10 / 11
-- Python 3.11以上と[pipx](https://pipx.pypa.io/)
-- Obsidianボールト
-- ActivityWatch（`setup`で検出し、許可した場合だけ導入できます）
-
-現行は`1.5.0rc1`です。GitHubから取得してインストールします。
+- Python 3.11 以上と [pipx](https://pipx.pypa.io/)
+- Obsidian ボールト
+- ActivityWatch（`setup` が検出し、許可したときだけ導入を案内）
 
 ```powershell
 git clone https://github.com/awano27/KaizenLog-.git
 cd KaizenLog-
 pipx install .
-```
 
-最初の成功は、LLMを使わない日誌生成です。`YYYY-MM-DD`を生成したい日付に置き換えてください。
-
-```powershell
 kaizenlog setup
 kaizenlog doctor
-kaizenlog generate --date YYYY-MM-DD
+kaizenlog generate --date 2026-08-02   # 日付は自分の観測日に
 ```
 
-`setup`は設定、`doctor`は接続と書き込み先の診断、`generate`はActivityWatchの事実を集計してActivity Logを生成します。裸の`generate`は追いつき処理を行うことがあるため、初回の安全な実行例にはしていません。
+| コマンド | 役割 |
+| --- | --- |
+| `setup` | 設定ウィザード（ボールト・タイムゾーンなど） |
+| `doctor` | ActivityWatch 接続・書き込み先の診断 |
+| `generate --date …` | **その日の日誌だけ**作る（LLM 不要・初回向き） |
+
+設定の既定場所は `%APPDATA%\kaizenlog\config.toml` です。  
+日付なしの `generate` や `run` は追いつき処理を含むことがあるため、**初回は日付付き `generate` を推奨**します。
 
 ---
 
-## Measure → Teach → Verify
-
-実測からルールを作り、そのルールが効いたかを同じデータで確認します。
-
-```powershell
-# MEASURE
-kaizenlog status
-kaizenlog prompts --roi
-
-# TEACH
-kaizenlog handoff --dry-run
-kaizenlog coach --dry-run
-
-# VERIFY
-kaizenlog abtest new --predict +30 --days 28
-kaizenlog abtest status
-kaizenlog abtest finish --felt +20
-```
-
-- `handoff --dry-run`は決定的に計測された教訓をプレビューします。対象は`[handoff] targets`で設定します。
-- `coach --dry-run`はレダクション済みの30日コンテキストを表示し、LLMを呼び出しません。
-- 通常の`coach`は提案ファイルとdiffを作成します。管理対象のcoach区間へ書き込むのは`coach --apply <proposal-file>`だけです。
-- `abtest`は予測・体感・実測効果を比較し、完了時にSVGカードを作成します。
-
----
-
-## 基本ワークフロー
+## 毎日の使い方
 
 <p align="center">
-  <img src="./assets/readme/workflow.svg" width="100%" alt="ActivityWatchの記録をKaizenLogが集計してObsidianへ書き、必要な場合だけLLM提案を追加するデータフロー">
+  <img src="./assets/readme/workflow.svg" width="100%" alt="ActivityWatch → KaizenLog → Obsidian（必要なら LLM 提案）">
 </p>
 
-1. **ActivityWatch**がPCの前景アプリを記録します。
-2. **KaizenLog**が分類・集計し、Activity Logと機械可読な統計を作ります。
-3. **Obsidian**の管理マーカー区間に日誌を残します。
-4. 必要な場合だけ、レダクション後の入力をLLMへ渡して1〜3件の提案を作ります。
-5. 結果を次の`prompts`、`handoff`、`coach`、`abtest`で検証します。
+### 1日の流れ
 
-数値はコードで決定的に計算し、LLMには解釈と提案だけを任せます。LLMがObsidianファイルを直接編集する構成ではありません。
-
----
-
-## 毎日の記録と振り返りに使う
-
-KaizenLogは、AIを使わない日でも、ActivityWatchが観測したPC前景アプリを一日の業務日誌としてObsidianへ残せます。
-
-> **一日の流れ:** 朝に目標を書く → 日中は自動記録 → 夜に振り返る → 必要な場合だけAI提案
-
-### 3つの仕事で見る、日誌の使い方
-
-> 数値と文章はすべて**架空の例**です。実在する利用者のデータ、導入実績、改善効果ではありません。
-
-#### 1. ソフトウェア開発者
-
-- **自動記録（Activity Log）** — 6時間12分｜実装 3時間05分｜レビュー 1時間20分｜会議 50分
-- **自分の振り返り（手書き）** — 会議後に開発へ戻るまで時間がかかった
-- **明日の目標（自分で設定）** — 午前中にレビュー対応を終える
-
-#### 2. 企画・営業
-
-- **自動記録（Activity Log）** — 5時間48分｜顧客会議 2時間10分｜提案書 1時間45分｜調査 1時間05分
-- **自分の振り返り（手書き）** — 会議が続き、提案書の作成が夕方に偏った
-- **明日の目標（自分で設定）** — 最初の会議までに提案書の骨子を作る
-
-#### 3. ライター・研究者
-
-- **自動記録（Activity Log）** — 5時間30分｜執筆 2時間35分｜調査 1時間50分｜推敲 45分
-- **自分の振り返り（手書き）** — 午前の調査が長引いたが、午後は執筆に集中できた
-- **明日の目標（自分で設定）** — 調査を90分で区切り、初稿へ進む
-
-各例のカテゴリ時間は主な内訳であり、合計時間の完全な内訳ではありません。カテゴリ名は設定に合わせて変更できます。
-
-「自分の振り返り」と「明日の目標」は本人が書くもので、自動生成ではありません。
-
-### 自動記録で分かること・分からないこと
-
-Activity LogはActivityWatchが観測したPC前景活動の記録です。生活全体の記録でもありませんし、勤務時間、目標達成、集中力、生産性を判定するものでもありません。
-
-スマートフォン、他デバイス、離席中の行動は既定では測定できません。入力watcherから統計を取得できる場合は、25分以上入力が続いた区間を「集中ブロック」として表示します。
-
-### 朝の目標と、夜の自分の言葉を残す
-
-朝は一日の目標を記録できます。
+1. **朝** — 目標を1行書く（任意）／未完了アクションを確認  
+2. **日中** — ActivityWatch が自動記録（KaizenLog は常駐しない）  
+3. **夜** — 日誌を生成。必要なら改善提案も  
+4. **翌日** — やってみたアクションを `done` する  
 
 ```powershell
+# 朝（任意）
 kaizenlog goal "提案書の初稿を完成させる @執筆・ノート"
+kaizenlog morning --skip-catch-up    # 表示だけ。追いつき無し
+
+# 夜 — 日誌のみ（LLM 不要）
+kaizenlog generate --date YYYY-MM-DD
+
+# 夜 — 日誌 + 改善提案（LLM 設定が必要）
+kaizenlog run
+
+# アクションの確認・完了
+kaizenlog today
+kaizenlog done KZN-20260801-001
 ```
 
-夜は同じObsidianの日誌へ、自分の言葉を自由に追記できます。
+| コマンド | いつ | メモ |
+| --- | --- | --- |
+| `goal "…"` | 朝 | ノートに今日の目標を書く |
+| `morning` | 朝 | 未完了アクション再掲。`--skip-catch-up` で安全確認向け |
+| `generate` | 夜 | Activity Log / 日報ドラフトなど（決定的） |
+| `run` | 夜 | `generate` のあと `advise`（LLM） |
+| `today` / `done` | 随時 | 候補一覧と完了記録 |
+
+`backend = "none"` のまま `advise` / `run` の提案部分を呼ぶと、LLM 無しのためエラーになります。日誌だけなら `generate` を使ってください。
+
+### 手書きは消えない
 
 ```markdown
 ## 振り返り
@@ -189,82 +136,92 @@ kaizenlog goal "提案書の初稿を完成させる @執筆・ノート"
 午前は執筆に集中できた。午後は会議後の再開に時間がかかった。
 ```
 
-KaizenLogは管理マーカー区間だけを更新するため、その外側の手書き本文を置換しません。`## Reflections`または`## 振り返り`があり、`advise`を実行する場合は、その内容を本人の言葉として優先的な文脈に使います。
-
-`generate --date YYYY-MM-DD`による日誌生成と、本人が書く振り返りにはLLMが不要です。振り返りを翌日の改善提案へ反映するときだけ、設定済みのLLMバックエンドを使います。
-
-### 毎日のコマンド
-
-```powershell
-kaizenlog run
-kaizenlog morning
-kaizenlog today
-```
-
-`kaizenlog run`は`generate`と`advise`を順に実行します。LLMを使わずActivity Logだけを作る場合は`kaizenlog generate --date YYYY-MM-DD`を使ってください。`backend = "none"`の状態で`advise`を呼ぶと、LLM生成を行わずエラーとして終了します。
-
-`morning`は未完了アクションを再表示し、必要な場合は追いつき処理も行います。追いつきを行わない表示だけの確認には`kaizenlog morning --skip-catch-up`を使います。`today`で候補を確認し、実行済みなら`kaizenlog done KZN-…001`で完了にできます。日々のLLM提案は現在の契約どおり1〜3件です。
-
-### 補助コマンド
-
-```powershell
-kaizenlog rehumanize --days 30        # 過去ノートの機械構文を平文へ（既定は差分表示のみ、--write で反映）
-kaizenlog excavate                    # 過去ログをさかのぼって空転を監査
-kaizenlog guard install --write       # セッション中の空転をフックで即時警告（明示実行時のみ）
-kaizenlog screenpipe-probe --minutes 30   # screenpipe 連携の疎通確認（有効化時のみ）
-```
-
-`rehumanize`はマーカー区間の中だけを書き換え、`<vault>/.kaizenlog/backup/` にバックアップを残します。日誌冒頭のダイジェストと、当日コミットの件数・主な内容（`outcome_git`）は`generate`が自動で書き込むため、専用コマンドはありません。
+この外側の本文は置換しません。`advise` を使う日は、`## 振り返り` を本人の文脈として優先します。
 
 ---
 
-## ブラウザAIとM365 Copilot
+## 発展: AIの使い方を実測で直す
 
-### Available — ブラウザAIテレメトリ
+日誌が安定してからで十分です。  
+「やり直しのムダ」「効く依頼の型」「ルールが効いたか」を**同じ計測データ**で見ます。
 
-現在のChrome拡張はChatGPT、Claude.ai、Geminiの3ドメインだけを対象にし、会話イベントをローカルJSONLへ保存します。
+<p align="center">
+  <img src="./assets/readme/section-loop.svg" width="100%" alt="実測 → ルール → 検証">
+</p>
 
-### Next / Planned — M365 Copilot改善アシスト
+```powershell
+# 見る
+kaizenlog status
+kaizenlog prompts --roi
 
-> **現在未実装です。**
+# 教える（まず dry-run）
+kaizenlog handoff --dry-run
+kaizenlog coach --dry-run
 
-M365 Copilot Chatだけに任意のサイト権限を与え、依頼・回答・往復回数をローカル計測し、改善プロンプトやカスタム指示をコピー可能な形で提案する構想です。会話の自動取得、Microsoft Graph／テナント連携、自動送信、カスタム指示の自動変更にはまだ対応していません。
+# 効いたか確かめる
+kaizenlog abtest new --predict +30 --days 28
+kaizenlog abtest status
+kaizenlog abtest finish --felt +20
+```
 
-構想の前提となるMicrosoftの説明は、[Microsoft 365 Copilotの応答のカスタマイズ](https://support.microsoft.com/en-us/microsoft-365-copilot/customize-how-microsoft-365-copilot-responds-to-you)と[declarative agent instructions](https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/declarative-agent-instructions)を参照してください。
+| 機能 | ひとこと |
+| --- | --- |
+| **Loop Tax** | リトライ連鎖のうち、最終試行を除くムダ（時間が主。トークンは取れたときだけ） |
+| **Prompt ROI** | 繰り返し依頼の再発と、スキル化後の変化 |
+| **handoff** | 実測された教訓をエージェント用コンテキストへ（マーカー範囲のみ再生成） |
+| **coach** | 提案ファイル作成。書き込みは `coach --apply <file>` のみ |
+| **abtest** | 予測・体感・実測。baseline 不足なら「不成立」（数字を作らない） |
 
-現行拡張の導入と保存内容は[browser-extension/README.md](browser-extension/README.md)を参照してください。本文保存は拡張オプションで無効化できます。
+取得できないトークンや費用は「不明」のままにします。推定で穴埋めして効果を断定しません。
+
+### その他の補助
+
+```powershell
+kaizenlog rehumanize --days 30          # 過去ノートの機械構文を平文に（既定は差分のみ、--write で反映）
+kaizenlog excavate                      # 過去の空転をさかのぼって監査
+kaizenlog guard install --write         # セッション中の空転をフックで警告（明示時のみ）
+kaizenlog screenpipe-probe --minutes 30 # screenpipe 疎通（有効化時・既定 OFF）
+```
+
+---
+
+## ブラウザ AI と M365 Copilot
+
+| 状態 | 内容 |
+| --- | --- |
+| **利用可** | Chrome 拡張で ChatGPT / Claude.ai / Gemini の会話イベントをローカル JSONL へ（詳細は [browser-extension/README.md](browser-extension/README.md)） |
+| **未実装** | M365 Copilot 改善アシスト（構想のみ。自動取得・Graph 連携・指示の自動変更は非対応） |
 
 ---
 
 ## LLMとデータの扱い
 
-ActivityWatchの読み取り、分類、集計、Obsidianへの保存はローカルで実行します。外部送信の有無は選んだLLMバックエンドで決まります。
+集計・分類・Obsidian への保存はローカルです。外部送信の有無は LLM バックエンド次第です。
 
-| 設定 | データ経路 |
+| `backend` | 送信先 |
 | --- | --- |
-| `backend = "none"` | LLMへ送信しない。`advise`はエラーとして終了する |
-| `backend = "openai-compatible"` | 設定したendpointへ送信する。endpointはローカルまたはリモートの場合がある |
-| `backend = "claude-code-cli"` | ローカルのClaude Code CLIプロセスへプロンプトを渡す |
-| `backend = "copilot-cli"` | ローカルのGitHub Copilot CLIプロセスへプロンプトを渡す |
+| `"none"` | 送らない（`advise` はエラー） |
+| `"openai-compatible"` | 設定した endpoint（ローカル／リモートどちらもありうる） |
+| `"claude-code-cli"` | ローカル Claude Code CLI |
+| `"copilot-cli"` | ローカル GitHub Copilot CLI |
 
-重要な境界:
+- `fallback_to_local=true` で CLI 失敗時だけ OpenAI 互換へ切り替えます。その endpoint が常にローカルとは限りません。
+- `[privacy] redact_patterns` は送信直前のベストエフォートな正規表現マスクです。
+- `kaizenlog advise --dry-run` でマスク後の送信予定文を確認できます（元ノートは書き換えません）。
+- 更新するのは管理マーカー区間だけです。
 
-- `fallback_to_local=true`かつCLIバックエンド失敗時だけ、設定済みのOpenAI互換経路へ切り替えます。そのendpointが常にローカルとは限りません。
-- `[privacy] redact_patterns`は、LLMへ送るsystem/userプロンプトの送信直前に適用するベストエフォートの正規表現マスクです。
-- `kaizenlog advise --dry-run`で送信予定のマスキング後テキストを確認できます。マスキングはローカルの元日誌を書き換えません。
-- KaizenLogは管理マーカー区間だけを更新し、その外側の手書き本文を置換しません。
-
-詳しい境界と注意点は[プライバシー](docs/USAGE.md#プライバシーについて)を確認してください。
+詳細は [プライバシー](docs/USAGE.md#プライバシーについて) を参照してください。
 
 ---
 
 ## 制限とカスタマイズ
 
-- ActivityWatchから取得できるPC前景アプリが中心で、スマートフォン、他デバイス、離席中の行動は既定では測定できません。
-- カテゴリ時間の変化は、集中改善ではなく別デバイスへの移行を示すことがあります。
-- LLMの提案は事実ではありません。Activity Logと計測上の注意をあわせて判断してください。
+- 測れるのは主に **PC 前景アプリ**です。スマホ・他端末・離席は既定では測りません。
+- カテゴリ時間の増減は「集中が良くなった」ではなく、別画面への移行を示すことがあります。
+- LLM の提案は事実ではありません。Activity Log と注記を見て判断してください。
+- 日誌のタイムラインは抜粋です。短いブロックの多くは「細切れ」にまとまります。
 
-アプリ名やタイトルに合わせてカテゴリを追加できます。
+カテゴリは設定で足せます。
 
 ```toml
 [[categories.rules]]
@@ -273,7 +230,7 @@ ai = true
 patterns = ["dify", "自社チャットボット"]
 ```
 
-実験、レポート、プロンプト台帳、評価ハーネスを含む全コマンドは[docs/USAGE.md](docs/USAGE.md)にまとめています。
+全コマンド・実験・評価は [docs/USAGE.md](docs/USAGE.md) にあります。
 
 ---
 
@@ -288,18 +245,19 @@ pip install -e ".[dev]"
 pytest
 ```
 
-変更履歴は[CHANGELOG.md](CHANGELOG.md)を参照してください。
+変更履歴は [CHANGELOG.md](CHANGELOG.md)。
 
 ## ロードマップ
 
-- [x] ActivityWatchからのMarkdown日誌生成
-- [x] Prompt ROI、handoff / coach、A/B testによる改善ループ
-- [x] Claude Code／Copilot CLI／OpenAI互換バックエンド
-- [x] ブラウザAIテレメトリ
-- [x] [screenpipe](https://github.com/mediar-ai/screenpipe)連携（既定OFF。AIセッションログの無い画面の内容を参考情報として補完）
-- [ ] M365 Copilot改善アシスト（Next / Planned、現在未実装）
-- [ ] Cursorなど追加AIログ
+- [x] ActivityWatch から Markdown 日誌
+- [x] 改善提案（advise）とアクション転記
+- [x] Prompt ROI / handoff / coach / A/B
+- [x] Claude Code・Copilot CLI・OpenAI 互換
+- [x] ブラウザ AI テレメトリ
+- [x] [screenpipe](https://github.com/mediar-ai/screenpipe) 連携（既定 OFF・参考層）
+- [ ] M365 Copilot 改善アシスト
+- [ ] Cursor など追加 AI ログ
 
 ## ライセンス
 
-[MIT License](LICENSE)。ActivityWatchは別プロセスとしてREST API経由で利用し、KaizenLogには同梱していません。
+[MIT License](LICENSE)。ActivityWatch は別プロセスとして REST API 経由で使い、同梱しません。
