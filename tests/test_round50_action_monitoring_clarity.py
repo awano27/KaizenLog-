@@ -152,3 +152,82 @@ def test_post_verdict_trajectory_keeps_operator_and_latest_state():
     )
     assert [point.met for point in trajectory.observations] == [True, True, False, True, True]
     assert trajectory.observations[-1].value == 3.2
+
+
+def test_actions_render_action_monitor_goal_as_separate_blocks():
+    active, achieved = _active_and_achieved_entries()
+    history = _realistic_history()
+
+    out = render_actions_section(
+        [active, achieved],
+        date(2026, 8, 3),
+        note_content="# note without goal marker\n",
+        stats_history=history,
+    )
+
+    assert out is not None
+    assert "## 📌 今日やること（1件）" in out
+    assert "- [ ] KZN-20260802-001" in out
+    assert "- [ ] KZN-20260727-002" not in out
+    assert "## 📈 効果モニタリング（今日やることではない）" in out
+    assert "- KZN-20260727-002" in out
+    assert "最新: 8/2 3.2 ✅" in out
+    assert "直近5日: 4/5達成・未達1日（目標 >= 2.5）" in out
+    assert "指標が戻っています" not in out
+    assert "閾値超過" not in out
+    assert "## 🎯 日次目標" in out
+    assert '未設定: `kaizenlog goal "今日達成したい成果"`' in out
+
+
+def test_action_keeps_effect_target_when_denominator_is_short():
+    out = render_actions_section(
+        [_active_entry()],
+        date(2026, 8, 3),
+        stats_history=[
+            {
+                "day": "2026-08-03",
+                "total_minutes": 22.7,
+                "context_switches": 25,
+            }
+        ],
+    )
+
+    assert out is not None
+    assert "効果目標:" in out
+    assert "65 以下" in out
+    assert "測定: 集計待ち" in out
+    assert "稼働22.7分" in out
+    assert "分母不足" in out
+
+
+def test_monitor_warns_only_when_latest_observation_fails():
+    out = render_actions_section(
+        [_achieved_entry()],
+        date(2026, 8, 3),
+        stats_history=_history_with_latest(1.5),
+    )
+
+    assert out is not None
+    assert "⚠ 最新観測が目標未達です" in out
+
+
+@pytest.mark.parametrize(
+    ("goal_section", "expected"),
+    [
+        (None, '未設定: `kaizenlog goal "今日達成したい成果"`'),
+        ("🎯 今日の目標: 実装を終える", "達成度: 未入力"),
+        (
+            "🎯 今日の目標: 実装を終える\n達成度: 80%（自己申告）",
+            "達成度: 80%（自己申告）",
+        ),
+    ],
+)
+def test_goal_monitoring_states(goal_section, expected):
+    note = "# day\n"
+    if goal_section is not None:
+        note = upsert_section(note, GOAL_MARKER, goal_section)
+
+    out = render_actions_section([_active_entry()], date(2026, 8, 3), note)
+
+    assert out is not None
+    assert expected in out

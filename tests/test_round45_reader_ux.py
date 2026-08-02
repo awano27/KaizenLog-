@@ -26,8 +26,8 @@ def _machine_action(
     )
 
 
-def test_actions_lead_with_todays_experiment_not_zero_scoreboard():
-    """先頭は「今日の実験」、チェック0件の糾弾文は出さない。"""
+def test_actions_lead_with_action_card_not_zero_scoreboard():
+    """実行カードは週次状況より先で、旧「今日の実験」は表示しない。"""
     entries = [
         MemoryEntry(
             id="KZN-20260801-001",
@@ -55,7 +55,9 @@ def test_actions_lead_with_todays_experiment_not_zero_scoreboard():
         )
     md = render_actions_section(entries, date(2026, 8, 2))
     assert md is not None
-    assert "今日の実験" in md
+    assert "## 📌 今日やること（1件）" in md
+    assert md.index("## 📌 今日やること（1件）") < md.index("今週の提案")
+    assert "今日の実験:" not in md
     assert "チェック完了は0件" not in md
     # only one open checkbox row
     checkbox_rows = [

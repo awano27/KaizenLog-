@@ -156,8 +156,7 @@ def test_render_actions_prefers_executable_over_provisional():
     # provisional の 20260801 ではなく実行可能側が選ばれる
     assert "KZN-20260731-002" in open_boxes[0]
     assert "KZN-20260801-001" not in open_boxes[0]
-    assert "今日の実験:" in out
-    assert "kaizenlog done KZN-20260731-002" in out
+    assert "完了条件: 今日の予定分を実施して `kaizenlog done KZN-20260731-002`" in out
 
 
 def test_render_actions_single_checkbox_when_backlog():

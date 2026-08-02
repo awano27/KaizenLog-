@@ -286,11 +286,11 @@ def test_z1_judge_confirmed_fail_console(tmp_path, monkeypatch, capsys):
 # ---------- §Z2 trajectory revival ----------
 
 
-def test_z2_regressed_pass_achieved_shown_with_cap():
+def test_z2_monitoring_warns_only_when_latest_observation_fails():
     from datetime import timedelta
 
     target = date(2026, 8, 3)
-    # 3 pass_achieved: 2 with ❌ in traj, 1 all ✅
+    # 履歴に未達があっても、最新値がPASSなら警告しない。
     hist = []
     for i, v in enumerate([178, 639, 48, 10, 5]):
         d = date(2026, 7, 29) + timedelta(days=i)
@@ -308,32 +308,22 @@ def test_z2_regressed_pass_achieved_shown_with_cap():
             verdict_stage="confirmed",
         )
 
-    # e1: after 7/28 → has 639 ❌
     e1 = make("KZN-20260727-001", "2026-07-27", "2026-07-28", "100")
     e2 = make("KZN-20260727-002", "2026-07-27", "2026-07-28", "100")
-    # e3 all pass with thr 10000
     e3 = make("KZN-20260728-003", "2026-07-28", "2026-07-28", "10000")
-    out = render_actions_section(
+    out_with_historical_fail = render_actions_section(
         [e1, e2, e3], target, stats_history=hist
     )
-    assert out is not None
-    assert "指標は達成済み 3件" in out
-    assert "達成済みだが指標が戻っています" in out
-    assert "KZN-20260727-001" in out
-    assert "KZN-20260727-002" in out
-    assert "判定後の実測" in out
-    # e3 should not appear as individual (no ❌)
-    # uncompleted still 1-cap style
-    assert "kaizenlog done" in out or "today --all" in out
+    assert out_with_historical_fail is not None
+    assert "⚠ 最新観測が目標未達です" not in out_with_historical_fail
+    assert "直近5日:" in out_with_historical_fail
 
-    # all green
-    hist_ok = [
-        {"day": "2026-07-29", "ai": {"tool_errors": 1, "sessions": 1}},
-        {"day": "2026-07-30", "ai": {"tool_errors": 1, "sessions": 1}},
-    ]
-    out2 = render_actions_section([e3], target, stats_history=hist_ok)
-    assert "達成済みだが指標が戻っています" not in out2
-    assert "指標は達成済み 1件" in out2
+    hist[-1] = {"day": "2026-08-02", "ai": {"tool_errors": 500, "sessions": 1}}
+    out_with_latest_fail = render_actions_section(
+        [e1, e2, e3], target, stats_history=hist
+    )
+    assert out_with_latest_fail is not None
+    assert "⚠ 最新観測が目標未達です" in out_with_latest_fail
 
 
 def test_z2_more_than_two_shows_extra_line():
@@ -361,7 +351,7 @@ def test_z2_more_than_two_shows_extra_line():
             )
         )
     out = render_actions_section(entries, target, stats_history=hist)
-    assert "ほか 1件も推移に未達日があります" in out
+    assert "ほか効果モニタリング 1件" in out
 
 
 # ---------- §Z3 unified gap ----------

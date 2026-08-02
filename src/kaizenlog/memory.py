@@ -1447,12 +1447,6 @@ def _denominator_shortfall_note(
     day_stats = stats_by_day.get(measure_day.isoformat())
     if day_stats is None:
         return None
-    try:
-        proposal_day = date.fromisoformat(entry.date)
-        proposal_label = f"{proposal_day.month}/{proposal_day.day}"
-    except ValueError:
-        proposal_label = entry.date
-
     if metric.endswith("_per_hour"):
         # 分子: context_switches キーが無いなら注記しない
         if "context_switches" not in day_stats:
@@ -1465,8 +1459,8 @@ def _denominator_shortfall_note(
         if float(mins) >= 60:
             return None  # 分母は足りている（別理由で None なら従来表記）
         return (
-            f"{proposal_label}提案・判定不成立"
-            f"・稼働{float(mins):g}分のため分母不足"
+            f"判定不成立・稼働{float(mins):g}分/必要60分"
+            "・分母不足"
         )
 
     # *_per_session: 分子 tool_errors キーが必要、分母 sessions が 0 以下
@@ -1481,9 +1475,9 @@ def _denominator_shortfall_note(
     if float(sessions) > 0:
         return None
     return (
-        f"{proposal_label}提案・判定不成立"
-        f"・AIセッション{int(sessions) if float(sessions) == int(sessions) else sessions}"
-        f"件のため分母不足"
+        "判定不成立・AIセッション"
+        f"{int(sessions) if float(sessions) == int(sessions) else sessions}件/必要1件"
+        "・分母不足"
     )
 
 
@@ -1841,6 +1835,149 @@ def humanize_actions_section_markdown(actions_md: str) -> str:
     return "\n".join(out)
 
 
+def _split_action_trigger(body: str) -> tuple[str | None, str]:
+    """行動文を「いつ」と「やる」に分ける。自由文はそのまま保持する。"""
+    if " → " not in body:
+        return None, body
+    trigger, action = body.split(" → ", 1)
+    return trigger.strip() or None, action.strip()
+
+
+def _metric_scope_note(
+    metric: str,
+    latest_stats: Mapping[str, Any] | None,
+) -> str | None:
+    """日次集計の因果解釈を過剰にしないための限定注記。"""
+    if metric == "ai_avg_turns":
+        ai = latest_stats.get("ai") if latest_stats else None
+        sessions = ai.get("sessions") if isinstance(ai, Mapping) else None
+        count = f"{int(sessions)}セッション。" if isinstance(sessions, (int, float)) else ""
+        return f"全AI {count}特定AIツール単独の効果は判定できません"
+    if metric == "context_switches_per_hour":
+        return "日全体の観測値。特定の実施区間だけの効果は判定できません"
+    return None
+
+
+def _goal_monitoring_lines(note_content: str | None) -> list[str]:
+    """既存GOALマーカーを読むだけで日次目標を表示する。"""
+    from .goal import read_goal
+
+    goal = read_goal(note_content)
+    lines = ["## 🎯 日次目標", ""]
+    if goal is None:
+        return lines + ['- 未設定: `kaizenlog goal "今日達成したい成果"`']
+    label = re.sub(r"^(?:🎯\s*)?今日の目標\s*[:：]\s*", "", goal.raw_line).strip()
+    achieved = f"{goal.achieved}%（自己申告）" if goal.achieved is not None else "未入力"
+    return lines + [f"- 目標: {label}", f"  - 達成度: {achieved}"]
+
+
+def _action_card_lines(
+    entry: MemoryEntry,
+    mark: str,
+    target_day: date,
+    stats_by_day: dict[str, Mapping[str, Any]],
+    *,
+    thin_coverage: bool = False,
+) -> list[str]:
+    """今日実施する1件を、完了操作と測定状態に分けて表示する。"""
+    from .verdict import format_action_verdict_tag, parse_pass_condition
+
+    lines = [f"- [{mark}] {entry.id}"]
+    trigger, action = _split_action_trigger(humanize_action_body(entry.action))
+    if trigger:
+        lines.append(f"  - いつ: {trigger}")
+    lines.append(f"  - やる: {action}")
+    lines.append(f"  - 完了条件: 今日の予定分を実施して `kaizenlog done {entry.id}`")
+    if effect := format_effect_metric_clause(entry.action):
+        lines.append(f"  - 効果目標: {effect}")
+    shortfall = _denominator_shortfall_note(entry, stats_by_day)
+    if shortfall:
+        lines.append(f"  - 測定: 集計待ち（{shortfall}）")
+    else:
+        lines.append(
+            f"  - 測定: {format_action_verdict_tag(entry, thin_coverage=thin_coverage)}"
+        )
+    parsed = parse_pass_condition(entry.action)
+    if parsed is not None:
+        metric, _op, _target = parsed
+        latest_stats = stats_by_day.get(target_day.isoformat())
+        if scope := _metric_scope_note(metric, latest_stats):
+            lines.append(f"  - 因果の範囲: {scope}")
+    return lines
+
+
+def _monitoring_card_lines(
+    entry: MemoryEntry,
+    target_day: date,
+    stats_by_day: dict[str, Mapping[str, Any]],
+) -> list[str]:
+    """confirmed PASS後の指標だけを、実行カードと混ぜずに表示する。"""
+    trajectory = _post_verdict_trajectory(entry, target_day, stats_by_day)
+    if trajectory is None:
+        return []
+    latest = trajectory.observations[-1]
+    met_count = sum(point.met for point in trajectory.observations)
+    total = len(trajectory.observations)
+    lines = [f"- {entry.id}"]
+    lines.append(
+        f"  - 最新: {latest.day.month}/{latest.day.day} {latest.value:g} "
+        f"{'✅' if latest.met else '❌'}"
+    )
+    lines.append(
+        f"  - 直近{total}日: {met_count}/{total}達成・未達{total - met_count}日"
+        f"（目標 {trajectory.op} {trajectory.target:g}）"
+    )
+    latest_stats = stats_by_day.get(latest.day.isoformat())
+    if scope := _metric_scope_note(trajectory.metric, latest_stats):
+        lines.append(f"  - 集計範囲: {scope}")
+    if not latest.met:
+        lines.append("  - ⚠ 最新観測が目標未達です")
+    return lines
+
+
+def _status_and_all_lines(
+    stats: ActionStats,
+    buckets: OpenActionBuckets,
+    actionable: Sequence[MemoryEntry],
+    shown: Sequence[MemoryEntry],
+    monitoring: Sequence[MemoryEntry],
+) -> list[str]:
+    """週次の投与状況と省略した一覧への導線を最後に置く。"""
+    lines = ["## 🗂 状況・全件", ""]
+    if stats.proposed > 0 or stats.skipped > 0:
+        if stats.done == 0 and stats.proposed > 0:
+            summary = f"今週の提案は{stats.proposed}件（未チェックの実験が残っています）。"
+        elif (
+            stats.done_rate is not None
+            and stats.done_rate < _DOSING_DONE_RATE
+            and stats.proposed >= _DOSING_MIN_PROPOSED
+        ):
+            summary = f"今週は{stats.proposed}件提案し、チェック完了は{stats.done}件。"
+        else:
+            rate = _pct_label(stats.done_rate) if stats.done_rate is not None else "—"
+            summary = (
+                f"直近{stats.window_days}日は{stats.proposed}件提案し、"
+                f"チェック完了は{stats.done}件（完了率 {rate}）。"
+            )
+        if stats.skipped:
+            summary += f"スキップは{stats.skipped}件。"
+        if monitoring:
+            summary += f"指標達成済みは{len(monitoring)}件。"
+        lines.append(summary)
+
+    rest_recent = max(0, len(actionable) - len(shown))
+    lines.append(
+        f"ほか直近7日の未完了 {rest_recent}件"
+        f" / 8〜30日前 {len(buckets.stale)}件"
+        f" / 31日以上 {len(buckets.older)}件"
+    )
+    monitoring_extra = max(0, len(monitoring) - 2)
+    if monitoring_extra:
+        lines.append(f"ほか効果モニタリング {monitoring_extra}件")
+    lines.append("全件表示: `kaizenlog today --all`")
+    return lines
+
+
 def render_actions_section(
     entries: list[MemoryEntry],
     target_day: date,
@@ -1849,52 +1986,29 @@ def render_actions_section(
     *,
     max_candidates: int | None = None,
 ) -> str | None:
-    """翌日ノート用「今日のアクション」転記 Markdown。
-
-    対象は proposed かつ提案日が target_day-ACTIONS_HANDOFF_DAYS 〜 target_day-1。
-    チェックボックス本文は display_cap 件（既定1。低消化時は強制1。
-    max_candidates で上書き可だが低消化強制が優先。generation_cap とは別）。
-    0件なら None（既存セクションは消さない。ただし stale/older のみある場合は
-    件数案内セクションを返す）。
-    note_content に同じ KZN の [x] があればチェック状態を保持する。
-    stats_history を渡すと分母不足の「判定不成立」と判定後の実測推移を出す。
-    未指定なら現行出力のまま（後方互換）。
-    """
-    buckets = partition_open_actions(
-        entries, target_day, recent_include_today=False
-    )
+    """翌日ノートの実行・効果観測・目標を分離したACTIONS区間を返す。"""
+    buckets = partition_open_actions(entries, target_day, recent_include_today=False)
     if buckets.total == 0:
         return None
 
     checked_ids: set[str] = set()
     if note_content:
         for line in note_content.splitlines():
-            m = _CHECKBOX_RE.match(line)
-            if not m or m.group(2) not in ("x", "X"):
+            match = _CHECKBOX_RE.match(line)
+            if not match or match.group(2) not in ("x", "X"):
                 continue
-            id_match = ID_PATTERN.search(m.group(4))
+            id_match = ID_PATTERN.search(match.group(4))
             if id_match:
                 checked_ids.add(id_match.group(0))
 
-    lines = [
-        "## 📌 今日のアクション",
-        "前日までの改善提案の未完了アクション。完了したらチェック",
-    ]
-    # 北極星指標をノート上でも見えるようにする（CLI status と揃える）
     stats = compute_action_stats(entries, target_day)
-    # display_cap（表示）— generation_cap（advise 件数）とは独立
     candidate_cap = resolve_display_cap(stats, max_candidates=max_candidates)
-    streaks = compute_streaks(entries, target_day)
-    if streaks.current >= 2:
-        lines.append(f"🔥 連続{streaks.current}日")
-    elif streaks.broken_yesterday and streaks.best > 0:
-        lines.append(f"今日から再スタート（過去最長 {streaks.best}日）")
-
     stats_by_day = _stats_by_day(stats_history)
+    actionable, monitoring = split_action_candidates(buckets.recent, checked_ids)
+    shown = actionable[:candidate_cap]
 
-    def _thin_coverage_for(e: MemoryEntry) -> bool:
-        """§A3 表示: 未判定・生カウントで測定日が薄いとき True。"""
-        if e.verdict in ("pass", "fail"):
+    def _thin_coverage_for(entry: MemoryEntry) -> bool:
+        if entry.verdict in ("pass", "fail"):
             return False
         from .verdict import (
             _is_raw_count_metric,
@@ -1904,152 +2018,48 @@ def render_actions_section(
             parse_pass_condition,
         )
 
-        parsed = parse_pass_condition(e.action)
+        parsed = parse_pass_condition(entry.action)
         if parsed is None or not _is_raw_count_metric(parsed[0]):
             return False
-        md = measure_day_for_entry(e)
-        if md is None:
+        measure_day = measure_day_for_entry(entry)
+        if measure_day is None:
             return False
-        day_s = stats_by_day.get(md.isoformat())
-        if day_s is None:
+        day_stats = stats_by_day.get(measure_day.isoformat())
+        if day_stats is None:
             return False
-        tm = day_s.get("total_minutes")
-        day_total = float(tm) if isinstance(tm, (int, float)) else None
-        hist = list(stats_by_day.values())
-        prior = _prior_totals_from_history(
-            [dict(h) for h in hist], md
-        )
+        total_minutes = day_stats.get("total_minutes")
+        day_total = float(total_minutes) if isinstance(total_minutes, (int, float)) else None
+        prior = _prior_totals_from_history([dict(h) for h in stats_by_day.values()], measure_day)
         return _thin_measurement_coverage(day_total, prior)
 
-    def _action_line(e: MemoryEntry, mark: str) -> list[str]:
-        """§A1: 機械構文を平文化した1〜2行。台帳 action 文字列は変更しない。"""
-        from .verdict import format_action_verdict_tag
-
-        shortfall = _denominator_shortfall_note(e, stats_by_day)
-        if shortfall is not None:
-            body = humanize_action_body(e.action)
-            return [f"- [{mark}] {e.id}: {body}（{shortfall}）"]
-        tag = format_action_verdict_tag(e, thin_coverage=_thin_coverage_for(e))
-        return format_action_display_lines(e.id, e.action, mark=mark, tag=tag)
-
-    # 判定✅かつ未チェックは未完了リストから分離
-    pass_achieved = [
-        e
-        for e in buckets.recent
-        if (
-            e.verdict == "pass"
-            and e.verdict_stage == "confirmed"
-            and e.id not in checked_ids
-        )
-    ]
-    still_open = [
-        e
-        for e in buckets.recent
-        if not (
-            e.verdict == "pass"
-            and e.verdict_stage == "confirmed"
-            and e.id not in checked_ids
-        )
-    ]
-    # 表示順: 実行可能 → confirmed-fail → provisional（台帳非破壊）
-    still_open = order_still_open_for_display(still_open)
-    # display_cap 件だけ本文に出す（既定1・低消化強制1）
-    shown = still_open[:candidate_cap]
-
-    # 読者UX: スコアボードより先に「今日の実験」を置く
+    lines = [f"## 📌 今日やること（{len(shown)}件）", ""]
     if shown:
-        focus = humanize_action_body(shown[0].action)
-        focus_one = " ".join(focus.split())
-        if len(focus_one) > 60:
-            focus_one = focus_one[:59] + "…"
-        mins = _estimate_action_minutes_hint(shown[0].action)
-        if mins:
-            lines.append(f"今日の実験: {focus_one}（目安{mins}）")
-        else:
-            lines.append(f"今日の実験: {focus_one}")
-
-    # 週次サマリは補助（チェック0件を糾弾しない）
-    if stats.proposed > 0 or stats.skipped > 0:
-        skip_sentence = (
-            f"スキップは{stats.skipped}件。" if stats.skipped else ""
-        )
-        undone_sentence = (
-            f"うち{stats.undone_passed}件はチェックなしで指標が目標に達しています"
-            f"（習慣化するなら `kaizenlog today --all`）。"
-            if stats.undone_passed
-            else ""
-        )
-        if stats.done == 0 and stats.proposed > 0:
-            line = f"今週の提案は{stats.proposed}件（未チェックの実験が残っています）。"
-        elif (
-            stats.done_rate is not None
-            and stats.done_rate < _DOSING_DONE_RATE
-            and stats.proposed >= _DOSING_MIN_PROPOSED
-        ):
-            line = (
-                f"今週は{stats.proposed}件提案し、"
-                f"チェック完了は{stats.done}件。"
-            )
-        else:
-            rate = (
-                _pct_label(stats.done_rate)
-                if stats.done_rate is not None
-                else "—"
-            )
-            line = (
-                f"直近{stats.window_days}日は{stats.proposed}件提案し、"
-                f"チェック完了は{stats.done}件（完了率 {rate}）。"
-            )
-        if skip_sentence:
-            line = f"{line}{skip_sentence}"
-        if undone_sentence:
-            line = f"{line}{undone_sentence}"
-        lines.append(line)
-
-    for e in shown:
-        mark = "x" if e.id in checked_ids else " "
-        lines.extend(_action_line(e, mark))
-        lines.extend(_post_verdict_trajectory_lines(e, target_day, stats_by_day))
-    if shown:
-        # §D2: 完了導線
-        lines.append(f"完了したら: `kaizenlog done {shown[0].id}`")
-
-    if pass_achieved:
-        # §D1: 達成済みは個別行を出さず件数1行（件数は常に残す）
-        lines.append(
-            f"☑ 指標は達成済み {len(pass_achieved)}件"
-            f"（習慣化するなら `kaizenlog today --all`）"
-        )
-        # §Z2: 推移に ❌ がある達成済みだけ再表示（圧縮は維持）
-        regressed: list[tuple[MemoryEntry, list[str]]] = []
-        for e in pass_achieved:
-            traj = _post_verdict_trajectory_lines(e, target_day, stats_by_day)
-            if any("❌" in ln for ln in traj):
-                regressed.append((e, traj))
-        # 新しい順（ID 降順）
-        regressed.sort(key=lambda pair: pair[0].id, reverse=True)
-        if regressed:
-            lines.append("⚠ 達成済みだが指標が戻っています")
-            shown_reg = regressed[:2]
-            for e, traj in shown_reg:
-                lines.extend(_action_line(e, " "))
-                lines.extend(traj)
-            extra = len(regressed) - len(shown_reg)
-            if extra > 0:
-                lines.append(
-                    f"ほか {extra}件も推移に未達日があります"
-                    f"（`kaizenlog today --all`）"
+        for entry in shown:
+            mark = "x" if entry.id in checked_ids else " "
+            lines.extend(
+                _action_card_lines(
+                    entry,
+                    mark,
+                    target_day,
+                    stats_by_day,
+                    thin_coverage=_thin_coverage_for(entry),
                 )
+            )
+    else:
+        lines.append("- 今日の実行候補はありません")
 
-    rest_recent = max(0, len(still_open) - len(shown))
-    if rest_recent or buckets.stale or buckets.older or not shown:
-        if not shown and not pass_achieved:
-            hold = len(buckets.stale) + len(buckets.older)
-            lines.append(f"今日の候補なし。保留 {hold}件")
-        lines.append(
-            f"ほか直近7日の未完了 {rest_recent}件"
-            f" / 8〜30日前 {len(buckets.stale)}件"
-            f" / 31日以上 {len(buckets.older)}件"
-        )
-        lines.append("全件表示: `kaizenlog today --all`")
+    lines.extend(["", "## 📈 効果モニタリング（今日やることではない）", ""])
+    monitoring_cards = 0
+    for entry in monitoring[:2]:
+        card = _monitoring_card_lines(entry, target_day, stats_by_day)
+        if card:
+            lines.extend(card)
+            monitoring_cards += 1
+    if monitoring_cards == 0:
+        lines.append("- 確認できる効果モニタリングはありません")
+
+    lines.extend([""])
+    lines.extend(_goal_monitoring_lines(note_content))
+    lines.extend([""])
+    lines.extend(_status_and_all_lines(stats, buckets, actionable, shown, monitoring))
     return "\n".join(lines)
