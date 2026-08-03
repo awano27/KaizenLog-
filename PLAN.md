@@ -1066,3 +1066,9 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 - controllerによる独立full pytestは同commitで `1078 passed in 83.06s`、`compileall` と `git diff --check` は成功した。
 - reviewer fix後のfresh renderer検証では、実日誌のmanaged ACTIONSはすでにrenderer出力と完全一致したため再置換しなかった。現在の全文SHA-256は `d2a4fe3fd7f7138537d186b996280697f543be22103206c78d6e94aafab54c7c`、marker外SHA-256は現行baselineの `5da2f29758164463ebaff253e99ef63737051aea95d409deb6cd62b0a807570b`、改行は `0 CRLF / 216 LF`。
 - 現行baselineだけを今後のmarker外保護に用い、過去のSHA値は外部状態遷移のprovenanceとしてGraphへ保持する。最終fix、テスト、日誌検証は `C-ACTION-MONITOR-STATE-EXPLICIT-003`、`T-ACTION-MONITOR-FINAL-FULL-003`、`E-ACTION-MONITOR-FINAL-NOTE-003` に記録する。
+
+### Task 4 — push / CI evidence (2026-08-03 09:05 JST)
+
+- `cac4434c71a3029e0cb2f57277c7403dbd8af515` を `main` へ `git push origin main` し、push直後にローカル `HEAD` と `origin/main` が一致することを確認した。非所有の `.grok/` と `scripts/self_improve_graph.py` はstage・commitしていない。
+- push後のGitHub Actions `Tests` run `30773339593` は4 matrixすべてで `tests/test_intervention.py` の `test_detect_falls_back_to_block_titles`（17時期待→8時）と `test_window_rule_uses_hourly_limit`（1700-1800期待→0800-0900）に失敗し、各jobは `1075 passed, 2 failed, 1 skipped` だった。直前main `ac36e883` のrun `30769161006` も同じ2件に失敗し、今回の差分は `intervention.py` / `test_intervention.py` を含まないため、action monitoring変更の失敗とは評価しない。
+- ローカルの対象revisionでは全pytest `1078 passed in 86.25s`、`compileall`、`git diff --check` が成功している。CIのtimezone remediationは既存の承認待ち方針（`src/kaizenlog/intervention.py` 等を変更しない）を維持する。

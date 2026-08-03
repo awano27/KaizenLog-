@@ -3,7 +3,7 @@
   "graph_id": "kaizenlog-practical-journal-advice-2026-08-02",
   "goal": "日誌を30秒で判断でき、アドバイスを1〜3件の証拠に紐づく5〜15分のPASS/FAILマイクロアクションにする",
   "created_at": "2026-08-02T23:01:07+09:00",
-  "updated_at": "2026-08-03T08:50:22+09:00",
+  "updated_at": "2026-08-03T09:05:55+09:00",
   "loop": {
     "pattern": "generate-critique-revise",
     "critique_revise_limit": 2,
@@ -2294,6 +2294,66 @@
         "step": "action-clarity-final-fresh-note-verification",
         "timestamp": "2026-08-03T08:50:22+09:00"
       }
+    },
+    {
+      "id": "E-ACTION-MONITOR-PUSH-004",
+      "type": "Evidence",
+      "status": "verified",
+      "claim": "Graph Engineeringの実装・テスト・日誌検証を含むcac4434c71a3029e0cb2f57277c7403dbd8af515をmainへpushし、push直後にローカルHEADとorigin/mainが一致した。",
+      "data": {
+        "branch": "main",
+        "revision": "cac4434c71a3029e0cb2f57277c7403dbd8af515",
+        "push_command": "git push origin main",
+        "push_result": "ac36e88..cac4434 main -> main",
+        "local_head_equals_remote": true,
+        "remote": "origin"
+      },
+      "provenance": {
+        "sources": [
+          "git push origin main output",
+          "git rev-parse HEAD",
+          "git rev-parse origin/main"
+        ],
+        "step": "action-clarity-phase4-release-push",
+        "timestamp": "2026-08-03T09:05:55+09:00"
+      }
+    },
+    {
+      "id": "T-ACTION-MONITOR-CI-BASELINE-004",
+      "type": "TestResult",
+      "status": "failed-baseline",
+      "claim": "push後のGitHub Actions Tests run 30773339593は4 matrixすべてで既存のintervention timezoneテスト2件に失敗したが、対象差分にはintervention.pyが含まれず、直前mainのrun 30769161006も同じ失敗だった。",
+      "data": {
+        "workflow": "Tests",
+        "run_id": "30773339593",
+        "head_revision": "cac4434c71a3029e0cb2f57277c7403dbd8af515",
+        "matrix_jobs": 4,
+        "passed": 1075,
+        "failed": 2,
+        "skipped": 1,
+        "failing_tests": [
+          "tests/test_intervention.py::test_detect_falls_back_to_block_titles",
+          "tests/test_intervention.py::test_window_rule_uses_hourly_limit"
+        ],
+        "baseline_run_id": "30769161006",
+        "baseline_revision": "ac36e883266e3cd71ec248e819a168e6ff74598b",
+        "diff_excludes": [
+          "src/kaizenlog/intervention.py",
+          "tests/test_intervention.py"
+        ],
+        "local_full_pytest": "1078 passed in 86.25s",
+        "interpretation": "既存のCI timezone契約失敗。今回のaction monitoring差分の評価結果ではない。"
+      },
+      "provenance": {
+        "sources": [
+          "gh run view 30773339593 --log-failed",
+          "gh run list --branch main",
+          "git diff ac36e883266e3cd71ec248e819a168e6ff74598b..cac4434c71a3029e0cb2f57277c7403dbd8af515 --name-only",
+          "controller independent full pytest"
+        ],
+        "step": "action-clarity-phase4-release-ci-evaluation",
+        "timestamp": "2026-08-03T09:05:55+09:00"
+      }
     }
   ],
   "edges": [
@@ -4157,6 +4217,48 @@
         ],
         "step": "action-clarity-final-fresh-note-verification",
         "timestamp": "2026-08-03T08:50:22+09:00"
+      }
+    },
+    {
+      "id": "EDGE-134",
+      "source": "E-ACTION-MONITOR-PUSH-004",
+      "type": "supports",
+      "target": "C-ACTION-MONITOR-STATE-EXPLICIT-003",
+      "provenance": {
+        "sources": [
+          "E-ACTION-MONITOR-PUSH-004",
+          "C-ACTION-MONITOR-STATE-EXPLICIT-003"
+        ],
+        "step": "action-clarity-phase4-release-push",
+        "timestamp": "2026-08-03T09:05:55+09:00"
+      }
+    },
+    {
+      "id": "EDGE-135",
+      "source": "T-ACTION-MONITOR-CI-BASELINE-004",
+      "type": "derived-from",
+      "target": "F-CI-TIMEZONE-001",
+      "provenance": {
+        "sources": [
+          "T-ACTION-MONITOR-CI-BASELINE-004",
+          "F-CI-TIMEZONE-001"
+        ],
+        "step": "action-clarity-phase4-release-ci-evaluation",
+        "timestamp": "2026-08-03T09:05:55+09:00"
+      }
+    },
+    {
+      "id": "EDGE-136",
+      "source": "F-CI-TIMEZONE-001",
+      "type": "causes",
+      "target": "T-ACTION-MONITOR-CI-BASELINE-004",
+      "provenance": {
+        "sources": [
+          "F-CI-TIMEZONE-001",
+          "T-ACTION-MONITOR-CI-BASELINE-004"
+        ],
+        "step": "action-clarity-phase4-release-ci-evaluation",
+        "timestamp": "2026-08-03T09:05:55+09:00"
       }
     }
   ]
