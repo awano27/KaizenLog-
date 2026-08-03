@@ -1072,3 +1072,30 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 - `cac4434c71a3029e0cb2f57277c7403dbd8af515` を `main` へ `git push origin main` し、push直後にローカル `HEAD` と `origin/main` が一致することを確認した。非所有の `.grok/` と `scripts/self_improve_graph.py` はstage・commitしていない。
 - push後のGitHub Actions `Tests` run `30773339593` は4 matrixすべてで `tests/test_intervention.py` の `test_detect_falls_back_to_block_titles`（17時期待→8時）と `test_window_rule_uses_hourly_limit`（1700-1800期待→0800-0900）に失敗し、各jobは `1075 passed, 2 failed, 1 skipped` だった。直前main `ac36e883` のrun `30769161006` も同じ2件に失敗し、今回の差分は `intervention.py` / `test_intervention.py` を含まないため、action monitoring変更の失敗とは評価しない。
 - ローカルの対象revisionでは全pytest `1078 passed in 86.25s`、`compileall`、`git diff --check` が成功している。CIのtimezone remediationは既存の承認待ち方針（`src/kaizenlog/intervention.py` 等を変更しない）を維持する。
+
+## 2026-08-03 — デモ用理想日誌サンプル
+
+### Goal breakdown
+
+- `docs/examples/demo_daily_note.md` に、実データと混同しない固定Markdownの完成見本を追加する。
+- 人が30秒で「今日やること」「効果モニタリング」「日次目標」「日誌の価値」を読み取れる構成にする。
+- 現行の `kaizenlog:actions` 表示契約（checkboxは実行候補だけ、観測はcheckboxなし、未判定を推測しない）をサンプルへ反映する。
+
+### Dependencies and parallelizable work
+
+- README、2026-08-03 action-monitoring spec、`memory.py` の現行表示契約を読み、固定サンプルの文言を突合する。
+- サンプルMarkdown作成、Markdown構造検証、Graph/PLAN証拠追記は独立して確認できるが、共有ファイルの編集は直列で行う。
+
+### Risks and mitigations
+
+- 実データとの混同: frontmatterと本文冒頭に「架空のデモデータ」と明記し、実Vaultには書き込まない。
+- 見た目だけのサンプル: 1件の具体的行動、5〜15分、完了コマンド、効果目標、最新値・観測範囲・Unknown境界を必須にする。
+- renderer契約との乖離: actions marker、見出し、checkbox数、goal表示、`today --all`導線を現行仕様と照合する。
+
+### Acceptance criteria and tests
+
+- `docs/examples/demo_daily_note.md` が存在し、Markdownとして読める。
+- 今日のcheckboxが1件だけで、`いつ`、`やる`、所要時間、完了条件、効果目標、測定状態を含む。
+- 効果モニタリングはcheckboxなしで、最新値、直近観測、目標、集計範囲、FAIL/Unknown境界を含む。
+- 日次目標、Activity Log、日報ドラフト、明日のフォーカスが30秒導線に含まれる。
+- 実ActivityWatch、LLM、`generate`、`advise`、実Vault、GitHub Actionsは実行しない。

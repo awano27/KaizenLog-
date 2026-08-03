@@ -3,7 +3,7 @@
   "graph_id": "kaizenlog-practical-journal-advice-2026-08-02",
   "goal": "日誌を30秒で判断でき、アドバイスを1〜3件の証拠に紐づく5〜15分のPASS/FAILマイクロアクションにする",
   "created_at": "2026-08-02T23:01:07+09:00",
-  "updated_at": "2026-08-03T09:05:55+09:00",
+  "updated_at": "2026-08-03T12:00:38+09:00",
   "loop": {
     "pattern": "generate-critique-revise",
     "critique_revise_limit": 2,
@@ -2354,6 +2354,86 @@
         "step": "action-clarity-phase4-release-ci-evaluation",
         "timestamp": "2026-08-03T09:05:55+09:00"
       }
+    },
+    {
+      "id": "D-DEMO-JOURNAL-IDEAL-001",
+      "type": "DesignDecision",
+      "status": "approved",
+      "claim": "人へのデモでは、実データを使わない固定Markdownに30秒サマリー、今日の1アクション、効果モニタリング、日次目標、Activity Log、日報ドラフトを縦に配置し、最初の画面で価値を説明する。",
+      "data": {
+        "path": "docs/examples/demo_daily_note.md",
+        "approach": "static-markdown-rendered-view",
+        "synthetic_data": true,
+        "interactive_runtime_required": false,
+        "checkbox_action_cap": 1,
+        "monitoring_card_cap": 2
+      },
+      "provenance": {
+        "sources": [
+          "user approval of recommended fixed Markdown approach",
+          "docs/superpowers/specs/2026-08-03-action-monitoring-clarity-design.md",
+          "README rendered note example"
+        ],
+        "step": "demo-journal-design-approval",
+        "timestamp": "2026-08-03T12:00:38+09:00"
+      }
+    },
+    {
+      "id": "E-DEMO-JOURNAL-IDEAL-001",
+      "type": "Evidence",
+      "status": "verified",
+      "claim": "docs/examples/demo_daily_note.md は架空データであることを明示し、今日の実行checkboxを1件、checkboxなしの効果モニタリング2件、日次目標、Activity Log、日報ドラフト、明日のフォーカスを含む。",
+      "data": {
+        "path": "docs/examples/demo_daily_note.md",
+        "synthetic_banner": true,
+        "actions_marker_pair": 1,
+        "checkbox_count": 1,
+        "monitoring_cards": 2,
+        "daily_goal_present": true,
+        "activity_log_present": true,
+        "daily_report_present": true,
+        "tomorrow_focus_present": true,
+        "real_vault_modified": false
+      },
+      "provenance": {
+        "sources": [
+          "docs/examples/demo_daily_note.md",
+          "PowerShell structural inspection"
+        ],
+        "step": "demo-journal-sample-authoring",
+        "timestamp": "2026-08-03T12:00:38+09:00"
+      }
+    },
+    {
+      "id": "T-DEMO-JOURNAL-STRUCTURE-001",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "デモ日誌の構造検証は成功し、表示契約に必要な見出し・marker・checkbox数・Unknown境界が満たされ、実サービスを起動していない。",
+      "data": {
+        "path": "docs/examples/demo_daily_note.md",
+        "markdown_readable": true,
+        "required_headings": [
+          "30秒サマリー",
+          "今日やること（1件）",
+          "効果モニタリング（今日やることではない）",
+          "日次目標",
+          "Activity Log",
+          "日報ドラフト"
+        ],
+        "checkbox_count": 1,
+        "monitoring_checkbox_count": 0,
+        "unknown_state_present": true,
+        "external_services_started": false,
+        "vault_write_performed": false
+      },
+      "provenance": {
+        "sources": [
+          "PowerShell parser and structural assertions",
+          "git diff --check"
+        ],
+        "step": "demo-journal-sample-verification",
+        "timestamp": "2026-08-03T12:00:38+09:00"
+      }
     }
   ],
   "edges": [
@@ -4259,6 +4339,76 @@
         ],
         "step": "action-clarity-phase4-release-ci-evaluation",
         "timestamp": "2026-08-03T09:05:55+09:00"
+      }
+    },
+    {
+      "id": "EDGE-137",
+      "source": "D-DEMO-JOURNAL-IDEAL-001",
+      "type": "improves",
+      "target": "G-ACTION-SEPARATION-001",
+      "provenance": {
+        "sources": [
+          "D-DEMO-JOURNAL-IDEAL-001",
+          "G-ACTION-SEPARATION-001"
+        ],
+        "step": "demo-journal-design-approval",
+        "timestamp": "2026-08-03T12:00:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-138",
+      "source": "D-DEMO-JOURNAL-IDEAL-001",
+      "type": "improves",
+      "target": "G-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "D-DEMO-JOURNAL-IDEAL-001",
+          "G-GOAL-MONITORING-001"
+        ],
+        "step": "demo-journal-design-approval",
+        "timestamp": "2026-08-03T12:00:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-139",
+      "source": "D-DEMO-JOURNAL-IDEAL-001",
+      "type": "improves",
+      "target": "G-DAILY-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "D-DEMO-JOURNAL-IDEAL-001",
+          "G-DAILY-GOAL-MONITORING-001"
+        ],
+        "step": "demo-journal-design-approval",
+        "timestamp": "2026-08-03T12:00:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-140",
+      "source": "E-DEMO-JOURNAL-IDEAL-001",
+      "type": "supports",
+      "target": "D-DEMO-JOURNAL-IDEAL-001",
+      "provenance": {
+        "sources": [
+          "E-DEMO-JOURNAL-IDEAL-001",
+          "D-DEMO-JOURNAL-IDEAL-001"
+        ],
+        "step": "demo-journal-sample-authoring",
+        "timestamp": "2026-08-03T12:00:38+09:00"
+      }
+    },
+    {
+      "id": "EDGE-141",
+      "source": "T-DEMO-JOURNAL-STRUCTURE-001",
+      "type": "supports",
+      "target": "E-DEMO-JOURNAL-IDEAL-001",
+      "provenance": {
+        "sources": [
+          "T-DEMO-JOURNAL-STRUCTURE-001",
+          "E-DEMO-JOURNAL-IDEAL-001"
+        ],
+        "step": "demo-journal-sample-verification",
+        "timestamp": "2026-08-03T12:00:38+09:00"
       }
     }
   ]
