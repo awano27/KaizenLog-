@@ -115,10 +115,12 @@ from .experiments import (
     METRIC_DESCRIPTIONS,
     ExperimentError,
     baseline_median_from_stats,
+    build_experiments_section,
     compute_metric,
     create_experiment,
     detect_regressions,
     format_effect_size,
+    load_abtests,
     load_experiments,
     metric_from_stats,
     record_measurement,
@@ -343,15 +345,16 @@ def cmd_generate(
                             s = title_redactor(s)
                         s = s if len(s) <= 80 else s[:79] + "…"
                         subjs.append(s)
-                    outcome_git_payload.append(
-                        {
-                            "repo_label": st.repo_label,
-                            "commits": int(st.commits),
-                            "insertions": int(st.insertions),
-                            "deletions": int(st.deletions),
-                            "subjects": subjs,
-                        }
-                    )
+                    dirty = getattr(st, "dirty", None)
+                    payload_item = {
+                        "repo_label": st.repo_label,
+                        "commits": int(st.commits),
+                        "insertions": int(st.insertions),
+                        "deletions": int(st.deletions),
+                        "subjects": subjs,
+                        "dirty": dirty if isinstance(dirty, bool) else None,
+                    }
+                    outcome_git_payload.append(payload_item)
 
     # §S4: screenpipe で未突合 AI ブロックを補完（enabled かつキーあり時のみ）
     sp_cfg = getattr(cfg, "screenpipe", None)
@@ -830,19 +833,35 @@ def cmd_generate(
     # A2: 翌日ノートへ未完了アクションを転記（backfill で過去日を汚さない）
     _write_actions_handoff(cfg, store, day, list(by_id.values()))
 
-    # §A1/A2: 決定論 digest を generate でも書く（advise 失敗日でも冒頭サマリが出る）
+    # 委譲小節用: 当日除く最大14日（失敗時は baseline 用7日へフォールバック）
+    hist_14: list = []
     try:
-        written_stats = load_stats(cfg.stats_path, days=1, end_day=day)
+        hist_14 = [
+            item
+            for item in load_stats(cfg.stats_path, days=15, end_day=day)
+            if item.get("day") != day.isoformat()
+        ]
+    except Exception as hist_err:
+        print(
+            f"⚠️  14日履歴読込をスキップ: {type(hist_err).__name__}",
+            file=sys.stderr,
+        )
+        hist_14 = list(prior_for_baseline)
+
+    # §A1/A2: 決定論 digest を generate でも書く（advise 失敗日でも冒頭サマリが出る）
+    written_stats_list: list = []
+    try:
+        written_stats_list = load_stats(cfg.stats_path, days=1, end_day=day)
         _write_digest_for_day(
             cfg,
             store,
             day,
             source_status="verified",  # 直前に activity と stats を同一 run で書いた
-            current_stats=written_stats[0] if written_stats else None,
+            current_stats=written_stats_list[0] if written_stats_list else None,
             entries=list(by_id.values()),
             redactor=title_redactor,
             commit_stats=commit_stats,
-            stats_history=prior_for_baseline,
+            stats_history=hist_14 if hist_14 else prior_for_baseline,
             log_skips=True,
         )
     except Exception as dig_err:
@@ -853,6 +872,36 @@ def cmd_generate(
         )
         print(
             f"⚠️  digest 書き込みをスキップ: {type(dig_err).__name__}",
+            file=sys.stderr,
+        )
+
+    # 第51弾: 実験カルテ / 問いピッカー（当日）+ Resume Pack（翌日）
+    day_stats = written_stats_list[0] if written_stats_list else None
+    if day_stats is None:
+        try:
+            loaded = load_stats(cfg.stats_path, days=1, end_day=day)
+            day_stats = loaded[0] if loaded else None
+        except Exception:
+            day_stats = None
+    try:
+        _write_experiments_section(cfg, store, day)
+    except Exception as exp_err:
+        print(
+            f"⚠️  実験カルテをスキップ: {type(exp_err).__name__}",
+            file=sys.stderr,
+        )
+    try:
+        _write_reflect_section(cfg, store, day, day_stats, hist_14)
+    except Exception as ref_err:
+        print(
+            f"⚠️  問いピッカーをスキップ: {type(ref_err).__name__}",
+            file=sys.stderr,
+        )
+    try:
+        _write_resume_handoff(cfg, store, day, day_stats)
+    except Exception as res_err:
+        print(
+            f"⚠️  resume 転記をスキップ: {type(res_err).__name__}",
             file=sys.stderr,
         )
 
@@ -1009,6 +1058,10 @@ def _write_digest_for_day(
             _log_digest_skipped(cfg, day=day, reason=skip_reason)
         return False
 
+    editor_apps = list(
+        getattr(getattr(cfg, "delegation", None), "editor_apps", None)
+        or ["Code.exe", "code", "cursor", "devenv.exe"]
+    )
     digest_body = build_digest(
         dig_stats,
         entries,
@@ -1020,6 +1073,7 @@ def _write_digest_for_day(
         goal_achieved=goal_achieved,
         commit_stats=commit_stats,
         stats_history=stats_history,
+        editor_apps=editor_apps,
     )
     if digest_body:
         store.write_section(day, DIGEST_MARKER, digest_body, position="top")
@@ -1145,6 +1199,87 @@ def _write_actions_handoff(
         target, ACTIONS_MARKER, section, position=cfg.actions_position
     )
     print(f"📌 今日のアクションを転記しました: {path}")
+
+
+def _write_resume_handoff(
+    cfg: Config,
+    store: DailyNoteStore,
+    day: date,
+    stats: dict | None,
+) -> None:
+    """target=day+1 が今日以降のときだけ resume 区間を書く（前日 stats から）。"""
+    from .resume import build_resume_section
+    from .vault import ACTIONS_MARKER as _ACT_M
+    from .vault import RESUME_MARKER
+
+    today = datetime.now(ZoneInfo(cfg.timezone)).date()
+    target = day + timedelta(days=1)
+    if target < today:
+        return
+    if not isinstance(stats, dict):
+        return
+    day_note = store.read(day)
+    prev_actions = (
+        extract_section(day_note, _ACT_M) if day_note is not None else None
+    )
+    target_note = store.read(target)
+    existing = (
+        extract_section(target_note, RESUME_MARKER)
+        if target_note is not None
+        else None
+    )
+    section = build_resume_section(
+        stats,
+        prev_actions_content=prev_actions,
+        existing_resume=existing,
+        tz=ZoneInfo(cfg.timezone),
+    )
+    if not section:
+        return
+    path = store.write_section(target, RESUME_MARKER, section, position="top")
+    print(f"↩️  きのうの続きからを転記しました: {path}")
+
+
+def _write_experiments_section(
+    cfg: Config, store: DailyNoteStore, day: date
+) -> None:
+    """進行中実験の1行カルテを当日ノートへ（読み取り専用）。"""
+    from .vault import EXPERIMENTS_MARKER
+
+    experiments = load_experiments(cfg.experiments_path)
+    abtests = load_abtests(cfg.experiments_path)
+    section = build_experiments_section(experiments, abtests, today=day)
+    if not section:
+        return
+    path = store.write_section(day, EXPERIMENTS_MARKER, section, position="top")
+    print(f"🧪 進行中の実験を書き込みました: {path}")
+
+
+def _write_reflect_section(
+    cfg: Config,
+    store: DailyNoteStore,
+    day: date,
+    stats: dict | None,
+    stats_history: list | None,
+) -> None:
+    """夜の内省3問。回答済み区間は再生成しない。"""
+    from .reflect import build_reflect_section, has_reflect_answers
+    from .vault import REFLECT_MARKER
+
+    note = store.read(day)
+    existing = extract_section(note, REFLECT_MARKER) if note is not None else None
+    if has_reflect_answers(existing):
+        return
+    section = build_reflect_section(
+        stats,
+        stats_history,
+        today=day,
+        tz=ZoneInfo(cfg.timezone),
+    )
+    if not section:
+        return
+    path = store.write_section(day, REFLECT_MARKER, section, position="bottom")
+    print(f"✍️  今日の3行を書き込みました: {path}")
 
 
 # catch-up 失敗ログに提案本文・活動タイトル・プロンプトを残さない
@@ -1731,10 +1866,11 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
     if proposed_entries:
         print("🆔 アクションID: " + ", ".join(e.id for e in proposed_entries))
     # §B2: 冒頭 digest（失敗しても advise は成功扱い。日誌本体は触らない）
+    # 委譲小節は最大14日窓（days=15 − 当日）。baseline() は内部で7日に切る。
     try:
         prior_hist = [
             item
-            for item in load_stats(cfg.stats_path, days=8, end_day=day)
+            for item in load_stats(cfg.stats_path, days=15, end_day=day)
             if item.get("day") != day.isoformat()
         ]
         _write_digest_for_day(

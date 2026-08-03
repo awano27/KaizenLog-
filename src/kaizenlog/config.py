@@ -177,6 +177,15 @@ class EffortConfig:
 
 
 @dataclass
+class DelegationConfig:
+    """委譲プロファイル（DIGEST 末尾・決定論・既定 ON）。"""
+
+    editor_apps: list[str] = field(
+        default_factory=lambda: ["Code.exe", "code", "cursor", "devenv.exe"]
+    )
+
+
+@dataclass
 class HandoffConfig:
     """kaizenlog handoff の注入先（CLAUDE.md / AGENTS.md 等）。"""
 
@@ -225,6 +234,7 @@ class Config:
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     screenpipe: ScreenpipeConfig = field(default_factory=ScreenpipeConfig)
     effort: EffortConfig = field(default_factory=EffortConfig)
+    delegation: DelegationConfig = field(default_factory=DelegationConfig)
     handoff: HandoffConfig = field(default_factory=HandoffConfig)
     guard: GuardConfig = field(default_factory=GuardConfig)
     nippou: NippouConfig = field(default_factory=NippouConfig)
@@ -646,6 +656,16 @@ def load_config(path: str | None = None) -> Config:
                 effort.get("min_display_minutes"),
                 "effort.min_display_minutes",
             )
+
+    delegation = data.get("delegation", {})
+    if isinstance(delegation, dict):
+        if "editor_apps" in delegation:
+            apps = delegation.get("editor_apps")
+            if isinstance(apps, list):
+                cfg.delegation.editor_apps = [str(x) for x in apps]
+            elif apps is None:
+                cfg.delegation.editor_apps = []
+            # list 以外（文字列等）は既定値のまま（例外にしない）
 
     handoff = data.get("handoff", {})
     if isinstance(handoff, dict):

@@ -153,6 +153,25 @@ def _fmt_time(dt: datetime, tz: tzinfo) -> str:
     return dt.astimezone(tz).strftime("%H:%M")
 
 
+def hhmm_from_iso(value: object, tz: tzinfo | None = None) -> str | None:
+    """ISO 時刻文字列を HH:MM にする。tzinfo 付きは tz へ変換（naive はそのまま）。
+
+    resume / reflect など日誌の決定論時刻表示の共通ヘルパ。
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    s = value.strip()
+    try:
+        if len(s) == 10 and s[4] == "-" and s[7] == "-":
+            return None
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is not None and tz is not None:
+        dt = dt.astimezone(tz)
+    return dt.strftime("%H:%M")
+
+
 def _markdown_table_cell(value: object) -> str:
     """Markdown 表セル用に一行化し、| と制御文字を無害化する。"""
     text = " ".join(str(value).split())

@@ -695,6 +695,89 @@ def render_experiments_context(experiments: list[Experiment], max_points: int = 
     return "\n".join(lines)
 
 
+def experiment_day_progress(
+    start: date | None,
+    deadline: date | None,
+    today: date,
+) -> tuple[int, int] | None:
+    """n/N 日目を返す。start か deadline 欠落時は None。
+
+    開始日当日 = 1/N、deadline 当日 = N/N、期限超過は N/N のまま。
+    """
+    if start is None or deadline is None:
+        return None
+    total = (deadline - start).days + 1
+    if total < 1:
+        total = 1
+    n = (today - start).days + 1
+    if n < 1:
+        n = 1
+    if n > total:
+        n = total
+    return n, total
+
+
+def _fmt_metric_value(value: float) -> str:
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:g}"
+
+
+def build_experiments_section(
+    experiments: Sequence[Experiment],
+    abtests: Sequence["AbtestExperiment"],
+    *,
+    today: date,
+) -> str | None:
+    """進行中実験の1行カルテ。running 0件なら None（読み取り専用）。"""
+    lines_body: list[str] = []
+
+    for exp in experiments:
+        if exp.status != "running":
+            continue
+        progress = experiment_day_progress(exp.start, exp.deadline, today)
+        if progress is None:
+            continue
+        n, total = progress
+        today_val = exp.measurements.get(today)
+        if today_val is None:
+            today_part = "今日の値: 未測"
+        else:
+            today_part = f"今日の値: {_fmt_metric_value(today_val)}"
+        if exp.baseline is None:
+            base_part = "開始前基準線: 未記録"
+        else:
+            base_part = f"開始前基準線: {_fmt_metric_value(exp.baseline)}"
+        target_part = (
+            f"目標条件: {exp.metric} {exp.target_op} "
+            f"{_fmt_metric_value(exp.target_value)}"
+        )
+        metric_part = f"（metric: {exp.metric}）"
+        lines_body.append(
+            f"- {exp.title} — {n}/{total}日目｜{today_part}{metric_part}"
+            f"｜{base_part}｜{target_part}"
+        )
+
+    for ab in abtests:
+        if ab.status != "running":
+            continue
+        progress = experiment_day_progress(ab.start, ab.deadline, today)
+        if progress is None:
+            continue
+        n, total = progress
+        ab_id = getattr(ab, "id", None) or "abtest"
+        lines_body.append(
+            f"- abtest #{ab_id} — {n}/{total}日目｜status: running"
+            f"（AI利用日 {int(ab.sample_ai_days)}日"
+            f" / 非利用日 {int(ab.sample_non_ai_days)}日）"
+        )
+
+    if not lines_body:
+        return None
+    header = f"## 🧪 進行中の実験（{len(lines_body)}件）"
+    return header + "\n" + "\n".join(lines_body) + "\n"
+
+
 # ---- abtest（パーソナル METR） ----
 
 ABTEST_TYPE = "abtest"

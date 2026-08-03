@@ -108,7 +108,10 @@ WEEKLY_CONTEXT_MARKER = "kaizenlog:weekly-context"  # 週次スコアカード�
 AGENT_CONTEXT_MARKER = "kaizenlog:agent-context"  # handoff が CLAUDE.md/AGENTS.md へ注入
 COACH_MARKER = "kaizenlog:coach"  # coach --apply が追記する調教区間
 DIGEST_MARKER = "kaizenlog:digest"  # 冒頭30秒サマリ（決定論・generate/advise が所有）
+RESUME_MARKER = "kaizenlog:resume"  # きのうの続きから（決定論・generate が翌日ノートへ）
 EFFORT_MARKER = "kaizenlog:effort"  # 工数のつけ先（決定論・generate が所有）
+EXPERIMENTS_MARKER = "kaizenlog:experiments"  # 進行中の実験1行（決定論・generate が所有）
+REFLECT_MARKER = "kaizenlog:reflect"  # 夜の内省3問（決定論・generate が所有）
 MONTHLY_MARKER = "kaizenlog:monthly"  # 月次実績（決定論・monthly が所有）
 NIPPOU_MARKER = "kaizenlog:nippou"  # 日報ドラフト
 FOOTNOTES_MARKER = "kaizenlog:footnotes"  # 免責注釈の集約
@@ -116,13 +119,16 @@ FOOTNOTES_MARKER = "kaizenlog:footnotes"  # 免責注釈の集約
 # 日誌区間の正準順序（未知マーカー・手書き・frontmatter は触らない）
 SECTION_ORDER: tuple[str, ...] = (
     DIGEST_MARKER,
+    RESUME_MARKER,
     GOAL_MARKER,
     ACTIONS_MARKER,
     ADVICE_MARKER,
     NIPPOU_MARKER,
     EFFORT_MARKER,
+    EXPERIMENTS_MARKER,
     WEEKLY_CONTEXT_MARKER,
     ACTIVITY_MARKER,
+    REFLECT_MARKER,
     COACH_MARKER,
     FOOTNOTES_MARKER,
 )

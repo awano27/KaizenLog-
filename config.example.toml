@@ -49,6 +49,10 @@ base_url = "http://localhost:5600"
 # private_categories = ["エンタメ"]
 # min_display_minutes = 1.0
 
+# [delegation]
+# 委譲プロファイル（DIGEST 末尾「🤝 委譲の形」）のエディタ前景時間に使うアプリ名
+# editor_apps = ["Code.exe", "code", "cursor", "devenv.exe"]
+
 [aiwork]
 # Claude Codeのセッションログ（JSONL）から「AI作業の質」を集計する
 # 往復数・細切れセッション・ツールエラー・中断を検出し、改善提案の材料にする

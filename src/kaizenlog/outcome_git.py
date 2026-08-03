@@ -18,6 +18,7 @@ class RepoCommitStat:
     insertions: int
     deletions: int
     subjects: list[str] = field(default_factory=list)  # 新しい順・最大3・各80字
+    dirty: bool | None = None  # git status --porcelain（失敗時 None・旧 stats 互換）
 
 
 def _git_toplevel(path: Path, *, timeout: float, env: dict) -> Path | None:
@@ -44,6 +45,33 @@ def _git_toplevel(path: Path, *, timeout: float, env: dict) -> Path | None:
         return Path(root).resolve()
     except (OSError, RuntimeError):
         return None
+
+
+def _git_dirty(path: Path, *, timeout: float, env: dict) -> bool | None:
+    """`git --no-optional-locks status --porcelain` で未コミット有無。失敗時 None。"""
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(path),
+                "--no-optional-locks",
+                "status",
+                "--porcelain",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            shell=False,
+            env=env,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return bool((proc.stdout or "").strip())
 
 
 def collect_commit_stats(
@@ -120,6 +148,7 @@ def collect_commit_stats(
         if parsed is None:
             continue
         commits, ins, dels, subjects = parsed
+        dirty = _git_dirty(repo, timeout=timeout, env=env)
         out.append(
             RepoCommitStat(
                 repo_label=repo.name or "repo",
@@ -127,6 +156,7 @@ def collect_commit_stats(
                 insertions=ins,
                 deletions=dels,
                 subjects=subjects,
+                dirty=dirty,
             )
         )
     return out, omitted

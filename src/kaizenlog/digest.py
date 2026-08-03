@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import statistics
 from collections.abc import Collection, Mapping, Sequence
 from datetime import date, tzinfo
 from typing import Any, Callable
@@ -18,6 +19,8 @@ from .vault import (
     NIPPOU_MARKER,
     WEEKLY_CONTEXT_MARKER,
 )
+
+_DEFAULT_EDITOR_APPS = ("Code.exe", "code", "cursor", "devenv.exe")
 
 # digest 自身が生成する固定文言のみ評価語検査対象（外部由来は行ごとスキップ）
 _BANNED_EVAL = ("良い", "悪い", "改善")
@@ -98,6 +101,222 @@ def _friction_what_happened(d: Mapping[str, Any]) -> str:
     return f"{head} " + " — ".join(bits)
 
 
+def _normalize_app_key(name: str) -> str:
+    return str(name or "").strip().lower()
+
+
+def _editor_app_keys(editor_apps: Sequence[str] | None) -> set[str]:
+    apps = list(editor_apps) if editor_apps is not None else list(_DEFAULT_EDITOR_APPS)
+    return {_normalize_app_key(a) for a in apps if str(a).strip()}
+
+
+def _app_matches_editors(app: str, keys: set[str]) -> bool:
+    app_key = _normalize_app_key(app)
+    if not app_key:
+        return False
+    stem = app_key[:-4] if app_key.endswith(".exe") else app_key
+    return app_key in keys or stem in keys or f"{stem}.exe" in keys
+
+
+def editor_foreground_minutes(
+    stats: Mapping[str, Any],
+    editor_apps: Sequence[str] | None = None,
+) -> float | None:
+    """by_app からエディタ群の前景分を合計。キー無し/空/非該当は None。"""
+    by_app = stats.get("by_app")
+    if not isinstance(by_app, Mapping) or not by_app:
+        return None
+    keys = _editor_app_keys(editor_apps)
+    if not keys:
+        return None
+    total = 0.0
+    matched = False
+    for app, mins in by_app.items():
+        if not _app_matches_editors(str(app), keys):
+            continue
+        try:
+            total += float(mins or 0)
+        except (TypeError, ValueError):
+            continue
+        matched = True
+    return total if matched else None
+
+
+def _session_digest_list(stats: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    ai = stats.get("ai")
+    if not isinstance(ai, Mapping):
+        return []
+    digests = ai.get("session_digests")
+    if not isinstance(digests, list):
+        return []
+    return [d for d in digests if isinstance(d, Mapping)]
+
+
+def _sum_edits_turns(stats: Mapping[str, Any]) -> tuple[int, int]:
+    edits = 0
+    turns = 0
+    for d in _session_digest_list(stats):
+        try:
+            edits += int(d.get("edits") or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            turns += int(d.get("user_turns") or 0)
+        except (TypeError, ValueError):
+            pass
+    return edits, turns
+
+
+def _sum_commits(stats: Mapping[str, Any]) -> int:
+    og = stats.get("outcome_git")
+    if not isinstance(og, list):
+        return 0
+    total = 0
+    for item in og:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            total += int(item.get("commits") or 0)
+        except (TypeError, ValueError):
+            pass
+    return total
+
+
+def _sum_tests_run(stats: Mapping[str, Any]) -> int:
+    n = 0
+    for d in _session_digest_list(stats):
+        if d.get("tests_run"):
+            n += 1
+    return n
+
+
+def _median_of(values: list[float]) -> float | None:
+    if len(values) < 3:
+        return None
+    window = values[-14:] if len(values) > 14 else values
+    return float(statistics.median(window))
+
+
+def _window_median_label(n_days: int) -> str:
+    """実履歴窓長に合わせた中央値ラベル（14未満なら N日、最大14）。"""
+    n = max(0, min(14, int(n_days)))
+    return f"{n}日中央値"
+
+
+def build_delegation_subsection(
+    stats: Mapping[str, Any],
+    stats_history: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    today: date,
+    editor_apps: Sequence[str] | None = None,
+) -> str | None:
+    """DIGEST 末尾の「🤝 委譲の形」。出せる行が0なら None。"""
+    today_s = today.isoformat()
+    prior = [
+        h
+        for h in (stats_history or [])
+        if isinstance(h, Mapping) and str(h.get("day") or "") != today_s
+    ]
+    # 直近14日（呼び出し側が14日未満を渡した場合はその長さが窓）
+    if len(prior) > 14:
+        prior = prior[-14:]
+    window_n = len(prior)
+    med_label = _window_median_label(window_n)
+
+    lines: list[str] = []
+
+    # エディタ前景時間
+    ed_mins = editor_foreground_minutes(stats, editor_apps)
+    if ed_mins is not None:
+        hist_vals: list[float] = []
+        for h in prior:
+            v = editor_foreground_minutes(h, editor_apps)
+            if v is not None:
+                hist_vals.append(v)
+        med = _median_of(hist_vals)
+        if med is not None:
+            lines.append(
+                f"- エディタ前景時間: {_fmt_minutes(ed_mins)}"
+                f"（{med_label} {_fmt_minutes(med)}）"
+            )
+        else:
+            lines.append(f"- エディタ前景時間: {_fmt_minutes(ed_mins)}")
+        # 脚注（行頭 ※ → consolidate_disclaimers が集約）
+        lines.append(
+            "※ エディタ前景時間であり、手作業の直接計測ではありません"
+            "（閲覧・IDE内AI・統合ターミナルを含む）"
+        )
+
+    # AI編集 / コミット
+    edits, turns = _sum_edits_turns(stats)
+    commits = _sum_commits(stats)
+    has_ai = bool(_session_digest_list(stats))
+    if has_ai or commits > 0 or edits > 0:
+        if commits > 0:
+            ratio = edits / commits
+            ratio_s = f"{ratio:.1f}" if not float(ratio).is_integer() else str(int(ratio))
+            lines.append(
+                f"- AI編集イベント: {edits}件 / コミット {commits}件（日次総計比 {ratio_s}）"
+            )
+        else:
+            lines.append(f"- AI編集イベント: {edits}件 / コミット {commits}件")
+
+    # 往復→成果
+    if has_ai and turns > 0:
+        tests_n = _sum_tests_run(stats)
+        per = edits / turns
+        per_s = f"{per:.1f}"
+        hist_per: list[float] = []
+        for h in prior:
+            e, t = _sum_edits_turns(h)
+            if t > 0:
+                hist_per.append(e / t)
+        med_per = _median_of(hist_per)
+        if med_per is not None:
+            med_s = f"{med_per:.1f}"
+            lines.append(
+                f"- 往復→成果: {turns}往復で edits {edits}・テスト実行 {tests_n}回"
+                f"（往復あたり edits {per_s}、{med_label} {med_s}）"
+            )
+        else:
+            lines.append(
+                f"- 往復→成果: {turns}往復で edits {edits}・テスト実行 {tests_n}回"
+                f"（往復あたり edits {per_s}）"
+            )
+    elif has_ai and turns == 0:
+        # 分母0は比を出さない。セッションはあるが turns 0 のとき省略（仕様: 分母0は省略）
+        pass
+
+    # 入力統計
+    inp = stats.get("input")
+    if isinstance(inp, Mapping):
+        try:
+            kp = int(inp.get("keypresses") or 0)
+        except (TypeError, ValueError):
+            kp = 0
+        try:
+            aim = float(inp.get("active_input_minutes") or 0)
+        except (TypeError, ValueError):
+            aim = 0.0
+        lines.append(
+            f"- 入力統計: keypresses {kp} / active_input {_fmt_minutes(aim)}"
+        )
+    else:
+        # by_app か AI が何か出せている日だけ欠測行を付ける
+        if lines:
+            lines.append("- 入力統計: 欠測（aw-watcher-input 未導入日）")
+
+    if not lines:
+        return None
+
+    # エディタ脚注行を本文リストから分離して末尾に
+    body = [ln for ln in lines if not ln.startswith("※")]
+    notes = [ln for ln in lines if ln.startswith("※")]
+    # §R8: ### 直前に空行（out 先頭の "" が本文との間に1行）
+    out = ["", "### 🤝 委譲の形（14日）", *body, *notes]
+    return "\n".join(out)
+
+
 def build_digest(
     stats: Mapping[str, Any] | None,
     entries: Sequence[MemoryEntry],
@@ -110,6 +329,7 @@ def build_digest(
     goal_achieved: int | None = None,
     commit_stats: Sequence[Any] | None = None,
     stats_history: Sequence[Mapping[str, Any]] | None = None,
+    editor_apps: Sequence[str] | None = None,
 ) -> str | None:
     """当日 verified stats から決定論サマリを組み立てる。
 
@@ -308,4 +528,14 @@ def build_digest(
     body_lines = [ln for ln in lines if ln.startswith("- ")]
     if not body_lines:
         return None
+
+    # §B: 委譲プロファイル（既存30秒サマリ行は不変・末尾にのみ追加）
+    delegation = build_delegation_subsection(
+        stats,
+        history,
+        today=today,
+        editor_apps=editor_apps,
+    )
+    if delegation:
+        return "\n".join(lines) + delegation + "\n"
     return "\n".join(lines) + "\n"
