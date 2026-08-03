@@ -692,6 +692,13 @@ def test_c2_change_table_omits_missing_metrics_and_absent_previous_day() -> None
 def test_c2_cmd_generate_uses_only_calendar_previous_stats_and_hashes_written_section(tmp_path, monkeypatch) -> None:
     from kaizenlog import cli as cli_mod
 
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 8, 2, 12, 0, tzinfo=tz or timezone.utc)
+
+    monkeypatch.setattr(cli_mod, "datetime", FixedDateTime)
+
     for name in ("notes", "stats", "mem", "logs", "exp"):
         (tmp_path / name).mkdir()
     cfg = Config(
