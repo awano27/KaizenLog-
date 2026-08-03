@@ -240,6 +240,9 @@ def test_b1_delegation_appended_digest_core_unchanged():
     )
     assert core is not None
     assert "🤝 委譲の形" in core
+    # 見出しに窓表記を埋め込まない（中央値行だけが N日 を持つ）
+    assert "### 🤝 委譲の形（" not in core
+    assert "### 🤝 委譲の形\n" in core or "### 🤝 委譲の形\r\n" in core
     # 30秒サマリ既存行
     assert "稼働" in core
     assert "ムダ上位" in core
@@ -247,6 +250,8 @@ def test_b1_delegation_appended_digest_core_unchanged():
     assert core.index("30秒サマリ") < core.index("委譲の形")
     # 脚注文
     assert "手作業の直接計測ではありません" in core
+    # §S1: 連結後文字列で委譲見出し直前に空行1行
+    assert "\n\n### 🤝 委譲の形" in core
 
 
 def test_b2_input_missing_shows_欠測():
@@ -274,7 +279,8 @@ def test_b3_history_under_3_no_median():
     sub = build_delegation_subsection(stats, hist, today=DAY)
     assert sub is not None
     assert "エディタ前景時間:" in sub
-    assert "14日中央値" not in sub.split("往復")[0]  # エディタ行に中央値なし
+    # 最小3日未満は中央値非表示（「N日中央値」形式が一切出ない）
+    assert "日中央値" not in sub
 
 
 def test_b4_zero_denominator_no_ratio():
@@ -423,16 +429,35 @@ def test_d2_answers_preserved_byte_equal(tmp_path: Path):
     assert has_reflect_answers(answered)
 
     store = DailyNoteStore(tmp_path / "01 Daily Notes")
+    # 手書き + GOAL を先に置き、reflect 再書き込みで区間外が不変であることを検証
+    seed = (
+        "---\ndate: 2026-08-02\n---\n\n"
+        "手書きメモ reflect-keep\n"
+    )
+    seed = upsert_section(seed, GOAL_MARKER, "## 🎯 目標\n- 手書き目標\n")
+    store.path_for(DAY).parent.mkdir(parents=True, exist_ok=True)
+    store.path_for(DAY).write_text(seed, encoding="utf-8")
     store.write_section(DAY, REFLECT_MARKER, answered)
     before = store.read(DAY) or ""
     before_sec = extract_section(before, REFLECT_MARKER)
     assert before_sec is not None
 
+    def _outside(text: str) -> str:
+        start = f"<!-- {REFLECT_MARKER}:start -->"
+        end = f"<!-- {REFLECT_MARKER}:end -->"
+        si, ei = text.find(start), text.find(end)
+        if si >= 0 and ei > si:
+            return text[:si] + text[ei + len(end) :]
+        return text
+
     cfg = Config(vault_dir=tmp_path, timezone="Asia/Tokyo")
     # 実経路: 回答ありなら再生成しない
     _write_reflect_section(cfg, store, DAY, stats, [])
-    after_sec = extract_section(store.read(DAY) or "", REFLECT_MARKER)
+    after = store.read(DAY) or ""
+    after_sec = extract_section(after, REFLECT_MARKER)
     assert after_sec == before_sec
+    assert _outside(before) == _outside(after)
+    assert "手書きメモ reflect-keep" in after
     assert "手で直した" in (after_sec or "")
     pairs = read_reflect_answers(after_sec)
     assert pairs
@@ -504,9 +529,15 @@ def test_e_section_order_and_finalize_idempotent(tmp_path: Path):
         today=DAY,
     )
     assert digest and resume and reflect and exp
+    # max_inline=1 超過を確実化: 委譲の ※ に加え2本目を置く → FOOTNOTES へ集約
+    digest = digest.rstrip() + "\n※ 第二の注記（脚注集約検証用）\n"
 
-    content = "---\ndate: 2026-08-02\n---\n\n手書き\n"
-    content = upsert_section(content, ACTIVITY_MARKER, "## act\n")
+    # 手書きは ACTIVITY 内へ（区間外の自由文は FOOTNOTES 挿入と reorder の
+    # 相互作用で 2 回目に位置がずれうるため、冪等検証ではマーカー内に置く）
+    content = "---\ndate: 2026-08-02\n---\n\n"
+    content = upsert_section(
+        content, ACTIVITY_MARKER, "## act\n手書きメモ keep-in-activity\n"
+    )
     content = upsert_section(content, DIGEST_MARKER, digest, position="top")
     content = upsert_section(content, RESUME_MARKER, resume, position="top")
     content = upsert_section(content, EXPERIMENTS_MARKER, exp, position="top")
@@ -522,7 +553,7 @@ def test_e_section_order_and_finalize_idempotent(tmp_path: Path):
     _finalize_note_layout(store, DAY)
     twice = store.read(DAY) or ""
     assert once == twice
-    assert "手書き" in twice
+    assert "手書きメモ keep-in-activity" in twice
     assert twice.index(DIGEST_MARKER) < twice.index(RESUME_MARKER)
     assert twice.index(EFFORT_MARKER) < twice.index(EXPERIMENTS_MARKER)
     assert twice.index(ACTIVITY_MARKER) < twice.index(REFLECT_MARKER)
@@ -531,11 +562,13 @@ def test_e_section_order_and_finalize_idempotent(tmp_path: Path):
     fn_sec = extract_section(twice, FOOTNOTES_MARKER) or ""
     assert "委譲の形" in dig_sec
     assert "エディタ前景時間" in dig_sec
-    # max_inline=1 で ※ 1本は DIGEST 内に残る（FOOTNOTES へは出ない）
+    assert "### 🤝 委譲の形（" not in dig_sec
+    # 1本目の ※ は DIGEST に残り、2本目は FOOTNOTES 定義へ
     assert "手作業の直接計測ではありません" in dig_sec
-    # 2本目の ※ が無いため FOOTNOTES は空でも可。ある場合は定義形式
-    if fn_sec.strip():
-        assert re.search(r"^\[\^\d+\]:", fn_sec, re.MULTILINE)
+    assert fn_sec.strip(), "FOOTNOTES 区間が空（2本目の ※ が集約されていない）"
+    assert re.search(r"^\[\^\d+\]:", fn_sec, re.MULTILINE)
+    assert "第二の注記（脚注集約検証用）" in fn_sec
+    assert re.search(r"\[\^\d+\]", dig_sec)
 
 
 def test_delegation_config_defaults():

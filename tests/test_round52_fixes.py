@@ -140,12 +140,16 @@ def test_r2_label_14_days():
     assert sub is not None
     assert "14日中央値" in sub
     assert "5日中央値" not in sub
+    assert "### 🤝 委譲の形（" not in sub
+    assert "### 🤝 委譲の形" in sub
     # 30秒サマリは不変（委譲は末尾のみ）
     core = build_digest(stats, [], today=DAY, redactor=None, stats_history=hist)
     assert core is not None
     head = core.split("### 🤝")[0]
     assert "稼働" in head
     assert "14日中央値" not in head  # 先頭部は7日ラベルのまま
+    assert "\n\n### 🤝 委譲の形" in core
+    assert "### 🤝 委譲の形（" not in core
 
 
 def test_r2_label_5_days():
@@ -164,6 +168,8 @@ def test_r2_label_5_days():
     assert sub is not None
     assert "5日中央値" in sub
     assert "14日中央値" not in sub
+    assert "### 🤝 委譲の形（" not in sub
+    assert "### 🤝 委譲の形" in sub
 
 
 # ---------------------------------------------------------------------------

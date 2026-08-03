@@ -312,8 +312,9 @@ def build_delegation_subsection(
     # エディタ脚注行を本文リストから分離して末尾に
     body = [ln for ln in lines if not ln.startswith("※")]
     notes = [ln for ln in lines if ln.startswith("※")]
-    # §R8: ### 直前に空行（out 先頭の "" が本文との間に1行）
-    out = ["", "### 🤝 委譲の形（14日）", *body, *notes]
+    # ### 直前の空行: "\n".join(lines) + delegation で先頭 "" が1改行分しか
+    # 寄与しないため、空要素を2つ置いて最終出力に \n\n を確保する
+    out = ["", "", "### 🤝 委譲の形", *body, *notes]
     return "\n".join(out)
 
 
