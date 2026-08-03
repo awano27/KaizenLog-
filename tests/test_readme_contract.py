@@ -49,7 +49,7 @@ def test_readme_local_targets_exist():
     assert missing == []
 
 
-def test_readme_html_images_reference_the_four_landing_assets():
+def test_readme_html_images_reference_the_landing_assets():
     text = README.read_text(encoding="utf-8")
     sources = HTML_IMG_SRC_RE.findall(text)
     local_sources = [
@@ -57,9 +57,11 @@ def test_readme_html_images_reference_the_four_landing_assets():
     ]
     expected = {
         "./assets/readme/hero.svg",
+        "./assets/readme/slide-overview.png",
         "./assets/readme/section-start.svg",
+        "./assets/readme/slide-pipeline.png",
         "./assets/readme/section-loop.svg",
-        "./assets/readme/workflow.svg",
+        "./assets/readme/slide-benefits.png",
     }
 
     assert len(local_sources) == len(expected)
@@ -115,7 +117,7 @@ def test_readme_keeps_m365_as_an_unimplemented_plan():
 
 
 def test_readme_svg_assets_are_well_formed_and_self_contained():
-    for name in ("hero.svg", "section-start.svg", "section-loop.svg", "workflow.svg"):
+    for name in ("hero.svg", "section-start.svg", "section-loop.svg"):
         path = ROOT / "assets" / "readme" / name
         ET.parse(path)
         text = path.read_text(encoding="utf-8")
