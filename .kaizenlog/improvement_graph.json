@@ -3,7 +3,7 @@
   "graph_id": "kaizenlog-practical-journal-advice-2026-08-02",
   "goal": "日誌を30秒で判断でき、アドバイスを1〜3件の証拠に紐づく5〜15分のPASS/FAILマイクロアクションにする",
   "created_at": "2026-08-02T23:01:07+09:00",
-  "updated_at": "2026-08-03T12:25:07+09:00",
+  "updated_at": "2026-08-03T12:48:39+09:00",
   "loop": {
     "pattern": "generate-critique-revise",
     "critique_revise_limit": 2,
@@ -2517,6 +2517,83 @@
         "step": "demo-journal-feature-story-verification",
         "timestamp": "2026-08-03T12:25:07+09:00"
       }
+    },
+    {
+      "id": "D-DEMO-JOURNAL-RELEASE-STORY-003",
+      "type": "DesignDecision",
+      "status": "approved",
+      "claim": "デモ日誌の最上位目標を『改善効果カードを含むKaizenLog v1.6.0のリリース候補完成』にし、5項目のRelease Checkと公開未実施の境界で完了状態を説明する。",
+      "data": {
+        "path": "docs/examples/demo_daily_note.md",
+        "release_version": "1.6.0",
+        "release_state": "candidate_complete_publication_pending",
+        "release_check_total": 5,
+        "release_check_passed": 5,
+        "publication_pending": [
+          "GitHub tag",
+          "GitHub Release",
+          "PyPI publication"
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "user request to make the goal clearer as a KaizenLog release",
+          "user approval of the v1.6.0 release-candidate wording",
+          "docs/superpowers/plans/2026-08-03-demo-daily-note-release-story.md"
+        ],
+        "step": "demo-journal-release-story-design",
+        "timestamp": "2026-08-03T12:48:39+09:00"
+      }
+    },
+    {
+      "id": "E-DEMO-JOURNAL-RELEASE-STORY-003",
+      "type": "Evidence",
+      "status": "verified",
+      "claim": "改訂後のデモ日誌は、v1.6.0リリース候補、Release Check 5/5、完了済み10分アクション、改善効果カード、作業内訳、架空成果、公開未実施、翌日の公開手順を同一ストーリーとして表示する。",
+      "data": {
+        "path": "docs/examples/demo_daily_note.md",
+        "fictional_release_disclaimer": true,
+        "release_goal_present": true,
+        "release_check_5_of_5": true,
+        "completed_action_count": 1,
+        "monitoring_checkbox_count": 0,
+        "public_release_claimed": false,
+        "real_release_performed": false
+      },
+      "provenance": {
+        "sources": [
+          "docs/examples/demo_daily_note.md",
+          "PowerShell release-story consistency inspection"
+        ],
+        "step": "demo-journal-release-story-authoring",
+        "timestamp": "2026-08-03T12:48:39+09:00"
+      }
+    },
+    {
+      "id": "T-DEMO-JOURNAL-RELEASE-STORY-003",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "リリースストーリーの構造検証は、目標文、5項目PASS、公開未実施3項目、checkbox境界、marker、Graph整合性、差分品質を満たした。",
+      "data": {
+        "path": "docs/examples/demo_daily_note.md",
+        "required_goal": "改善効果カードを含むKaizenLog v1.6.0のリリース候補を完成させる",
+        "release_check_pass_lines": 5,
+        "publication_pending_items": 3,
+        "checkbox_count": 1,
+        "monitoring_checkbox_count": 0,
+        "actions_marker_pairs": 1,
+        "graph_json_valid": true,
+        "external_release_performed": false
+      },
+      "provenance": {
+        "sources": [
+          "PowerShell semantic and structural assertions",
+          "Graph ID, type, provenance, and dangling-edge validation",
+          "git diff --check"
+        ],
+        "step": "demo-journal-release-story-verification",
+        "timestamp": "2026-08-03T12:48:39+09:00"
+      }
     }
   ],
   "edges": [
@@ -4576,6 +4653,90 @@
         ],
         "step": "demo-journal-feature-story-verification",
         "timestamp": "2026-08-03T12:25:07+09:00"
+      }
+    },
+    {
+      "id": "EDGE-148",
+      "source": "D-DEMO-JOURNAL-RELEASE-STORY-003",
+      "type": "derived-from",
+      "target": "D-DEMO-JOURNAL-FEATURE-STORY-002",
+      "provenance": {
+        "sources": [
+          "D-DEMO-JOURNAL-RELEASE-STORY-003",
+          "D-DEMO-JOURNAL-FEATURE-STORY-002"
+        ],
+        "step": "demo-journal-release-story-design",
+        "timestamp": "2026-08-03T12:48:39+09:00"
+      }
+    },
+    {
+      "id": "EDGE-149",
+      "source": "D-DEMO-JOURNAL-RELEASE-STORY-003",
+      "type": "improves",
+      "target": "G-ACTION-SEPARATION-001",
+      "provenance": {
+        "sources": [
+          "D-DEMO-JOURNAL-RELEASE-STORY-003",
+          "G-ACTION-SEPARATION-001"
+        ],
+        "step": "demo-journal-release-story-design",
+        "timestamp": "2026-08-03T12:48:39+09:00"
+      }
+    },
+    {
+      "id": "EDGE-150",
+      "source": "D-DEMO-JOURNAL-RELEASE-STORY-003",
+      "type": "improves",
+      "target": "G-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "D-DEMO-JOURNAL-RELEASE-STORY-003",
+          "G-GOAL-MONITORING-001"
+        ],
+        "step": "demo-journal-release-story-design",
+        "timestamp": "2026-08-03T12:48:39+09:00"
+      }
+    },
+    {
+      "id": "EDGE-151",
+      "source": "D-DEMO-JOURNAL-RELEASE-STORY-003",
+      "type": "improves",
+      "target": "G-DAILY-GOAL-MONITORING-001",
+      "provenance": {
+        "sources": [
+          "D-DEMO-JOURNAL-RELEASE-STORY-003",
+          "G-DAILY-GOAL-MONITORING-001"
+        ],
+        "step": "demo-journal-release-story-design",
+        "timestamp": "2026-08-03T12:48:39+09:00"
+      }
+    },
+    {
+      "id": "EDGE-152",
+      "source": "E-DEMO-JOURNAL-RELEASE-STORY-003",
+      "type": "supports",
+      "target": "D-DEMO-JOURNAL-RELEASE-STORY-003",
+      "provenance": {
+        "sources": [
+          "E-DEMO-JOURNAL-RELEASE-STORY-003",
+          "D-DEMO-JOURNAL-RELEASE-STORY-003"
+        ],
+        "step": "demo-journal-release-story-authoring",
+        "timestamp": "2026-08-03T12:48:39+09:00"
+      }
+    },
+    {
+      "id": "EDGE-153",
+      "source": "T-DEMO-JOURNAL-RELEASE-STORY-003",
+      "type": "supports",
+      "target": "E-DEMO-JOURNAL-RELEASE-STORY-003",
+      "provenance": {
+        "sources": [
+          "T-DEMO-JOURNAL-RELEASE-STORY-003",
+          "E-DEMO-JOURNAL-RELEASE-STORY-003"
+        ],
+        "step": "demo-journal-release-story-verification",
+        "timestamp": "2026-08-03T12:48:39+09:00"
       }
     }
   ]
