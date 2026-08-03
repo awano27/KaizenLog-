@@ -20,6 +20,7 @@
 </p>
 
 <p align="center">
+  <a href="#-これは何をするツールか">概要</a> ·
   <a href="#-手に入るもの">手に入るもの</a> ·
   <a href="#-3コマンドで始める">3コマンドで始める</a> ·
   <a href="#-毎日の使い方">毎日の使い方</a> ·
@@ -27,6 +28,16 @@
   <a href="#-llm-とデータの扱い">データの扱い</a> ·
   <a href="docs/USAGE.md">全コマンド</a>
 </p>
+
+---
+
+## 🧭 これは何をするツールか
+
+<p align="center">
+  <img src="./assets/readme/slide-overview.png" width="100%" alt="KaizenLogとは — PC作業ログ / AI利用ログ / 日次メモ を集約し、日報Markdown・改善ポイント・次のアクションを出す">
+</p>
+
+> 図は概念の整理です。監視ではなく**自分の振り返り**のためのツールで、生産性の点数付けはしません。
 
 ---
 
@@ -124,8 +135,10 @@ kaizenlog generate --date 2026-08-02     # 3. その日の日誌を作る（LLM 
 AI を使わない日でも、日誌と工数の下書きは作れます。
 
 <p align="center">
-  <img src="./assets/readme/workflow.svg" width="100%" alt="ActivityWatch → KaizenLog → Obsidian（必要なら LLM 提案）">
+  <img src="./assets/readme/slide-pipeline.png" width="100%" alt="収集 → 解析 → 要約 → 保存 → 改善 のパイプライン">
 </p>
+
+> ③ の「要約」はコードによる決定論の集計です。文章での改善提案だけが任意の LLM を使います。
 
 ```powershell
 # 朝（任意）
@@ -272,6 +285,16 @@ M365 Copilot は、会話の自動取得、Microsoft Graph／テナント連携�
 - 更新するのは管理マーカー区間だけです。
 
 詳細は [プライバシー](docs/USAGE.md#プライバシーについて) を参照してください。
+
+---
+
+## 💠 向いている使い方と注意点
+
+<p align="center">
+  <img src="./assets/readme/slide-benefits.png" width="100%" alt="導入メリットと注意点 — 作業の見える化・AI活用の振り返り・ナレッジ蓄積・改善の習慣化 / 評価用途にしない・ログの精度に限界・最初のセットアップ・運用ルール">
+</p>
+
+> 図は導入検討のための観点整理です。KaizenLog 自体はローカルの個人ツールで、**チーム共有や集計の機能は実装していません**。図中の「チーム運用ルール」は、ノートを共有する場合に人が決めることを指します。
 
 ---
 

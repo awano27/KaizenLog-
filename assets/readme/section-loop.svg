@@ -1,18 +1,56 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
-  <title id="title">KaizenLogのAI改善ループ</title>
-  <desc id="desc">やり直しのムダを測り、学びを次のAIへ渡し、予測・体感・実測で効果を確かめる循環。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="470" viewBox="0 0 1440 470" role="img" aria-labelledby="title desc">
+  <title id="title">KaizenLog の AI 改善ループ — 実測 → 教える → 検証</title>
+  <desc id="desc">やり直しのムダを実測し、学びを次の AI へ渡し、予測・体感・実測で効いたかを確かめる循環。</desc>
   <defs>
-    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#75CFA3" stroke-opacity=".055"/></pattern>
-    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#75CFA3"/></marker>
+    <polygon id="arw" points="-16,-4 0,-4 0,-11 16,0 0,11 0,4 -16,4"/>
+    <marker id="lArwT" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#0E8A91"/></marker>
   </defs>
-  <rect width="1200" height="760" rx="24" fill="#0B1211"/><rect width="1200" height="760" rx="24" fill="url(#grid)"/>
-  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Yu Gothic UI', sans-serif">
-    <text x="60" y="46" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="22" font-weight="800" letter-spacing="3">MEASURABLE AI IMPROVEMENT LOOP</text>
-    <g transform="translate(60 80)"><rect width="1080" height="150" rx="18" fill="#111D1A" stroke="#75CFA3" stroke-width="3"/><text x="34" y="49" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="34" font-weight="800">MEASURE / ムダを測る</text><text x="34" y="111" fill="#F4F0E8" font-size="38" font-weight="700">Loop Tax · Prompt ROI</text></g>
-    <g transform="translate(60 300)"><rect width="1080" height="150" rx="18" fill="#17150F" stroke="#F0B667" stroke-width="3"/><text x="34" y="49" fill="#F0B667" font-family="ui-monospace, Consolas, monospace" font-size="34" font-weight="800">TEACH / 学びを渡す</text><text x="34" y="111" fill="#F4F0E8" font-size="38" font-weight="700">handoff · coach</text></g>
-    <g transform="translate(60 520)"><rect width="1080" height="150" rx="18" fill="#111D1A" stroke="#D7E2DC" stroke-width="3"/><text x="34" y="49" fill="#F4F0E8" font-family="ui-monospace, Consolas, monospace" font-size="34" font-weight="800">VERIFY / 効いたか確かめる</text><text x="34" y="111" fill="#75CFA3" font-size="38" font-weight="800">predict · <tspan fill="#F0B667">felt</tspan> · <tspan fill="#D7E2DC">measured</tspan></text></g>
-    <path d="M600 244V278M600 464V498" fill="none" stroke="#75CFA3" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
-    <path d="M1148 595H1162V710H38V62H60" fill="none" stroke="#75CFA3" stroke-width="4" stroke-dasharray="9 8" marker-end="url(#arrow)"/>
-    <text x="600" y="741" text-anchor="middle" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="24" font-weight="800" letter-spacing="3">NEXT RUN</text>
+  <rect width="1440" height="470" fill="#FFFFFF"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Yu Gothic UI', 'Hiragino Sans', sans-serif">
+
+    <rect x="48" y="30" width="264" height="38" rx="8" fill="#0451B5"/>
+    <text x="70" y="56" fill="#FFFFFF" font-size="19" font-weight="800">発展：AI 改善ループ</text>
+
+    <use href="#arw" x="486" y="220" fill="#0451B5"/>
+    <use href="#arw" x="953" y="220" fill="#0E8A91"/>
+
+    <g transform="translate(48 100)">
+      <rect width="410" height="240" rx="16" fill="#F4F9FE" stroke="#CFE2F7" stroke-width="2"/>
+      <circle cx="46" cy="46" r="22" fill="#0451B5"/>
+      <text x="46" y="54" fill="#FFFFFF" font-size="23" font-weight="800" text-anchor="middle">1</text>
+      <text x="84" y="56" fill="#03113C" font-size="28" font-weight="800">ムダを実測する</text>
+      <path d="M32 100H378" stroke="#CFE2F7" stroke-width="2" stroke-dasharray="3 5"/>
+      <text x="32" y="141" fill="#0451B5" font-family="ui-monospace, Consolas, 'Courier New', monospace" font-size="22" font-weight="700">kaizenlog status</text>
+      <text x="32" y="171" fill="#0451B5" font-family="ui-monospace, Consolas, 'Courier New', monospace" font-size="22" font-weight="700">kaizenlog prompts --roi</text>
+      <text x="32" y="212" fill="#313E5C" font-size="18" font-weight="600">Loop Tax・Prompt ROI を見る</text>
+    </g>
+
+    <g transform="translate(515 100)">
+      <rect width="410" height="240" rx="16" fill="#F4F9FE" stroke="#CFE2F7" stroke-width="2"/>
+      <circle cx="46" cy="46" r="22" fill="#0451B5"/>
+      <text x="46" y="54" fill="#FFFFFF" font-size="23" font-weight="800" text-anchor="middle">2</text>
+      <text x="84" y="56" fill="#03113C" font-size="28" font-weight="800">次の AI へ渡す</text>
+      <path d="M32 100H378" stroke="#CFE2F7" stroke-width="2" stroke-dasharray="3 5"/>
+      <text x="32" y="141" fill="#0451B5" font-family="ui-monospace, Consolas, 'Courier New', monospace" font-size="22" font-weight="700">kaizenlog handoff</text>
+      <text x="32" y="171" fill="#0451B5" font-family="ui-monospace, Consolas, 'Courier New', monospace" font-size="22" font-weight="700">kaizenlog coach --dry-run</text>
+      <text x="32" y="212" fill="#313E5C" font-size="18" font-weight="600">書き込みは承認したときだけ</text>
+    </g>
+
+    <g transform="translate(982 100)">
+      <rect width="410" height="240" rx="16" fill="#F6FBFC" stroke="#C7E4E6" stroke-width="2"/>
+      <circle cx="46" cy="46" r="22" fill="#0E8A91"/>
+      <text x="46" y="54" fill="#FFFFFF" font-size="23" font-weight="800" text-anchor="middle">3</text>
+      <text x="84" y="56" fill="#0E8A91" font-size="28" font-weight="800">効いたか確かめる</text>
+      <path d="M32 100H378" stroke="#C7E4E6" stroke-width="2" stroke-dasharray="3 5"/>
+      <text x="32" y="141" fill="#0E8A91" font-family="ui-monospace, Consolas, 'Courier New', monospace" font-size="22" font-weight="700">kaizenlog abtest new</text>
+      <text x="32" y="171" fill="#0E8A91" font-family="ui-monospace, Consolas, 'Courier New', monospace" font-size="22" font-weight="700">kaizenlog abtest finish</text>
+      <text x="32" y="212" fill="#313E5C" font-size="18" font-weight="600">予測・体感・実測を突き合わせる</text>
+    </g>
+
+    <path d="M1392 352V384H48V348" fill="none" stroke="#0E8A91" stroke-width="3" stroke-dasharray="9 8" marker-end="url(#lArwT)"/>
+    <rect x="618" y="370" width="204" height="28" fill="#FFFFFF"/>
+    <text x="720" y="390" text-anchor="middle" fill="#0E8A91" font-size="17" font-weight="700">翌日の記録へ戻る</text>
+    <rect x="48" y="410" width="1344" height="46" rx="12" fill="#F6FBFC" stroke="#C7E4E6" stroke-width="2"/>
+    <text x="76" y="440" fill="#03113C" font-size="20" font-weight="700">baseline が足りなければ「不成立」。取れない数値は「不明」のまま、推定で穴埋めしません。</text>
   </g>
 </svg>

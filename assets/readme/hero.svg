@@ -1,61 +1,65 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="720" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
   <title id="title">KaizenLog — 今日の PC 作業が、毎晩そのまま日誌になる</title>
-  <desc id="desc">ActivityWatch が記録した PC 作業を KaizenLog が集計し、Obsidian のデイリーノートへ書き込む。LLM は任意で、提案が欲しい日だけ使う。</desc>
+  <desc id="desc">ActivityWatch が記録した PC 作業を KaizenLog が決定論で集計し、Obsidian のデイリーノートへ書き込む。LLM は提案が欲しい日だけ使う。</desc>
   <defs>
-    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#75CFA3" stroke-opacity=".055"/></pattern>
-    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#75CFA3"/></marker>
-    <marker id="arrowAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#F0B667"/></marker>
+    <polygon id="arw" points="-16,-4 0,-4 0,-11 16,0 0,11 0,4 -16,4"/>
   </defs>
-  <rect width="1200" height="640" rx="30" fill="#0B1211"/>
-  <rect width="1200" height="640" rx="30" fill="url(#grid)"/>
-  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Yu Gothic UI', sans-serif">
+  <rect width="1440" height="720" fill="#FFFFFF"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Yu Gothic UI', 'Hiragino Sans', sans-serif">
 
-    <text x="60" y="66" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="19" font-weight="800" letter-spacing="3">KAIZENLOG · WINDOWS CLI · JOURNAL FIRST</text>
+    <rect x="48" y="38" width="434" height="40" rx="8" fill="#0451B5"/>
+    <text x="70" y="65" fill="#FFFFFF" font-size="19" font-weight="800">Windows CLI · ActivityWatch → Obsidian</text>
 
-    <text x="60" y="128" fill="#F4F0E8" font-size="44" font-weight="800">今日の PC 作業が、</text>
-    <text x="60" y="184" fill="#F4F0E8" font-size="44" font-weight="800">毎晩そのまま日誌になる。</text>
-    <text x="62" y="230" fill="#B7C6BE" font-size="24" font-weight="600">集計はコードが行い、LLM は「明日試す1件」が欲しい日だけ。</text>
-
-    <path d="M60 262H1140" stroke="#315244" stroke-width="2"/>
-
-    <path d="M390 400H430" fill="none" stroke="#75CFA3" stroke-width="5" marker-end="url(#arrow)"/>
-    <path d="M774 400H814" fill="none" stroke="#75CFA3" stroke-width="5" marker-end="url(#arrow)"/>
-
-    <g transform="translate(60 300)">
-      <rect width="330" height="200" rx="20" fill="#111D1A" stroke="#75CFA3" stroke-width="3"/>
-      <text x="28" y="44" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="21" font-weight="800">01 RECORD</text>
-      <text x="28" y="94" fill="#F4F0E8" font-size="32" font-weight="800">ActivityWatch</text>
-      <text x="28" y="132" fill="#D7E2DC" font-size="21" font-weight="700">前景アプリを自動記録</text>
-      <text x="28" y="170" fill="#81958C" font-size="19" font-weight="600">常駐するのは AW だけ</text>
+    <g>
+      <rect x="1002" y="34" width="390" height="98" rx="16" fill="#FFFFFF" stroke="#0E8A91" stroke-width="2.5"/>
+      <text x="1030" y="72" fill="#0E8A91" font-size="21" font-weight="800">個人の振り返りに強い /</text>
+      <text x="1030" y="104" fill="#0E8A91" font-size="21" font-weight="800">AI 時代の開発日誌</text>
     </g>
 
-    <g transform="translate(444 300)">
-      <rect width="330" height="200" rx="20" fill="#111D1A" stroke="#D7E2DC" stroke-width="3"/>
-      <text x="28" y="44" fill="#F4F0E8" font-family="ui-monospace, Consolas, monospace" font-size="21" font-weight="800">02 SUMMARIZE</text>
-      <text x="28" y="94" fill="#F4F0E8" font-size="32" font-weight="800">kaizenlog</text>
-      <text x="28" y="132" fill="#D7E2DC" font-size="21" font-weight="700">カテゴリ・時間・流れ</text>
-      <text x="28" y="170" fill="#81958C" font-size="19" font-weight="600">数値は決定論で計算</text>
+    <text x="46" y="158" fill="#03113C" font-size="62" font-weight="800" letter-spacing="-1">KaizenLog</text>
+    <rect x="48" y="180" width="196" height="8" rx="4" fill="#0451B5"/>
+    <text x="46" y="248" fill="#03113C" font-size="40" font-weight="800">今日の PC 作業が、毎晩そのまま日誌になる。</text>
+    <text x="48" y="294" fill="#313E5C" font-size="22" font-weight="600">ActivityWatch の記録を Obsidian のデイリーノートへ。集計は決定論、LLM は任意。</text>
+
+    <rect x="48" y="322" width="880" height="52" rx="12" fill="#F4F9FE" stroke="#CFE2F7" stroke-width="2"/>
+    <text x="72" y="355" fill="#0451B5" font-family="ui-monospace, Consolas, 'Courier New', monospace" font-size="20" font-weight="700">$ kaizenlog setup → doctor → generate --date YYYY-MM-DD</text>
+
+    <use href="#arw" x="486" y="506" fill="#0451B5"/>
+    <use href="#arw" x="953" y="506" fill="#0E8A91"/>
+
+    <g transform="translate(48 406)">
+      <rect width="410" height="200" rx="16" fill="#F4F9FE" stroke="#CFE2F7" stroke-width="2"/>
+      <circle cx="46" cy="46" r="22" fill="#0451B5"/>
+      <text x="46" y="54" fill="#FFFFFF" font-size="23" font-weight="800" text-anchor="middle">1</text>
+      <text x="84" y="56" fill="#03113C" font-size="30" font-weight="800">記録</text>
+      <path d="M32 100H378" stroke="#CFE2F7" stroke-width="2" stroke-dasharray="3 5"/>
+      <text x="32" y="142" fill="#1A2136" font-size="19" font-weight="700">ActivityWatch が前景アプリを</text>
+      <text x="32" y="172" fill="#313E5C" font-size="19" font-weight="600">自動で記録（常駐は AW だけ）</text>
     </g>
 
-    <g transform="translate(828 300)">
-      <rect width="312" height="200" rx="20" fill="#111D1A" stroke="#75CFA3" stroke-width="3"/>
-      <text x="28" y="44" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="21" font-weight="800">03 JOURNAL</text>
-      <text x="28" y="94" fill="#F4F0E8" font-size="32" font-weight="800">Obsidian</text>
-      <text x="28" y="132" fill="#D7E2DC" font-size="21" font-weight="700">デイリーノートへ追記</text>
-      <text x="28" y="170" fill="#81958C" font-size="19" font-weight="600">手書き部分は残る</text>
+    <g transform="translate(515 406)">
+      <rect width="410" height="200" rx="16" fill="#F4F9FE" stroke="#CFE2F7" stroke-width="2"/>
+      <circle cx="46" cy="46" r="22" fill="#0451B5"/>
+      <text x="46" y="54" fill="#FFFFFF" font-size="23" font-weight="800" text-anchor="middle">2</text>
+      <text x="84" y="56" fill="#03113C" font-size="30" font-weight="800">集計</text>
+      <path d="M32 100H378" stroke="#CFE2F7" stroke-width="2" stroke-dasharray="3 5"/>
+      <text x="32" y="142" fill="#1A2136" font-size="19" font-weight="700">カテゴリ・時間・タイムライン</text>
+      <text x="32" y="172" fill="#313E5C" font-size="19" font-weight="600">を決定論で計算（LLM 不要）</text>
     </g>
 
-    <path d="M984 500V536H1030" fill="none" stroke="#F0B667" stroke-width="4" stroke-dasharray="8 7" marker-end="url(#arrowAmber)"/>
-    <g transform="translate(1040 514)">
-      <rect width="100" height="44" rx="12" fill="#17150F" stroke="#F0B667" stroke-width="2.5"/>
-      <text x="18" y="29" fill="#F0B667" font-family="ui-monospace, Consolas, monospace" font-size="18" font-weight="800">LLM 任意</text>
+    <g transform="translate(982 406)">
+      <rect width="410" height="200" rx="16" fill="#F6FBFC" stroke="#C7E4E6" stroke-width="2"/>
+      <circle cx="46" cy="46" r="22" fill="#0E8A91"/>
+      <text x="46" y="54" fill="#FFFFFF" font-size="23" font-weight="800" text-anchor="middle">3</text>
+      <text x="84" y="56" fill="#0E8A91" font-size="30" font-weight="800">日誌</text>
+      <path d="M32 100H378" stroke="#C7E4E6" stroke-width="2" stroke-dasharray="3 5"/>
+      <text x="32" y="142" fill="#1A2136" font-size="19" font-weight="700">デイリーノートの管理区間へ</text>
+      <text x="32" y="172" fill="#313E5C" font-size="19" font-weight="600">追記（手書きは残る）</text>
     </g>
 
-    <g transform="translate(60 512)">
-      <rect width="840" height="52" rx="14" fill="#0F1917" stroke="#315244" stroke-width="2"/>
-      <text x="24" y="33" fill="#75CFA3" font-family="ui-monospace, Consolas, monospace" font-size="17" font-weight="700">$ kaizenlog setup  →  kaizenlog doctor  →  kaizenlog generate --date …</text>
-    </g>
-
-    <text x="60" y="600" fill="#81958C" font-family="ui-monospace, Consolas, monospace" font-size="18" font-weight="700">Windows 10/11 · Python 3.11+ · MIT · no cloud required</text>
+    <rect x="48" y="632" width="1344" height="60" rx="14" fill="#F4F9FE" stroke="#CFE2F7" stroke-width="2"/>
+    <circle cx="86" cy="662" r="19" fill="#0451B5"/>
+    <path d="M78 657l8-8 8 8-8 9z" fill="#FFFFFF"/>
+    <text x="122" y="670" fill="#03113C" font-size="23" font-weight="800">『何をやったか』だけでなく、『どう改善するか』まで同じノートに残る</text>
   </g>
 </svg>
