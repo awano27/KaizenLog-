@@ -177,6 +177,18 @@ def build_prompt(
     if evidence:
         parts.append(evidence.markdown if isinstance(evidence, AdviceEvidence) else evidence)
         parts.append("\n\n")
+    # §U2: 候補がある日のみ insight_selection スキーマと選定指示
+    if (
+        isinstance(evidence, AdviceEvidence)
+        and getattr(evidence, "insight_candidates", ())
+    ):
+        parts.append(
+            "# insight_selection 出力スキーマ（任意・最大2件）\n"
+            "候補が提示されている日のみ。candidate_id は上記候補 ID のみ。"
+            "本文の生成・改変は禁止（ID で選ぶだけ）。"
+            "connector は省略可・数字禁止・最大20字。\n"
+            '{"insight_selection": [{"candidate_id": "C1", "connector": "一方で"}]}\n\n'
+        )
     if reflections:
         parts.append("# ユーザーの振り返り（本人の言葉。最優先の文脈）\n")
         parts.append(reflections)
@@ -882,7 +894,8 @@ def _contract_repair_prompt(
         "説明文・Markdown・コードフェンスは付けないでください。\n"
         "\n## 必須スキーマ\n"
         '{"plan_review": string|null, "proposals": [...], "actions": [...], '
-        '"ai_review": [...]}\n'
+        '"ai_review": [...], "insight_selection": [{"candidate_id": "C1", '
+        '"connector": "一方で"}]  # 候補提示日のみ任意・最大2}\n'
         "\n## 修正チェックリスト\n"
         "- proposals と actions は1〜3件かつ同数。ai_review は1〜2件\n"
         "- fact_ids は F 番号（例: \"F3\"）。使用可能: "
@@ -895,7 +908,10 @@ def _contract_repair_prompt(
         "- fail は数値条件（機械構文可）。PASS 目標はベースラインより挑戦的に"
         "（減らす目標は baseline×0.95 超を禁止、増やす目標は baseline×1.05 未満を禁止）\n"
         "- KZN ID と HTML コメントは禁止\n"
-        "- AI関連画面ブロックは会話数・セッション数・往復数ではない\n\n"
+        "- AI関連画面ブロックは会話数・セッション数・往復数ではない\n"
+        "- insight_selection がある場合: candidate_id は提示候補の部分集合、"
+        "最大2件、connector は省略可・数字禁止・最大20字。"
+        "候補文の生成・改変は禁止（ID で選ぶだけ）\n\n"
         f"{render_pass_metric_contract(evidence)}\n"
         f"{_baseline_repair_hint(evidence)}"
         f"## 違反\n{rendered_errors}\n\n"
@@ -922,6 +938,7 @@ def _assert_redaction_preserves_daily_protocol(
     expected_ids = set(evidence.fact_ids)
     remaining_ids = set(_FACT_ID_RE.findall(prompt))
     # 構造化出力移行後は見出しではなく JSON スキーマキーが制御トークン
+    # insight_selection は候補提示日のみ user prompt 側（任意キー）
     required_keys = ('"proposals"', '"actions"', '"ai_review"')
     if not expected_ids <= remaining_ids or any(
         key not in system_prompt for key in required_keys
@@ -929,6 +946,13 @@ def _assert_redaction_preserves_daily_protocol(
         raise AdvisorError(
             "privacy.redact_patterns が改善提案の制御トークン（[F#] または JSON キー）"
             "までマスクしています。パターンを固有名詞へ限定してください。"
+        )
+    if getattr(evidence, "insight_candidates", ()) and (
+        '"insight_selection"' not in prompt and "insight_selection" not in prompt
+    ):
+        raise AdvisorError(
+            "insight 候補があるのに prompt から insight_selection が欠落しています"
+            "（redact または組み立てバグ）"
         )
 
 
@@ -1031,7 +1055,30 @@ def _run_daily_pipeline(
         report.repaired = True
         data, errors = _try_parse_and_validate(raw)
 
+    from .advice_format import is_insight_selection_error
+
     if errors or data is None:
+        # insight_selection のみ残った場合は縮退描画（上位2本）で advise を成立させる
+        if (
+            data is not None
+            and errors
+            and all(is_insight_selection_error(e) for e in errors)
+        ):
+            try:
+                markdown = render_advice_markdown(data, evidence)
+            except AdviceContractError as e:
+                report.final_ok = False
+                report.final_violations = list(e.violations or errors)
+                report.outcome = "degraded"
+                report.duration_seconds = round(time.monotonic() - t0, 3)
+                return None, report
+            full = f"## 🚀 Kaizen（AIからの改善提案）\n\n{markdown}"
+            report.final_ok = True
+            report.outcome = "repaired" if repaired else "ok"
+            report.markdown = full
+            report.final_violations = []
+            report.duration_seconds = round(time.monotonic() - t0, 3)
+            return full, report
         report.final_ok = False
         report.final_violations = list(errors or first_errors)
         report.outcome = "degraded"

@@ -54,6 +54,8 @@ class AdviceEvidence:
     suppressed_metrics: frozenset[str] | None = None
     # 当日 total_minutes（生カウントPASS入口ガード用。欠落は None）
     total_minutes: float | None = None
+    # 洞察候補プール（id, text）。空なら insight_selection 契約なし
+    insight_candidates: tuple[tuple[str, str], ...] = ()
 
 
 def _evidence(
@@ -76,6 +78,7 @@ def _evidence(
     metric_history_values: Mapping[str, tuple[float, ...]] | None = None,
     suppressed_metrics: frozenset[str] | None = None,
     total_minutes: float | None = None,
+    insight_candidates: tuple[tuple[str, str], ...] = (),
 ) -> AdviceEvidence:
     markdown = "\n".join(lines)
     return AdviceEvidence(
@@ -98,6 +101,7 @@ def _evidence(
         metric_history_values=metric_history_values,
         suppressed_metrics=suppressed_metrics,
         total_minutes=total_minutes,
+        insight_candidates=insight_candidates,
     )
 
 
@@ -1388,6 +1392,20 @@ def build_advice_evidence(
         if text:
             notes_out.append(text)
 
+    # 洞察候補プール（決定論・最大8本）— プロンプトへ ID+全文を注入
+    cand_dicts = build_insight_candidates(stats, history, timezone=timezone)
+    insight_cands = tuple(
+        (str(c["id"]), str(c["text"])) for c in cand_dicts if c.get("id") and c.get("text")
+    )
+    if insight_cands:
+        lines.extend(["", "## 洞察候補（コード生成・数字入り事実文）", ""])
+        lines.append(
+            "今日の文脈で最も重要な洞察を最大2本、candidate_id で選べ。"
+            "本文の生成・改変は禁止。connector は省略可・数字禁止・最大20字。"
+        )
+        for cid, ctext in insight_cands:
+            lines.append(f"- [{cid}] {ctext}")
+
     return _evidence(
         lines,
         ai_conversation_metrics_available=ai_stats_valid and telemetry_sessions > 0,
@@ -1409,4 +1427,199 @@ def build_advice_evidence(
         ),
         suppressed_metrics=suppressed_set,
         total_minutes=float(total_minutes) if isinstance(total_minutes, (int, float)) else None,
+        insight_candidates=insight_cands,
     )
+
+
+def build_insight_candidates(
+    stats: Mapping[str, Any] | None,
+    history: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    timezone: tzinfo | None = None,
+    limit: int = 8,
+) -> list[dict[str, str]]:
+    """数字入りの事実文候補を決定論生成。評価語・助言・因果断定なし。
+
+    各要素: {"id": "C1", "text": "…が観測されています"}。
+    データ薄日は本数減・0本可。上限 limit（既定8）。
+    """
+    if not isinstance(stats, Mapping):
+        return []
+    prior = [
+        h
+        for h in (history or [])
+        if isinstance(h, Mapping) and str(h.get("day") or "") != str(stats.get("day") or "")
+    ]
+    if len(prior) > 14:
+        prior = list(prior)[-14:]
+
+    raw: list[str] = []
+
+    # 1) retry_chains と7日中央値差
+    ai = _mapping(stats.get("ai"))
+    retry_n = None
+    if "retry_chains" in ai and _valid_nonnegative_number(ai.get("retry_chains")):
+        retry_n = int(_number(ai.get("retry_chains")))
+    if retry_n is not None:
+        hist_r: list[float] = []
+        for h in prior:
+            hai = _mapping(h.get("ai"))
+            if "retry_chains" in hai and _valid_nonnegative_number(hai.get("retry_chains")):
+                hist_r.append(float(hai["retry_chains"]))
+        if len(hist_r) >= _MIN_BASELINE_DAYS:
+            med = float(median(hist_r[-7:] if len(hist_r) > 7 else hist_r))
+            raw.append(
+                f"リトライ連鎖は {retry_n}件でした（直近中央値 {_fmt(med)}件）。"
+            )
+        else:
+            raw.append(f"リトライ連鎖は {retry_n}件が観測されています。")
+
+    # 2) ended_in_error セッション数と終了時刻帯
+    digests = ai.get("session_digests")
+    if isinstance(digests, list):
+        errored = [d for d in digests if isinstance(d, Mapping) and d.get("ended_in_error")]
+        if errored:
+            hours: Counter[int] = Counter()
+            for d in errored:
+                h = _parse_hour(d.get("end"), timezone)
+                if h is not None:
+                    hours[h] += 1
+            if hours:
+                top_h, top_c = hours.most_common(1)[0]
+                raw.append(
+                    f"末尾エラーのセッションが {len(errored)}件観測され、"
+                    f"うち {top_c}件は {top_h}時台に終了しています。"
+                )
+            else:
+                raw.append(
+                    f"末尾エラーのセッションが {len(errored)}件観測されています。"
+                )
+
+        # 3) tests_run 関与 vs 非関与
+        with_t = sum(
+            1 for d in digests if isinstance(d, Mapping) and d.get("tests_run")
+        )
+        without_t = sum(
+            1
+            for d in digests
+            if isinstance(d, Mapping) and not d.get("tests_run")
+        )
+        if with_t or without_t:
+            raw.append(
+                f"テスト実行を伴うセッションは {with_t}件、"
+                f"伴わないセッションは {without_t}件でした。"
+            )
+
+    # 4) switch レートと履歴比
+    rate = _switch_rate(stats)
+    if rate is not None:
+        hist_rates = [r for h in prior if (r := _switch_rate(h)) is not None]
+        if len(hist_rates) >= _MIN_BASELINE_DAYS:
+            med = float(median(hist_rates[-7:] if len(hist_rates) > 7 else hist_rates))
+            if med > 0:
+                ratio = rate / med
+                raw.append(
+                    f"カテゴリ変更レートは {_fmt(rate)}回/時でした"
+                    f"（直近中央値 {_fmt(med)}回/時の {_fmt(ratio)}倍）。"
+                )
+            else:
+                raw.append(f"カテゴリ変更レートは {_fmt(rate)}回/時が観測されています。")
+        else:
+            raw.append(f"カテゴリ変更レートは {_fmt(rate)}回/時が観測されています。")
+
+    # 5) focus（input 欠測日は出さない）
+    inp = stats.get("input")
+    if isinstance(inp, Mapping) and _valid_count_fields(
+        inp, ("focus_blocks", "focus_minutes")
+    ):
+        fb = int(_number(inp.get("focus_blocks")))
+        fm = _number(inp.get("focus_minutes"))
+        raw.append(
+            f"集中ブロックは {fb}件、合計 {_fmt_duration_ja(fm)} が観測されています。"
+        )
+
+    # 6) by_site 上位の初出・急増
+    by_site = stats.get("by_site")
+    if isinstance(by_site, Mapping) and by_site:
+        prior_sites: set[str] = set()
+        prior_mins: dict[str, list[float]] = {}
+        for h in prior:
+            bs = h.get("by_site")
+            if not isinstance(bs, Mapping):
+                continue
+            for site, mins in bs.items():
+                if _valid_nonnegative_number(mins) and float(mins) > 0:
+                    prior_sites.add(str(site))
+                    prior_mins.setdefault(str(site), []).append(float(mins))
+        ranked = sorted(
+            (
+                (str(s), float(m))
+                for s, m in by_site.items()
+                if _valid_nonnegative_number(m) and float(m) >= 10
+            ),
+            key=lambda x: -x[1],
+        )
+        for site, mins in ranked[:2]:
+            if site not in prior_sites:
+                raw.append(
+                    f"サイト {site} に {_fmt(mins)}分が観測されています"
+                    f"（直近履歴に出現なし）。"
+                )
+            else:
+                hist_m = prior_mins.get(site) or []
+                if len(hist_m) >= 2:
+                    med = float(median(hist_m))
+                    if med > 0 and mins >= med * 2:
+                        raw.append(
+                            f"サイト {site} に {_fmt(mins)}分が観測されています"
+                            f"（直近中央値 {_fmt(med)}分の {_fmt(mins / med)}倍）。"
+                        )
+
+    # 7) loop_tax
+    loop = ai.get("loop_tax")
+    if isinstance(loop, Mapping):
+        ep = loop.get("episode_count")
+        cost = loop.get("est_cost_usd")
+        bits: list[str] = []
+        if _valid_nonnegative_number(ep) and int(_number(ep)) > 0:
+            bits.append(f"エピソード {int(_number(ep))}件")
+        if _valid_nonnegative_number(cost) and float(cost) > 0:
+            bits.append(f"概算コスト {_fmt(float(cost))} USD")
+        if bits:
+            raw.append("ループ税として " + "・".join(bits) + " が観測されています。")
+
+    # 8) outcome_git コミット集中時間帯 — subjects だけでは時刻が無いので
+    # blocks 内の開発系終了時間帯を近似（git 単独時刻が無い日はスキップ）
+    og = stats.get("outcome_git")
+    commits_total = 0
+    if isinstance(og, list):
+        for item in og:
+            if isinstance(item, Mapping) and _valid_nonnegative_number(item.get("commits")):
+                commits_total += int(_number(item.get("commits")))
+    if commits_total > 0 and isinstance(stats.get("blocks"), list):
+        dev_hours: Counter[int] = Counter()
+        for b in stats["blocks"]:
+            if not isinstance(b, Mapping):
+                continue
+            if str(b.get("category") or "") not in ("開発", "AI作業"):
+                continue
+            h = _parse_hour(b.get("end") or b.get("start"), timezone)
+            if h is not None:
+                dev_hours[h] += 1
+        if dev_hours:
+            th, tc = dev_hours.most_common(1)[0]
+            raw.append(
+                f"コミットは合計 {commits_total}件、"
+                f"開発・AI作業ブロックの終了は {th}時台が {tc}件と最も多く観測されています。"
+            )
+        else:
+            raw.append(f"コミットは合計 {commits_total}件が観測されています。")
+
+    # ID 付与（重要度=生成順）
+    out: list[dict[str, str]] = []
+    for i, text in enumerate(raw[: max(0, int(limit))], start=1):
+        t = " ".join(str(text).split())
+        if not t:
+            continue
+        out.append({"id": f"C{i}", "text": t})
+    return out

@@ -1,0 +1,89 @@
+{
+  "id": "case4_insight_selection",
+  "day": "2026-08-03",
+  "schema_version": 1,
+  "timezone": "Asia/Tokyo",
+  "source_status": "verified",
+  "known_categories": ["開発", "AI作業", "ブラウジング"],
+  "current_stats": {
+    "version": 2,
+    "day": "2026-08-03",
+    "total_minutes": 200.0,
+    "context_switches": 40,
+    "by_category": {"開発": 100.0, "AI作業": 50.0},
+    "by_app": {"Code.exe": 120.0},
+    "by_site": {"docs.example.com": 45.0},
+    "blocks": [
+      {
+        "start": "2026-08-03T10:00:00+09:00",
+        "end": "2026-08-03T11:00:00+09:00",
+        "category": "開発"
+      }
+    ],
+    "input": {
+      "focus_blocks": 3,
+      "focus_minutes": 60.0,
+      "active_input_minutes": 90.0,
+      "keypresses": 1000
+    },
+    "ai": {
+      "sessions": 4,
+      "retry_chains": 2,
+      "tool_errors": 5,
+      "session_digests": [
+        {
+          "ended_in_error": true,
+          "tests_run": false,
+          "end": "2026-08-03T21:30:00+09:00"
+        },
+        {
+          "ended_in_error": false,
+          "tests_run": true,
+          "end": "2026-08-03T15:00:00+09:00"
+        }
+      ]
+    },
+    "outcome_git": [{"repo_label": "X", "commits": 3, "subjects": ["a"]}]
+  },
+  "prior_stats": [
+    {
+      "day": "2026-07-30",
+      "total_minutes": 180.0,
+      "context_switches": 35,
+      "ai": {"retry_chains": 1}
+    },
+    {
+      "day": "2026-07-31",
+      "total_minutes": 190.0,
+      "context_switches": 32,
+      "ai": {"retry_chains": 1}
+    },
+    {
+      "day": "2026-08-01",
+      "total_minutes": 170.0,
+      "context_switches": 38,
+      "ai": {"retry_chains": 0}
+    },
+    {
+      "day": "2026-08-02",
+      "total_minutes": 200.0,
+      "context_switches": 36,
+      "ai": {"retry_chains": 1}
+    }
+  ],
+  "today_md": "## Activity\n- work\n",
+  "recent_summaries": [],
+  "intent": null,
+  "experiments_ctx": null,
+  "memory_ctx": null,
+  "insight_eval": {
+    "violations": [
+      {"payload": [{"candidate_id": "C99"}], "expect": "存在しない候補ID"},
+      {"payload": [{"candidate_id": "C1", "connector": "3件で"}], "expect": "観測数値を書かないでください"},
+      {"payload": [{"candidate_id": "C1"}, {"candidate_id": "C2"}, {"candidate_id": "C1"}], "expect": "最大2件"}
+    ],
+    "valid": [{"candidate_id": "C1", "connector": "一方で"}],
+    "degrade_top_n": 2
+  },
+  "notes": "round54/55 insight_selection: fake payloads and expected violations live in insight_eval so the case file drives the regression"
+}

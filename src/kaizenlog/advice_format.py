@@ -271,6 +271,9 @@ def validate_advice(data: dict, evidence: AdviceEvidence) -> list[str]:
     joined = _join_text_fields(data)
     errors.extend(_semantic_contract_errors(joined, evidence))
     errors.extend(_fact_context_semantic_errors(data, evidence))
+    # insight_selection は raise ではなく収集で扱う。先に raise すると意味検証が
+    # マスクされ、他違反が同居しても「insight のみ」と誤判定して縮退受理され得る
+    errors.extend(insight_selection_errors(data, evidence))
     return errors
 
 
@@ -645,7 +648,101 @@ def _validate_advice_raise(data: dict, evidence: AdviceEvidence) -> None:
             )
 
 
-def _assert_render_shape(markdown: str, *, n_actions: int) -> None:
+_CANDIDATE_ID_RE = re.compile(r"^C\d+$")
+
+
+def is_insight_selection_error(msg: str) -> bool:
+    """insight_selection 関連の契約エラーか。"""
+    return "insight_selection" in str(msg)
+
+
+def insight_selection_errors(
+    data: dict, evidence: AdviceEvidence
+) -> list[str]:
+    """insight_selection の契約エラー一覧。候補0本の日はフィールド不在を許容。
+
+    本番は `validate_advice` の収集経路で違反リストに合流する（raise しない）。
+    欠落（None）は fail せず render 側で上位2本へ縮退する。
+    """
+    candidates = list(getattr(evidence, "insight_candidates", ()) or ())
+    available = {cid for cid, _ in candidates}
+    if not available:
+        return []
+    raw = data.get("insight_selection")
+    if raw is None:
+        return []  # 欠落は縮退対象（契約 fail ではない）
+    errors: list[str] = []
+    if not isinstance(raw, list):
+        return ["insight_selection は配列である必要があります"]
+    if len(raw) > 2:
+        errors.append("insight_selection は最大2件にしてください")
+    # 全件を検査（3件目以降も形式エラーを拾う）
+    for i, item in enumerate(raw, 1):
+        field = f"insight_selection[{i}]"
+        if not isinstance(item, dict):
+            errors.append(f"{field} はオブジェクトである必要があります")
+            continue
+        cid = item.get("candidate_id")
+        if not isinstance(cid, str) or not cid.strip():
+            errors.append(f"{field}.candidate_id は非空文字列である必要があります")
+            continue
+        cid = cid.strip()
+        if not _CANDIDATE_ID_RE.match(cid):
+            errors.append(f"{field}.candidate_id が不正です: {cid!r}")
+        elif cid not in available:
+            errors.append(f"{field} が存在しない候補IDを参照しています")
+        conn = item.get("connector")
+        if conn is None:
+            continue
+        try:
+            c = _require_single_line(conn, f"{field}.connector")
+            _check_no_kzn_or_marker(c, f"{field}.connector")
+            if _DIGIT_RE.search(c):
+                errors.append(f"{field}.connector に観測数値を書かないでください")
+            if len(c) > 20:
+                errors.append(f"{field}.connector は20字以内にしてください")
+        except Exception as e:
+            from .advisor import AdviceContractError
+
+            if isinstance(e, AdviceContractError):
+                errors.append(str(e))
+            else:
+                errors.append(str(e))
+    return errors
+
+
+def resolve_insight_lines(data: dict, evidence: AdviceEvidence) -> list[str]:
+    """選定結果を描画行に。違反・欠落時は候補上位2本へ縮退。"""
+    candidates = list(getattr(evidence, "insight_candidates", ()) or ())
+    if not candidates:
+        return []
+    by_id = {cid: text for cid, text in candidates}
+    errs = insight_selection_errors(data, evidence)
+    raw = data.get("insight_selection")
+    lines: list[str] = []
+    if not errs and isinstance(raw, list) and raw:
+        for i, item in enumerate(raw[:2]):
+            if not isinstance(item, dict):
+                continue
+            cid = str(item.get("candidate_id") or "").strip()
+            text = by_id.get(cid)
+            if not text:
+                continue
+            conn = item.get("connector")
+            if i > 0 and isinstance(conn, str) and conn.strip():
+                lines.append(f"- {conn.strip()}、{text} [{cid}]")
+            else:
+                lines.append(f"- {text} [{cid}]")
+    if not lines:
+        # 縮退: 上位2本を原文のまま
+        for cid, text in candidates[:2]:
+            lines.append(f"- {text} [{cid}]")
+    return lines
+
+
+def _assert_render_shape(
+    markdown: str, *, n_actions: int, expect_insight: bool = False
+) -> None:
     """レンダラ出力の形状のみ検査（LLM 契約は validate_advice の責務）。
 
     memory.assign_action_ids / verdict はチェックボックスと見出し形状に依存する。
@@ -664,6 +761,8 @@ def _assert_render_shape(markdown: str, *, n_actions: int) -> None:
     for heading in ("今日の改善提案", "明日の最小アクション", "AI作業の改善"):
         if f"### {heading}" not in markdown:
             raise AdvisorError(f"renderer bug: missing heading ### {heading}")
+    if expect_insight and "## 🧠 事実からの洞察" not in markdown:
+        raise AdvisorError("renderer bug: missing insight section")
     checkboxes = re.findall(r"^- \[ \] ", markdown, re.MULTILINE)
     if len(checkboxes) != n_actions:
         raise AdvisorError(
@@ -673,15 +772,22 @@ def _assert_render_shape(markdown: str, *, n_actions: int) -> None:
 
 def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
     """検証済み JSON を現行契約互換の Markdown にレンダリングする。"""
+    from copy import deepcopy
+
     from .advisor import AdviceContractError
 
     # 念のため再検証（呼び出し側が validate 済みでも壊れを防ぐ）
     errs = validate_advice(data, evidence)
     if errs:
-        # validate 失敗は LLM 契約違反（レンダラバグではない）
-        raise AdviceContractError(
-            "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errs)
-        )
+        # insight_selection のみの違反は縮退描画（上位2本）へ。他は fail。
+        if errs and all(is_insight_selection_error(e) for e in errs):
+            data = deepcopy(data)
+            data.pop("insight_selection", None)
+        else:
+            raise AdviceContractError(
+                "LLMの改善提案が保存条件を満たしませんでした:\n- "
+                + "\n- ".join(errs)
+            )
 
     lines: list[str] = []
     plan = data.get("plan_review")
@@ -738,7 +844,17 @@ def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
     for item in data["ai_review"]:
         lines.append(f"- {item['text'].strip()}")
 
+    # §T1: 事実からの洞察（候補原文のみ。LLM 数値は流入させない）
+    insight_lines = resolve_insight_lines(data, evidence)
+    if insight_lines:
+        lines.append("")
+        lines.append("## 🧠 事実からの洞察")
+        lines.extend(insight_lines)
+
     rendered = "\n".join(lines).rstrip() + "\n"
     n_actions = len(data["actions"]) if isinstance(data.get("actions"), list) else 0
-    _assert_render_shape(rendered, n_actions=n_actions)
+    expect_insight = bool(getattr(evidence, "insight_candidates", ()) or ())
+    _assert_render_shape(
+        rendered, n_actions=n_actions, expect_insight=expect_insight
+    )
     return rendered

@@ -109,6 +109,7 @@ AGENT_CONTEXT_MARKER = "kaizenlog:agent-context"  # handoff が CLAUDE.md/AGENTS
 COACH_MARKER = "kaizenlog:coach"  # coach --apply が追記する調教区間
 DIGEST_MARKER = "kaizenlog:digest"  # 冒頭30秒サマリ（決定論・generate/advise が所有）
 RESUME_MARKER = "kaizenlog:resume"  # きのうの続きから（決定論・generate が翌日ノートへ）
+DECISION_MARKER = "kaizenlog:decision"  # 朝決算カード（決定論・morning/generate）
 EFFORT_MARKER = "kaizenlog:effort"  # 工数のつけ先（決定論・generate が所有）
 EXPERIMENTS_MARKER = "kaizenlog:experiments"  # 進行中の実験1行（決定論・generate が所有）
 REFLECT_MARKER = "kaizenlog:reflect"  # 夜の内省3問（決定論・generate が所有）
@@ -120,6 +121,7 @@ FOOTNOTES_MARKER = "kaizenlog:footnotes"  # 免責注釈の集約
 SECTION_ORDER: tuple[str, ...] = (
     DIGEST_MARKER,
     RESUME_MARKER,
+    DECISION_MARKER,
     GOAL_MARKER,
     ACTIONS_MARKER,
     ADVICE_MARKER,

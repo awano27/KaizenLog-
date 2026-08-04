@@ -73,6 +73,7 @@
 
 必須キー: `"plan_review"`（string|null）, `"proposals"`（1〜3）, `"actions"`（proposals と同数）,
 `"ai_review"`（1〜2）。各 proposal/action/ai_review に `"fact_ids"`（例: `["F3"]`）。
+任意キー: `"insight_selection"`（候補提示日のみ・最大2・candidate_id は提示候補のみ）。
 
 - proposals[i] と actions[i] は根拠IDを共有。ai_review は F4 または F5 を含む
 - `interpretation` / `ai_review.text` に算用数字を書かない

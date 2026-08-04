@@ -60,6 +60,9 @@ class MemoryEntry:
     # 寿命管理（旧 JSONL は欠落 → None）。終了扱いは達成を意味しない。
     closed_reason: str | None = None
     closed_date: str | None = None
+    # 朝決算カードの決定（旧 JSONL は欠落 → None）。status とは独立。
+    # {"choice": "adopt|skip|alternative", "reason": str|None, "date": "YYYY-MM-DD"}
+    decision: dict | None = None
 
 
 def _memory_file(memory_dir: Path) -> Path:
@@ -113,6 +116,9 @@ def load_entries(memory_dir: Path) -> list[MemoryEntry]:
         closed_date = d.get("closed_date")
         if closed_date is not None:
             closed_date = str(closed_date) or None
+        decision = d.get("decision")
+        if decision is not None and not isinstance(decision, dict):
+            decision = None
         entries[d["id"]] = MemoryEntry(
             id=d["id"],
             date=d.get("date", ""),
@@ -126,6 +132,7 @@ def load_entries(memory_dir: Path) -> list[MemoryEntry]:
             verdict_stage=verdict_stage,
             closed_reason=closed_reason,
             closed_date=closed_date,
+            decision=decision,
         )
     return sorted(entries.values(), key=lambda e: e.id)
 

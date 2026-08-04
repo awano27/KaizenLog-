@@ -904,6 +904,13 @@ def cmd_generate(
             f"⚠️  resume 転記をスキップ: {type(res_err).__name__}",
             file=sys.stderr,
         )
+    try:
+        _write_decision_settlement(cfg, store, day, day_stats)
+    except Exception as dec_err:
+        print(
+            f"⚠️  決算カードをスキップ: {type(dec_err).__name__}",
+            file=sys.stderr,
+        )
 
     # §A3/D2: 区間並び替え + 免責注釈の脚注集約
     _finalize_note_layout(store, day)
@@ -1476,10 +1483,11 @@ def cmd_morning(cfg: Config, day: date, *, skip_catch_up: bool = False) -> int:
         except Exception as e:
             print(f"⚠️  目標プレースホルダをスキップ: {type(e).__name__}", file=sys.stderr)
 
+        note_now = store.read(day)
         section = render_actions_section(
             entries,
             day,
-            store.read(day),
+            note_now,
             stats_history=_actions_stats_history(cfg, day),
             max_candidates=1,  # 朝は今日の1手を1件だけ
         )
@@ -1490,6 +1498,15 @@ def cmd_morning(cfg: Config, day: date, *, skip_catch_up: bool = False) -> int:
             print(f"📌 今日のアクションを更新しました: {path}")
         else:
             print("📌 今日の未完了アクションはありません")
+
+        # §T2: 朝決算カード
+        try:
+            _write_morning_decision(cfg, store, day, entries)
+        except Exception as dec_err:
+            print(
+                f"⚠️  朝決算カードをスキップ: {type(dec_err).__name__}",
+                file=sys.stderr,
+            )
 
         try:
             _finalize_note_layout(store, day)
@@ -1555,6 +1572,102 @@ def _write_morning_yesterday_brief(store: DailyNoteStore, day: date) -> None:
         body = body.rstrip() + "\n" + link + "\n"
     store.write_section(day, DIGEST_MARKER, body, position="top")
     print(f"🌅 昨日のふりかえりを転記しました（{yesterday.isoformat()}）")
+
+
+def _write_morning_decision(
+    cfg: Config, store: DailyNoteStore, day: date, entries: list
+) -> None:
+    """朝の意思決定カードを当日ノートへ。"""
+    from .decision import build_morning_decision_section
+    from .vault import DECISION_MARKER, extract_section
+
+    note = store.read(day)
+    existing = extract_section(note, DECISION_MARKER) if note else None
+    section = build_morning_decision_section(
+        entries,
+        day,
+        note_content=note,
+        existing_section=existing,
+        memory_dir=cfg.memory_path,
+    )
+    if not section:
+        return
+    path = store.write_section(day, DECISION_MARKER, section, position="top")
+    print(f"⚖  今日の意思決定を書き込みました: {path}")
+
+
+def _write_decision_settlement(
+    cfg: Config, store: DailyNoteStore, day: date, day_stats: dict | None
+) -> None:
+    """夜: decision 区間を読み戻し・台帳追記・決算追記（手書き保持）。"""
+    from dataclasses import replace
+
+    from .decision import (
+        build_settlement_block,
+        median_metric_from_history,
+        parse_decision_choice,
+        parse_decision_question_id,
+        recompose_decision_section,
+        strip_settlement,
+    )
+    from .experiments import metric_from_stats
+    from .memory import append_entries, load_entries
+    from .vault import DECISION_MARKER, extract_section
+    from .verdict import parse_pass_condition
+
+    note = store.read(day)
+    if note is None:
+        return
+    section = extract_section(note, DECISION_MARKER)
+    if section is None:
+        return
+    morning = strip_settlement(section)
+    choice_info = parse_decision_choice(morning)
+    if choice_info is None:
+        # 未記入: 台帳に書かず、決算も付けない（朝のまま）
+        return
+
+    qid = parse_decision_question_id(morning)
+    entries = load_entries(cfg.memory_path)
+    by_id = {e.id: e for e in entries}
+    target = by_id.get(qid) if qid else None
+
+    # 台帳追記（status は触らない）。同一 ID・同一 decision.date は追記しない（冪等）
+    if target is not None:
+        dec = {
+            "choice": choice_info["choice"],
+            "reason": choice_info.get("reason"),
+            "date": day.isoformat(),
+        }
+        existing_dec = target.decision if isinstance(target.decision, dict) else None
+        already = (
+            existing_dec is not None
+            and str(existing_dec.get("date") or "")[:10] == day.isoformat()
+        )
+        if not already:
+            append_entries(cfg.memory_path, [replace(target, decision=dec)])
+
+    metric = None
+    observed = None
+    med7 = None
+    if target is not None:
+        parsed = parse_pass_condition(target.action or "")
+        if parsed is not None:
+            metric = parsed[0]
+            hist = load_stats(cfg.stats_path, days=15, end_day=day)
+            if isinstance(day_stats, dict):
+                observed = metric_from_stats(metric, day_stats)
+            med7 = median_metric_from_history(metric, hist, today=day)
+
+    settlement = build_settlement_block(
+        choice=choice_info["choice"],
+        metric=metric,
+        observed=observed,
+        median7=med7,
+    )
+    recomposed = recompose_decision_section(morning, settlement)
+    store.write_section(day, DECISION_MARKER, recomposed, position="top")
+    print(f"⚖  今日の決算を追記しました（{day.isoformat()}）")
 
 
 def cmd_backfill(cfg: Config, days: int, end_day: date) -> int:

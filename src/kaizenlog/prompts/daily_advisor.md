@@ -81,6 +81,9 @@ KaizenLog が決定論的に組み立てます。
       "fact_ids": ["F5"],
       "text": "AI作業の評価・改善（観測数値を書かない）"
     }
+  ],
+  "insight_selection": [
+    {"candidate_id": "C1", "connector": "一方で"}
   ]
 }
 ```
@@ -90,6 +93,8 @@ KaizenLog が決定論的に組み立てます。
   対応する `proposals[i]` と少なくとも1つ共有する
 - `ai_review`: 1〜2件。必ず `F4` または `F5` を含む（入力に存在する場合）
 - `plan_review`: 計画が無ければ `null`。ある場合のみ1〜3行
+- `insight_selection`: **候補が提示された日のみ任意**・最大2件。`candidate_id` は提示
+  候補の ID のみ（本文生成・改変禁止）。`connector` は省略可・数字禁止・最大20字
 
 ### フィールド規則
 - `fact_ids` は `"F3"` 形式（角括弧なし可）。入力の確定事実に存在する ID のみ

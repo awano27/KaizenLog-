@@ -221,7 +221,7 @@ def test_d1_broken_render_raises_advisor_error(monkeypatch):
     monkeypatch.setattr(af, "validate_advice", lambda d, e: [])
     real_assert = af._assert_render_shape
 
-    def boom(md, *, n_actions):
+    def boom(md, *, n_actions, **_kwargs):
         raise AdvisorError("renderer bug: forced")
 
     monkeypatch.setattr(af, "_assert_render_shape", boom)
@@ -295,7 +295,10 @@ def test_render_golden():
             {"fact_ids": ["F5"], "text": "測定不能なので断定しない"}
         ],
     }
-    md = render_advice_markdown(data, _evidence())
+    # 洞察候補はゴールデンのコア形状検査と分離（候補0で節なし）
+    md = render_advice_markdown(
+        data, replace(_evidence(), insight_candidates=())
+    )
     expected = (
         "### 今日の改善提案\n"
         "1. 解釈文。提案文。翌日見る指標: 指標名\n"
