@@ -1115,3 +1115,57 @@ Claude Code 再起動後も表示される `KaizenLog 空転ブレーカー` 通
 - 今日のアクションはversion、CHANGELOG、wheel metadataと必須テンプレートを10分で照合する作業とし、完了済みcheckbox 1件で表示する。
 - 公開状態はGitHubタグ、GitHub Release、PyPIのすべて未実施と明記し、リリース候補完成と公開済みを混同しない。
 - Activity Log、洞察、日報、未解決、明日のフォーカスを、架空のv1.6.0リリース候補作成へ統一する。
+
+## 2026-08-05 — Reader-visible evidence Graph Engineering rerun
+
+### Goal breakdown
+
+- 現行 `main`（`10ada3b`、Round 54–55後）の日誌・助言契約をモックと既存fixtureだけで再監査する。
+- 助言の各5〜15分アクションに、内部 `fact_ids` から決定論的に得た安全な証拠種別を最大3件表示する。
+- 読者向け洞察から内部候補ID `[C1]` 等を外し、30秒で判断できる本文だけを残す。
+- 発見、設計、RED/GREEN、全回帰の結果を `.kaizenlog/improvement_graph.json` に追記する。
+
+### Dependencies and execution order
+
+1. `src/kaizenlog/advice_format.py` と Round 54–55 tests を監査し、Gap/Evidence/DesignDecisionをグラフへ先行登録する。
+2. `tests/test_graph_engineering_journal_advice.py` に、読者向け証拠表示と内部候補ID非表示の失敗テストを書く。
+3. focused pytestで期待どおりREDを確認する。
+4. `src/kaizenlog/advice_format.py` に固定ラベル変換と最大3件capを最小実装し、GREENを確認する。
+5. critiqueを1回行い、プライバシー、証拠ゲート、PASS/FAIL、action parser、既存Round 54–55との互換性を点検する。基準未達ならreviseは最大1回だけ行う。
+6. focused/related/full pytest、`compileall`、graph validation、`git diff --check` をfreshに実行し、TestResult/Evidence/Failureをグラフへ保存する。
+
+### File ownership
+
+- Modify: `src/kaizenlog/advice_format.py` — 読者向け証拠ラベルと洞察ID非表示。
+- Modify: `tests/test_graph_engineering_journal_advice.py` — reader-visible evidence契約。
+- Modify: `.kaizenlog/improvement_graph.json` — typed nodes/edgesとprovenance。
+- Modify: `PLAN.md` — 今回のdecision trail。
+- Preserve: `.grok/`, `.kaizenlog/logs/`, `scripts/self_improve_graph.py` — 既存の未追跡ユーザー作業。読まず、変更・stageしない。
+
+### Risks and mitigations
+
+- プライバシー漏えい: `AdviceEvidence.markdown` の生テキストや数値は再描画せず、F-IDごとの固定された非機密ラベルだけを表示する。
+- 内部契約漏えい: F-ID/C-ID自体は読者向けMarkdownに表示しない。
+- action parser破壊: checkbox本体とPASS/FAIL行は変更せず、証拠は既存のインデント済み補助行に置く。
+- 過剰表示: 1アクションあたり重複除去後最大3ラベルとし、1〜3件の成功基準に合わせる。
+- 外部副作用: ActivityWatch、実Vault、LLM、`generate`、`advise` は起動しない。
+- 既存作業混入: 開始時の未追跡3パスをbaselineとして保持し、今回4パス以外を編集しない。
+
+### Acceptance criteria and tests
+
+- `render_advice_markdown` の各action直下に `根拠:` が1行あり、共有 `fact_ids` 由来の安全なラベルが1〜3件だけ表示される。
+- rendered Markdownに `[F数字]`、`[C数字]`、モデル生成KZN IDが存在しない。
+- 目安5〜15分、機械PASS、明確なFAIL、mechanism、falsifier、提案/action同数の既存契約が維持される。
+- Graph triple `C-READER-EVIDENCE-20260805 -improves-> G-ADVICE-READER-EVIDENCE-20260805` と、そのTestResultによる `evaluated-as` が存在する。
+- focused RED→GREEN、Round 54–55、全pytest、compileall、graph JSON/型/ID/provenance/dangling edge検証、diff checkが成功する。
+- critique-revise使用数は今回runで2以下。人による30秒読了計測は未実施として構造proxyと分離報告する。
+
+### Execution result
+
+- [x] Phase 1: `E-READER-EVIDENCE-AUDIT-20260805`、`G-ADVICE-READER-EVIDENCE-20260805`、`D-READER-EVIDENCE-LABELS-20260805` を実装前にGraphへ保存した。
+- [x] TDD RED: reader evidence欠落とC-ID露出を2件の失敗で確認した。
+- [x] 初回GREEN後のcritiqueで、`render_reader_advice` が根拠行を落とす失敗を発見し、`F-READER-EVIDENCE-DROPPED-20260805` として保存した。
+- [x] revise 1回で根拠行を最終reader出力まで保持した。今回のcritique-revise使用数は `1/2` で停止した。
+- [x] 関連回帰 `163 passed in 1.28s`、全pytest `1142 passed in 93.95s`、`compileall`、Graph validation、`git diff --check` が成功した。
+- [x] 合成fixtureで、30秒サマリにムダ上位・AI摩擦代理指標・明日のフォーカス、助言に目安10分・機械PASS/FAIL・安全な根拠ラベル・mechanism/falsifierが表示された。
+- [ ] 人による30秒読了計測、実ActivityWatch、実Vault、LLMは制約どおり未実施。構造proxyとモック出力のみを確認した。

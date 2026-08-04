@@ -1,6 +1,7 @@
 """Graph Engineering: short journal insights and bounded action durations."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 import json
 import math
@@ -10,6 +11,7 @@ import pytest
 
 from kaizenlog.advice_evidence import build_advice_evidence
 from kaizenlog.advice_format import render_advice_markdown, validate_advice
+from kaizenlog.advisor import render_reader_advice
 from kaizenlog.memory import MemoryEntry, assign_action_ids
 from kaizenlog.digest import build_digest
 from tests.test_advice_evidence import CURRENT, HISTORY
@@ -73,6 +75,52 @@ def test_rendered_duration_is_once_and_is_preserved_in_memory_action():
     with_ids, entries = assign_action_ids(markdown, date(2026, 8, 2), [])
     assert "（目安10分）" in with_ids
     assert entries[0].action.count("（目安10分）") == 1
+
+
+def test_action_shows_at_most_three_safe_reader_evidence_labels():
+    data = _advice_data(estimated_minutes=10)
+    data["proposals"][0]["fact_ids"] = ["F1", "F3", "F5", "F8"]
+    data["actions"][0]["fact_ids"] = ["F1", "F3", "F5", "F8"]
+
+    markdown = render_advice_markdown(data, _evidence())
+
+    assert (
+        "    - 根拠: 稼働・切替の確定統計 / 入力watcher実測 / "
+        "構造化AIテレメトリ"
+    ) in markdown
+    assert "通常範囲との比較" not in markdown
+    assert "[F1]" not in markdown
+
+
+def test_reader_insight_hides_internal_candidate_ids():
+    evidence = replace(
+        _evidence(),
+        insight_candidates=(
+            ("C1", "リトライ連鎖は2件が観測されています。"),
+            ("C2", "集中ブロックは3件が観測されています。"),
+        ),
+    )
+    data = _advice_data(estimated_minutes=10)
+    data["insight_selection"] = [
+        {"candidate_id": "C1"},
+        {"candidate_id": "C2", "connector": "一方で"},
+    ]
+
+    markdown = render_advice_markdown(data, evidence)
+
+    assert "リトライ連鎖は2件が観測されています。" in markdown
+    assert "一方で、集中ブロックは3件が観測されています。" in markdown
+    assert "[C1]" not in markdown
+    assert "[C2]" not in markdown
+
+
+def test_reader_advice_preserves_safe_evidence_labels_to_final_journal():
+    internal = render_advice_markdown(_advice_data(estimated_minutes=10), _evidence())
+
+    reader = render_reader_advice(internal, _evidence())
+
+    assert "    - 根拠: 入力watcher実測" in reader
+    assert "[F3]" not in reader
 
 
 def test_digest_exposes_direct_waste_ai_measurement_and_tomorrow_focus():

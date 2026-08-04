@@ -3,7 +3,7 @@
   "graph_id": "kaizenlog-practical-journal-advice-2026-08-02",
   "goal": "日誌を30秒で判断でき、アドバイスを1〜3件の証拠に紐づく5〜15分のPASS/FAILマイクロアクションにする",
   "created_at": "2026-08-02T23:01:07+09:00",
-  "updated_at": "2026-08-03T12:48:39+09:00",
+  "updated_at": "2026-08-05T00:32:58+09:00",
   "loop": {
     "pattern": "generate-critique-revise",
     "critique_revise_limit": 2,
@@ -2594,6 +2594,263 @@
         "step": "demo-journal-release-story-verification",
         "timestamp": "2026-08-03T12:48:39+09:00"
       }
+    },
+    {
+      "id": "E-READER-EVIDENCE-AUDIT-20260805",
+      "type": "Evidence",
+      "status": "observed",
+      "claim": "Round 54–55後の助言はproposal/actionのfact_ids一致を検証する一方、読者向けMarkdownではF-IDと証拠リンクを除去し、洞察候補の内部ID [C1] 等だけを表示している。49件のfocused baselineは成功したが、読者が各マイクロアクションの証拠種別を直接確認できない。",
+      "data": {
+        "revision": "10ada3b718d18eee1099754ac825bcd1bf3cbe54",
+        "focused_baseline": "49 passed in 0.65s",
+        "external_services_started": false,
+        "protected_untracked": [
+          ".grok/",
+          ".kaizenlog/logs/",
+          "scripts/self_improve_graph.py"
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "src/kaizenlog/advice_format.py:render_advice_markdown",
+          "src/kaizenlog/advice_format.py:resolve_insight_lines",
+          "tests/test_round54_insight_decision.py",
+          "focused pytest output"
+        ],
+        "step": "20260805-phase1-current-advice-audit",
+        "timestamp": "2026-08-05T00:26:04+09:00"
+      }
+    },
+    {
+      "id": "G-ADVICE-READER-EVIDENCE-20260805",
+      "type": "Gap",
+      "status": "selected",
+      "claim": "証拠ゲートは機械的に成立しているが、読者向け助言で各5〜15分アクションと証拠の結び付きが見えず、内部候補IDが30秒読解を妨げる。",
+      "priority": 1,
+      "acceptance": "各action直下に安全な証拠種別を1〜3件表示し、F-ID/C-IDを表示せず、既存PASS/FAIL・privacy・parser契約を維持する。",
+      "provenance": {
+        "sources": [
+          "E-READER-EVIDENCE-AUDIT-20260805"
+        ],
+        "step": "20260805-phase1-gap-registration",
+        "timestamp": "2026-08-05T00:26:04+09:00"
+      }
+    },
+    {
+      "id": "D-READER-EVIDENCE-LABELS-20260805",
+      "type": "DesignDecision",
+      "status": "approved-from-user-contract",
+      "claim": "各actionのfact_idsを固定の非機密な日本語証拠ラベルへ変換し、重複除去後最大3件をインデント行に表示する。生のEvidence本文・数値・内部IDは表示せず、洞察本文からもC-IDを外す。",
+      "data": {
+        "approach": "deterministic-safe-evidence-labels",
+        "max_labels_per_action": 3,
+        "raw_evidence_reuse": false,
+        "internal_ids_visible": false,
+        "critique_revise_limit": 2,
+        "planned_critique_revise_used": 1
+      },
+      "provenance": {
+        "sources": [
+          "user success criteria: evidence-linked 5–15 minute actions",
+          "E-READER-EVIDENCE-AUDIT-20260805",
+          "PLAN.md 2026-08-05 section"
+        ],
+        "step": "20260805-phase1-generate-critique-revise-design",
+        "timestamp": "2026-08-05T00:26:04+09:00"
+      }
+    },
+    {
+      "id": "T-READER-EVIDENCE-RED-20260805",
+      "type": "TestResult",
+      "status": "failed-expected",
+      "claim": "実装前のfocused TDDは2件とも期待どおり失敗し、reader evidence行の欠落と内部C-ID露出をそれぞれ検出した。",
+      "data": {
+        "command": ".venv/Scripts/python.exe -m pytest tests/test_graph_engineering_journal_advice.py::test_action_shows_at_most_three_safe_reader_evidence_labels tests/test_graph_engineering_journal_advice.py::test_reader_insight_hides_internal_candidate_ids --basetemp <OS-temp> -q",
+        "passed": 0,
+        "failed": 2,
+        "exit_code": 1,
+        "failure_causes": [
+          "reader evidence line absent",
+          "internal candidate IDs visible"
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "focused pytest RED output",
+          "tests/test_graph_engineering_journal_advice.py"
+        ],
+        "step": "20260805-phase2-tdd-red",
+        "timestamp": "2026-08-05T00:30:00+09:00"
+      }
+    },
+    {
+      "id": "F-READER-EVIDENCE-DROPPED-20260805",
+      "type": "Failure",
+      "status": "revise-required",
+      "claim": "初回GREENは内部Markdownだけを検証していた。実保存経路のrender_reader_adviceはaction補助行からmechanism/falsifierだけを運び、追加した根拠行を捨てるため、最終日誌では成功基準を満たさない。",
+      "data": {
+        "critique_iteration": 1,
+        "related_tests_passed": 160,
+        "related_tests_failed": 2,
+        "production_root_cause": "_parse_action_section_blocks does not parse evidence metadata",
+        "test_maintenance": [
+          "round55 expected spacing mismatch",
+          "advice_format golden missing new evidence line"
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "src/kaizenlog/advisor.py:_parse_action_section_blocks",
+          "src/kaizenlog/advisor.py:render_reader_advice",
+          "related pytest output: 160 passed, 2 failed"
+        ],
+        "step": "20260805-phase3-critique-1",
+        "timestamp": "2026-08-05T00:28:33+09:00"
+      }
+    },
+    {
+      "id": "C-READER-EVIDENCE-20260805",
+      "type": "CodeChange",
+      "status": "implemented",
+      "claim": "fact_idsを安全な固定ラベルへ変換してaction直下へ最大3件表示し、render_reader_adviceで最終日誌まで運ぶ。洞察候補本文から内部C-IDを除去した。",
+      "data": {
+        "files": [
+          "src/kaizenlog/advice_format.py",
+          "src/kaizenlog/advisor.py"
+        ],
+        "raw_evidence_reused": false,
+        "max_labels_per_action": 3,
+        "critique_revise_used": 1,
+        "critique_revise_limit": 2
+      },
+      "provenance": {
+        "sources": [
+          "src/kaizenlog/advice_format.py",
+          "src/kaizenlog/advisor.py",
+          "F-READER-EVIDENCE-DROPPED-20260805"
+        ],
+        "step": "20260805-phase3-revise-1-implementation",
+        "timestamp": "2026-08-05T00:32:00+09:00"
+      }
+    },
+    {
+      "id": "T-READER-EVIDENCE-FOCUSED-GREEN-20260805",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "reader evidence保持、golden、insight縮退のfocused revise検証が成功した。",
+      "data": {
+        "command": ".venv/Scripts/python.exe -m pytest <3 focused tests> --basetemp <OS-temp> -q",
+        "passed": 3,
+        "failed": 0,
+        "exit_code": 0,
+        "duration_seconds": 0.51
+      },
+      "provenance": {
+        "sources": [
+          "focused pytest GREEN output",
+          "tests/test_graph_engineering_journal_advice.py",
+          "tests/test_advice_format.py",
+          "tests/test_round55_fixes.py"
+        ],
+        "step": "20260805-phase3-revise-1-green",
+        "timestamp": "2026-08-05T00:32:00+09:00"
+      }
+    },
+    {
+      "id": "T-READER-EVIDENCE-RELATED-20260805",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "Graph Engineering、Round 54–55、advice format、reader変換、Round 35の関連回帰163件が成功した。",
+      "data": {
+        "command": ".venv/Scripts/python.exe -m pytest tests/test_graph_engineering_journal_advice.py tests/test_round54_insight_decision.py tests/test_round55_fixes.py tests/test_advice_format.py tests/test_round43_reader_advice_humanize.py tests/test_round35_journal_information_design.py --basetemp <OS-temp> -q",
+        "passed": 163,
+        "failed": 0,
+        "exit_code": 0,
+        "duration_seconds": 1.28
+      },
+      "provenance": {
+        "sources": [
+          "related pytest output"
+        ],
+        "step": "20260805-phase4-related-regression",
+        "timestamp": "2026-08-05T00:32:58+09:00"
+      }
+    },
+    {
+      "id": "T-READER-EVIDENCE-FULL-20260805",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "今回差分と既存契約を含む全pytest 1142件、およびsrc compileallが成功した。",
+      "data": {
+        "pytest_command": ".venv/Scripts/python.exe -m pytest --basetemp <OS-temp> -q",
+        "passed": 1142,
+        "failed": 0,
+        "exit_code": 0,
+        "duration_seconds": 93.95,
+        "compileall_exit_code": 0,
+        "revision": "10ada3b718d18eee1099754ac825bcd1bf3cbe54"
+      },
+      "provenance": {
+        "sources": [
+          "full pytest output",
+          "python -m compileall -q src output"
+        ],
+        "step": "20260805-phase4-full-regression",
+        "timestamp": "2026-08-05T00:32:58+09:00"
+      }
+    },
+    {
+      "id": "E-READER-EVIDENCE-MOCK-OUTPUT-20260805",
+      "type": "Evidence",
+      "status": "verified-mock",
+      "claim": "合成fixtureの30秒サマリはムダ上位・AI摩擦代理指標・明日のフォーカスを直接表示し、reader adviceは10分action、機械PASS/FAIL、安全な根拠ラベル、mechanism、falsifierを同じカードに表示した。内部F-ID/C-IDは表示されない。",
+      "data": {
+        "journal_signals": [
+          "ムダ上位: エンタメ 35m",
+          "AI作業の質: ツールエラー2/10回",
+          "明日のフォーカス: KZN-20260805-001"
+        ],
+        "advice_action_count": 1,
+        "estimated_minutes": 10,
+        "pass": "focus_blocks >= 2",
+        "fail": "1回以下",
+        "reader_evidence": "入力watcher実測",
+        "internal_fact_ids_visible": false,
+        "internal_candidate_ids_visible": false,
+        "external_services_started": false,
+        "real_vault_modified": false
+      },
+      "provenance": {
+        "sources": [
+          "pure build_digest mock execution",
+          "render_advice_markdown -> render_reader_advice mock execution"
+        ],
+        "step": "20260805-phase4-mock-output-evaluation",
+        "timestamp": "2026-08-05T00:32:58+09:00"
+      }
+    },
+    {
+      "id": "T-READER-EVIDENCE-GRAPH-FINAL-20260805",
+      "type": "TestResult",
+      "status": "passed",
+      "claim": "最終証拠追記後のGraphは有効JSON、既知type、一意ID、全provenance、dangling edgeなし、必須tripleありの閉じた契約として検証された。",
+      "data": {
+        "command": "pytest graph contract + PowerShell structural validator + git diff --check",
+        "pre_final_nodes": 122,
+        "pre_final_edges": 163,
+        "pytest_passed": 1,
+        "exit_code": 0,
+        "final_revalidation": "performed after this node and EDGE-164 were inserted"
+      },
+      "provenance": {
+        "sources": [
+          "graph contract pytest output: 1 passed in 0.44s",
+          "PowerShell graph validator output: PRE_FINAL_GRAPH_OK nodes=122 edges=163",
+          "git diff --check output"
+        ],
+        "step": "20260805-phase4-final-graph-validation",
+        "timestamp": "2026-08-05T00:34:00+09:00"
+      }
     }
   ],
   "edges": [
@@ -4737,6 +4994,160 @@
         ],
         "step": "demo-journal-release-story-verification",
         "timestamp": "2026-08-03T12:48:39+09:00"
+      }
+    },
+    {
+      "id": "EDGE-154",
+      "source": "G-ADVICE-READER-EVIDENCE-20260805",
+      "type": "derived-from",
+      "target": "E-READER-EVIDENCE-AUDIT-20260805",
+      "provenance": {
+        "sources": [
+          "G-ADVICE-READER-EVIDENCE-20260805",
+          "E-READER-EVIDENCE-AUDIT-20260805"
+        ],
+        "step": "20260805-phase1-ground-gap",
+        "timestamp": "2026-08-05T00:26:04+09:00"
+      }
+    },
+    {
+      "id": "EDGE-155",
+      "source": "D-READER-EVIDENCE-LABELS-20260805",
+      "type": "improves",
+      "target": "G-ADVICE-READER-EVIDENCE-20260805",
+      "provenance": {
+        "sources": [
+          "D-READER-EVIDENCE-LABELS-20260805",
+          "G-ADVICE-READER-EVIDENCE-20260805"
+        ],
+        "step": "20260805-phase1-ground-design",
+        "timestamp": "2026-08-05T00:26:04+09:00"
+      }
+    },
+    {
+      "id": "EDGE-156",
+      "source": "T-READER-EVIDENCE-RED-20260805",
+      "type": "supports",
+      "target": "G-ADVICE-READER-EVIDENCE-20260805",
+      "provenance": {
+        "sources": [
+          "T-READER-EVIDENCE-RED-20260805",
+          "G-ADVICE-READER-EVIDENCE-20260805"
+        ],
+        "step": "20260805-phase2-ground-red",
+        "timestamp": "2026-08-05T00:30:00+09:00"
+      }
+    },
+    {
+      "id": "EDGE-157",
+      "source": "F-READER-EVIDENCE-DROPPED-20260805",
+      "type": "contradicts",
+      "target": "D-READER-EVIDENCE-LABELS-20260805",
+      "provenance": {
+        "sources": [
+          "F-READER-EVIDENCE-DROPPED-20260805",
+          "D-READER-EVIDENCE-LABELS-20260805"
+        ],
+        "step": "20260805-phase3-ground-critique-1",
+        "timestamp": "2026-08-05T00:28:33+09:00"
+      }
+    },
+    {
+      "id": "EDGE-158",
+      "source": "C-READER-EVIDENCE-20260805",
+      "type": "improves",
+      "target": "G-ADVICE-READER-EVIDENCE-20260805",
+      "provenance": {
+        "sources": [
+          "C-READER-EVIDENCE-20260805",
+          "G-ADVICE-READER-EVIDENCE-20260805"
+        ],
+        "step": "20260805-phase3-ground-implementation",
+        "timestamp": "2026-08-05T00:32:00+09:00"
+      }
+    },
+    {
+      "id": "EDGE-159",
+      "source": "C-READER-EVIDENCE-20260805",
+      "type": "evaluated-as",
+      "target": "T-READER-EVIDENCE-FOCUSED-GREEN-20260805",
+      "provenance": {
+        "sources": [
+          "C-READER-EVIDENCE-20260805",
+          "T-READER-EVIDENCE-FOCUSED-GREEN-20260805"
+        ],
+        "step": "20260805-phase3-ground-focused-green",
+        "timestamp": "2026-08-05T00:32:00+09:00"
+      }
+    },
+    {
+      "id": "EDGE-160",
+      "source": "C-READER-EVIDENCE-20260805",
+      "type": "derived-from",
+      "target": "F-READER-EVIDENCE-DROPPED-20260805",
+      "provenance": {
+        "sources": [
+          "C-READER-EVIDENCE-20260805",
+          "F-READER-EVIDENCE-DROPPED-20260805"
+        ],
+        "step": "20260805-phase3-ground-revision",
+        "timestamp": "2026-08-05T00:32:00+09:00"
+      }
+    },
+    {
+      "id": "EDGE-161",
+      "source": "C-READER-EVIDENCE-20260805",
+      "type": "evaluated-as",
+      "target": "T-READER-EVIDENCE-RELATED-20260805",
+      "provenance": {
+        "sources": [
+          "C-READER-EVIDENCE-20260805",
+          "T-READER-EVIDENCE-RELATED-20260805"
+        ],
+        "step": "20260805-phase4-ground-related-regression",
+        "timestamp": "2026-08-05T00:32:58+09:00"
+      }
+    },
+    {
+      "id": "EDGE-162",
+      "source": "C-READER-EVIDENCE-20260805",
+      "type": "evaluated-as",
+      "target": "T-READER-EVIDENCE-FULL-20260805",
+      "provenance": {
+        "sources": [
+          "C-READER-EVIDENCE-20260805",
+          "T-READER-EVIDENCE-FULL-20260805"
+        ],
+        "step": "20260805-phase4-ground-full-regression",
+        "timestamp": "2026-08-05T00:32:58+09:00"
+      }
+    },
+    {
+      "id": "EDGE-163",
+      "source": "E-READER-EVIDENCE-MOCK-OUTPUT-20260805",
+      "type": "supports",
+      "target": "C-READER-EVIDENCE-20260805",
+      "provenance": {
+        "sources": [
+          "E-READER-EVIDENCE-MOCK-OUTPUT-20260805",
+          "C-READER-EVIDENCE-20260805"
+        ],
+        "step": "20260805-phase4-ground-mock-output",
+        "timestamp": "2026-08-05T00:32:58+09:00"
+      }
+    },
+    {
+      "id": "EDGE-164",
+      "source": "C-READER-EVIDENCE-20260805",
+      "type": "evaluated-as",
+      "target": "T-READER-EVIDENCE-GRAPH-FINAL-20260805",
+      "provenance": {
+        "sources": [
+          "C-READER-EVIDENCE-20260805",
+          "T-READER-EVIDENCE-GRAPH-FINAL-20260805"
+        ],
+        "step": "20260805-phase4-ground-final-graph",
+        "timestamp": "2026-08-05T00:34:00+09:00"
       }
     }
   ]

@@ -155,7 +155,9 @@ def test_u1_degrade_after_failed_repair(monkeypatch):
     assert report.final_ok is True
     assert md is not None
     assert "事実からの洞察" in md
-    assert "[C1]" in md and "[C2]" in md
+    assert "リトライ連鎖は 2件が観測されています。" in md
+    assert "集中ブロックは 3件が観測されています。" in md
+    assert "[C1]" not in md and "[C2]" not in md
     assert "C99" not in md
 
 
@@ -303,9 +305,9 @@ def test_u3_case4_degrade_renders_top2():
     md = render_advice_markdown(data, ev)
     assert "事実からの洞察" in md
     top_n = json.loads(path.read_text(encoding="utf-8"))["insight_eval"]["degrade_top_n"]
-    cids = [c[0] for c in ev.insight_candidates[:top_n]]
-    for cid in cids:
-        assert f"[{cid}]" in md
+    for cid, text in ev.insight_candidates[:top_n]:
+        assert text in md
+        assert f"[{cid}]" not in md
     assert "C99" not in md
 
 

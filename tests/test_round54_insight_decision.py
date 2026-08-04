@@ -220,8 +220,9 @@ def test_t1_3_selection_renders_verbatim():
     ]
     md = render_advice_markdown(data, ev)
     assert "## 🧠 事実からの洞察" in md
-    assert "リトライ連鎖は 2件が観測されています。 [C1]" in md
-    assert "一方で、集中ブロックは 3件が観測されています。 [C2]" in md
+    assert "リトライ連鎖は 2件が観測されています。" in md
+    assert "一方で、集中ブロックは 3件が観測されています。" in md
+    assert "[C1]" not in md and "[C2]" not in md
 
 
 def test_t1_4_unknown_candidate_id_contract_error():
@@ -251,7 +252,9 @@ def test_t1_6_degrade_on_violation():
     md = render_advice_markdown(data, ev)
     assert "## 🧠 事実からの洞察" in md
     # 上位2本
-    assert "[C1]" in md and "[C2]" in md
+    assert "リトライ連鎖は 2件が観測されています。" in md
+    assert "集中ブロックは 3件が観測されています。" in md
+    assert "[C1]" not in md and "[C2]" not in md
     assert "C99" not in md
 
 

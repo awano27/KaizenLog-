@@ -26,6 +26,31 @@ _NEWLINE_RE = re.compile(r"[\r\n]")
 _KZN_RE = re.compile(r"KZN-\d{8}")
 _DIGIT_RE = re.compile(r"\d")
 
+# 読者向けには内部F-IDや生のEvidence本文を出さず、非機密の証拠種別だけを示す。
+_READER_FACT_LABELS = {
+    "[F0]": "当日統計の測定限界",
+    "[F1]": "稼働・切替の確定統計",
+    "[F2]": "カテゴリ別実測",
+    "[F3]": "入力watcher実測",
+    "[F4]": "AI関連画面の分類推定",
+    "[F5]": "構造化AIテレメトリ",
+    "[F6]": "ブラウザ前景・サイト実測",
+    "[F7]": "エンタメカテゴリ実測",
+    "[F8]": "通常範囲との比較",
+    "[F9]": "カテゴリ遷移実測",
+    "[F10]": "履歴ベースの推奨PASS帯",
+    "[F11]": "依頼長さの層別実測",
+    "[F14]": "今日の目標",
+    "[F15]": "目標カテゴリ実測",
+    "[F16]": "目標記入履歴",
+    "[F17]": "改善の風化履歴",
+    "[F18]": "コーチ効果の判定履歴",
+    "[F19]": "画面計測とAI CLIログの差",
+    "[F20]": "摩擦セッション実測",
+    "[F21]": "PASS指標の実測分布",
+    "[F22]": "目標達成度の自己申告",
+}
+
 
 def _contract_error(msg: str):
     from .advisor import AdviceContractError
@@ -215,6 +240,24 @@ def _norm_fact_id(token: str) -> str | None:
     if not m:
         return None
     return f"[F{m.group(1)}]"
+
+
+def _reader_evidence_labels(value: object, *, limit: int = 3) -> tuple[str, ...]:
+    """fact_idsを安全な読者向けラベルへ変換し、順序保持で最大limit件にする。"""
+    if not isinstance(value, list) or limit <= 0:
+        return ()
+    labels: list[str] = []
+    for token in value:
+        if not isinstance(token, str):
+            continue
+        fact_id = _norm_fact_id(token)
+        label = _READER_FACT_LABELS.get(fact_id or "")
+        if label is None or label in labels:
+            continue
+        labels.append(label)
+        if len(labels) >= limit:
+            break
+    return tuple(labels)
 
 
 def _as_str_list(value: Any, field: str) -> list[str]:
@@ -730,13 +773,13 @@ def resolve_insight_lines(data: dict, evidence: AdviceEvidence) -> list[str]:
                 continue
             conn = item.get("connector")
             if i > 0 and isinstance(conn, str) and conn.strip():
-                lines.append(f"- {conn.strip()}、{text} [{cid}]")
+                lines.append(f"- {conn.strip()}、{text}")
             else:
-                lines.append(f"- {text} [{cid}]")
+                lines.append(f"- {text}")
     if not lines:
         # 縮退: 上位2本を原文のまま
-        for cid, text in candidates[:2]:
-            lines.append(f"- {text} [{cid}]")
+        for _cid, text in candidates[:2]:
+            lines.append(f"- {text}")
     return lines
 
 
@@ -832,6 +875,9 @@ def render_advice_markdown(data: dict, evidence: AdviceEvidence) -> str:
             f"｜PASS: {core}{note}｜FAIL: {item['fail'].strip()}"
         )
         # 内部専用の対応付け: 素の箇条書きで運ぶ（- [ ] 禁止＝assign_action_ids 汚染防止）
+        evidence_labels = _reader_evidence_labels(item.get("fact_ids"))
+        if evidence_labels:
+            lines.append(f"    - 根拠: {' / '.join(evidence_labels)}")
         mechanism = str(item.get("mechanism") or "").strip()
         falsifier = str(item.get("falsifier") or "").strip()
         if mechanism:

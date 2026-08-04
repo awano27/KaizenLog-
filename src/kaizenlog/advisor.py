@@ -639,7 +639,7 @@ def evidence_gated_action_errors(
 
 
 def _parse_action_section_blocks(section: str) -> list[tuple[str, dict[str, str]]]:
-    """明日の最小アクション区間を (本文, {mechanism, falsifier}) の列へ。"""
+    """明日の最小アクション区間を (本文, 補助メタデータ) の列へ。"""
     blocks: list[tuple[str, dict[str, str]]] = []
     current: str | None = None
     meta: dict[str, str] = {}
@@ -654,7 +654,9 @@ def _parse_action_section_blocks(section: str) -> list[tuple[str, dict[str, str]
         if current is None:
             continue
         sub = line.strip()
-        if sub.startswith("- なぜ効くと考えるか:"):
+        if sub.startswith("- 根拠:"):
+            meta["evidence"] = sub.split(":", 1)[1].strip()
+        elif sub.startswith("- なぜ効くと考えるか:"):
             meta["mechanism"] = sub.split(":", 1)[1].strip()
         elif sub.startswith("- 効かなかったと分かる条件:"):
             meta["falsifier"] = sub.split(":", 1)[1].strip()
@@ -696,9 +698,12 @@ def render_reader_advice(advice_md: str, evidence: AdviceEvidence) -> str:
                 why, metric = context
                 if why and metric:
                     rendered += f"\n    - なぜ: {why}\n    - 明日見る数字: {metric}"
-            # §C2: mechanism / falsifier は素の箇条書きのみ（- [ ] 禁止）
+            # §C2: 補助情報は素の箇条書きのみ（- [ ] 禁止）
+            evidence_label = meta.get("evidence") or ""
             mechanism = meta.get("mechanism") or ""
             falsifier = meta.get("falsifier") or ""
+            if evidence_label:
+                rendered += f"\n    - 根拠: {evidence_label}"
             if mechanism:
                 rendered += f"\n    - なぜ効くと考えるか: {mechanism}"
             if falsifier:
