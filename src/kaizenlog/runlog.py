@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 import statistics
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -152,6 +153,9 @@ def log_advise_health(
     outcome: str,
     duration_seconds: float,
     violations: list[str] | None = None,
+    configured_backend: str | None = None,
+    actual_backend: str | None = None,
+    reason_codes: list[str] | None = None,
     retention_days: int = 90,
     now: datetime | None = None,
 ) -> None:
@@ -171,16 +175,30 @@ def log_advise_health(
         if k not in seen:
             seen.add(k)
             uniq_kinds.append(k)
+    seen_reasons: set[str] = set()
+    uniq_reasons: list[str] = []
+    for reason in reason_codes or []:
+        reason_s = str(reason)
+        if reason_s not in seen_reasons:
+            seen_reasons.add(reason_s)
+            uniq_reasons.append(reason_s)
+    configured = str(configured_backend or backend or "")
+    actual = str(actual_backend or configured or backend or "")
     entry = {
+        "schema_version": 2,
+        "run_id": uuid.uuid4().hex,
         "ts": (now or datetime.now(timezone.utc)).isoformat(),
         "command": ADVISE_HEALTH_COMMAND,
         "ok": outcome in ("ok", "repaired"),
         "duration_seconds": round(float(duration_seconds), 1),
         "date": day_s,
-        "backend": str(backend or ""),
+        "backend": actual,
+        "configured_backend": configured,
+        "actual_backend": actual,
         "outcome": outcome,
         # 本文は載せない（種別タグのみ）
         "violations": uniq_kinds,
+        "reason_codes": uniq_reasons,
     }
     _append_run_entry(logs_dir, entry, retention_days=retention_days, now=now)
 

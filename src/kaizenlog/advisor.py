@@ -17,7 +17,8 @@ import re
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+import inspect
 from importlib import resources
 from pathlib import Path
 from typing import Callable
@@ -221,10 +222,21 @@ class AdvisorError(RuntimeError):
 class AdviceContractError(AdvisorError):
     """改善提案が保存可能な出力契約を満たさない。"""
 
-    def __init__(self, message: str, violations: list[str] | None = None):
+    def __init__(
+        self,
+        message: str,
+        violations: list[str] | None = None,
+        *,
+        actual_backend: str | None = None,
+        fallback_used: bool = False,
+        reason_codes: list[str] | None = None,
+    ):
         super().__init__(message)
         # 種別分類用の短いメッセージ列（本文・プロンプトは載せない前提で呼び出し側がタグ化）
         self.violations = list(violations) if violations else [str(message)]
+        self.actual_backend = actual_backend
+        self.fallback_used = fallback_used
+        self.reason_codes = list(reason_codes or [])
 
 
 @dataclass
@@ -234,6 +246,9 @@ class AdviceResult:
     markdown: str
     outcome: str = "ok"  # ok | repaired
     violations: list[str] = field(default_factory=list)
+    actual_backend: str | None = None
+    fallback_used: bool = False
+    reason_codes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1217,26 +1232,88 @@ def generate_advice(
         reflections=reflections,
     )
 
+    trace = GenerationTrace(configured_backend=cfg.backend)
+
+    def _generate_with_trace(run_cfg: LLMConfig, system: str, user: str) -> str:
+        """追跡可能な実装と、既存の3引数テストダブルの両方を受け入れる。"""
+        try:
+            parameters = inspect.signature(generate_text).parameters.values()
+            accepts_trace = any(
+                parameter.name == "trace"
+                or parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters
+            )
+        except (TypeError, ValueError):
+            accepts_trace = False
+        attempts_before = len(trace.attempts)
+        if accepts_trace:
+            text = generate_text(run_cfg, system, user, trace=trace)
+        else:
+            text = generate_text(run_cfg, system, user)
+        if len(trace.attempts) == attempts_before:
+            trace.attempts.append(GenerationAttempt(run_cfg.backend, 1, "success"))
+            trace.actual_backend = run_cfg.backend
+            trace.fallback_used = run_cfg.backend != trace.configured_backend
+        return text
+
     # 日次プロンプト以外は従来どおり素通し
     if not requires_daily_contract(cfg):
-        raw = generate_text(cfg, system_prompt, prompt)
+        raw = _generate_with_trace(cfg, system_prompt, prompt)
         return AdviceResult(
             markdown=f"## 🚀 Kaizen（AIからの改善提案）\n\n{raw}",
             outcome="ok",
+            actual_backend=trace.actual_backend,
+            fallback_used=trace.fallback_used,
         )
 
     assert evidence_ctx is not None
     markdown, report = _run_daily_pipeline(
-        cfg, system_prompt, prompt, evidence_ctx, redactor=redactor
+        cfg,
+        system_prompt,
+        prompt,
+        evidence_ctx,
+        redactor=redactor,
+        generate_fn=_generate_with_trace,
     )
+    reason_codes: list[str] = []
+    if (
+        not report.final_ok
+        and cfg.fallback_to_local
+        and trace.actual_backend != "openai-compatible"
+    ):
+        reason_codes = [FailureReason.CONTRACT_INVALID.value]
+        local_cfg = replace(
+            cfg,
+            backend="openai-compatible",
+            fallback_to_local=False,
+            retries=0,
+        )
+        markdown, report = _run_daily_pipeline(
+            local_cfg,
+            system_prompt,
+            prompt,
+            evidence_ctx,
+            redactor=redactor,
+            generate_fn=_generate_with_trace,
+        )
     if not report.final_ok or markdown is None:
         errs = report.final_violations or report.first_violations or ["契約未達"]
         raise AdviceContractError(
             "LLMの改善提案が保存条件を満たしませんでした:\n- " + "\n- ".join(errs),
             violations=errs,
+            actual_backend=trace.actual_backend,
+            fallback_used=trace.fallback_used,
+            reason_codes=reason_codes,
         )
     return AdviceResult(
         markdown=markdown,
-        outcome=report.outcome if report.outcome in ("ok", "repaired") else "ok",
+        outcome=(
+            "repaired"
+            if reason_codes
+            else report.outcome if report.outcome in ("ok", "repaired") else "ok"
+        ),
         violations=report.first_violations if report.repaired else [],
+        actual_backend=trace.actual_backend,
+        fallback_used=trace.fallback_used,
+        reason_codes=reason_codes,
     )

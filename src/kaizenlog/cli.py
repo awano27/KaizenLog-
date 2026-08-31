@@ -1926,6 +1926,8 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
     t_advise = monotonic()
     outcome = "ok"
     violations: list[str] = []
+    actual_backend: str | None = None
+    reason_codes: list[str] = []
     try:
         result = generate_advice(
             cfg.llm, activity_md, recent,
@@ -1940,6 +1942,8 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
             advice_md = result.markdown
             outcome = result.outcome
             violations = list(result.violations)
+            actual_backend = result.actual_backend
+            reason_codes = list(result.reason_codes)
         else:
             # 後方互換（モックが str を返すテスト）
             advice_md = str(result)
@@ -1957,6 +1961,8 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
             outcome="degraded",
             duration_seconds=monotonic() - t_advise,
             violations=getattr(e, "violations", None) or [str(e)],
+            actual_backend=getattr(e, "actual_backend", None),
+            reason_codes=getattr(e, "reason_codes", None),
         )
         raise
     except Exception:
@@ -2019,6 +2025,8 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
         outcome=outcome,
         duration_seconds=monotonic() - t_advise,
         violations=violations,
+        actual_backend=actual_backend,
+        reason_codes=reason_codes,
     )
     return path
 
@@ -2030,6 +2038,8 @@ def _safe_log_advise_health(
     outcome: str,
     duration_seconds: float,
     violations: list[str] | None = None,
+    actual_backend: str | None = None,
+    reason_codes: list[str] | None = None,
 ) -> None:
     """ヘルス記録の失敗で本処理を落とさない。"""
     try:
@@ -2037,9 +2047,12 @@ def _safe_log_advise_health(
             cfg.logs_path,
             day=day,
             backend=getattr(cfg.llm, "backend", "") or "",
+            configured_backend=getattr(cfg.llm, "backend", "") or "",
+            actual_backend=actual_backend,
             outcome=outcome,
             duration_seconds=duration_seconds,
             violations=violations,
+            reason_codes=reason_codes,
             retention_days=cfg.log_retention_days,
         )
     except Exception:
