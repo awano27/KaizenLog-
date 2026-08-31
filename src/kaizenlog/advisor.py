@@ -26,6 +26,7 @@ import requests
 
 from .advice_evidence import AdviceEvidence, build_advice_evidence
 from .config import LLMConfig
+from .reliability import FailureReason, GenerationAttempt, GenerationTrace
 
 BUNDLED_PROMPTS = (
     "daily_advisor",
@@ -259,6 +260,39 @@ class BackendUnavailable(AdvisorError):
     """
 
 
+_CLAUDE_AUTH_FAILURE_NEEDLES = (
+    "not logged in",
+    "/login",
+    "unauthor",
+    "oauth",
+    "401",
+    "403",
+)
+
+
+def _claude_auth_failure(text: str, data: dict | None) -> bool:
+    """Return whether a Claude CLI response indicates that authentication is required."""
+    payload = ""
+    if data is not None:
+        payload = json.dumps(data, ensure_ascii=False, default=str)
+    combined = f"{text}\n{payload}".lower()
+    return any(needle in combined for needle in _CLAUDE_AUTH_FAILURE_NEEDLES)
+
+
+def _provider_failure_reason(error: AdvisorError) -> FailureReason:
+    """Classify a provider exception without recording its potentially sensitive detail."""
+    message = str(error).lower()
+    if isinstance(error, BackendUnavailable):
+        if any(needle in message for needle in ("login", "auth", "oauth", "401", "403")):
+            return FailureReason.PROVIDER_AUTH_REQUIRED
+        if "timeout" in message or "タイムアウト" in message:
+            return FailureReason.PROVIDER_TIMEOUT
+        return FailureReason.PROVIDER_UNAVAILABLE
+    if "timeout" in message or "タイムアウト" in message:
+        return FailureReason.PROVIDER_TIMEOUT
+    return FailureReason.PROVIDER_ERROR
+
+
 def _resolve_command(command: str, hint: str) -> str:
     """CLIコマンドを実行可能なフルパスに解決する。
 
@@ -392,47 +426,47 @@ def _call_claude_code_cli(cfg: LLMConfig, system_prompt: str, user_prompt: str) 
         raise BackendUnavailable(missing_hint) from e
     except subprocess.TimeoutExpired as e:
         raise AdvisorError(f"Claude Code CLI がタイムアウトしました（{cfg.timeout_seconds}秒）。") from e
+    stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
+    data: dict | None = None
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError:
+        pass
+    else:
+        if isinstance(parsed, dict):
+            data = parsed
+
     if result.returncode != 0:
-        stderr = result.stderr.strip()[:500]
-        stdout = result.stdout.strip()[:500]
+        detail = (stderr or stdout)[:500]
         # 認証エラーの本文はstderrではなく stdout のJSON（result/api_error_status）に
         # 入ることがある（実CLI: exit 1・stderr空・stdoutに "401 OAuth ... expired"）。
         # 両方を見て判定しないと、リトライで直らない未認証を一時エラー扱いして
         # 20秒×リトライを空回りさせた挙句、意味不明な空メッセージを出す
-        detail = stderr or stdout
-        combined = f"{stderr}\n{stdout}".lower()
-        if any(k in combined for k in ("authenticate", "unauthor", "oauth",
-                                       "/login", "log in", "401", "api key")):
+        if _claude_auth_failure(f"{stderr}\n{stdout}", data):
             # 未認証はリトライで直らない → 即フォールバック対象
             raise BackendUnavailable(
                 f"Claude Code CLI が未認証の可能性があります。"
                 f"`claude` を対話起動して /login してください:\n{detail}")
         raise AdvisorError(f"Claude Code CLI がエラーを返しました:\n{detail}")
-    stdout = result.stdout.strip()
     if not stdout:
         raise AdvisorError("Claude Code CLI の出力が空でした。")
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError:
+    if data is None:
         return stdout  # 古いCLI等でJSON非対応の場合はプレーンテキストとして扱う
-    if isinstance(data, dict):
-        # JSONで応答した以上はJSONプロトコルとして厳密に扱う。exit 0 でも
-        # {"is_error": true, "result": null} のようなエラー封筒がありうるため、
-        # そのままreturnすると生JSONが「改善提案」としてノートに書き込まれる
+    if _claude_auth_failure(stdout, data):
         result_text = data.get("result")
-        if not data.get("is_error") and isinstance(result_text, str) and result_text.strip():
-            return result_text.strip()
-        # 認証切れは exit 0・is_error:true・api_error_status:401 で返ることがある。
-        # リトライで直らないので即フォールバック対象（BackendUnavailable）
-        err_body = f"{data.get('api_error_status', '')} {result_text or ''}".lower()
-        if data.get("api_error_status") in (401, 403) or "authenticate" in err_body:
-            raise BackendUnavailable(
-                f"Claude Code CLI が未認証です。`claude` を対話起動して /login してください:\n"
-                f"{str(result_text)[:300]}")
-        subtype = data.get("subtype", "unknown")
-        raise AdvisorError(
-            f"Claude Code CLI がエラー応答を返しました（subtype: {subtype}）:\n{stdout[:500]}")
-    return stdout
+        raise BackendUnavailable(
+            f"Claude Code CLI が未認証です。`claude` を対話起動して /login してください:\n"
+            f"{str(result_text)[:300]}")
+    # JSONで応答した以上はJSONプロトコルとして厳密に扱う。exit 0 でも
+    # {"is_error": true, "result": null} のようなエラー封筒がありうるため、
+    # そのままreturnすると生JSONが「改善提案」としてノートに書き込まれる
+    result_text = data.get("result")
+    if not data.get("is_error") and isinstance(result_text, str) and result_text.strip():
+        return result_text.strip()
+    subtype = data.get("subtype", "unknown")
+    raise AdvisorError(
+        f"Claude Code CLI がエラー応答を返しました（subtype: {subtype}）:\n{stdout[:500]}")
 
 
 def _call_openai_compatible(cfg: LLMConfig, system_prompt: str, user_prompt: str) -> str:
@@ -486,7 +520,12 @@ def _call_openai_compatible(cfg: LLMConfig, system_prompt: str, user_prompt: str
 
 
 def generate_text(
-    cfg: LLMConfig, system_prompt: str, user_prompt: str, sleep=time.sleep
+    cfg: LLMConfig,
+    system_prompt: str,
+    user_prompt: str,
+    sleep=time.sleep,
+    *,
+    trace: GenerationTrace | None = None,
 ) -> str:
     """設定されたバックエンドでテキストを生成する（改善提案・日報などの共通経路）。
 
@@ -518,12 +557,25 @@ def generate_text(
             try:
                 # CLI のみセンチネル付与（backend ごとに。フォールバック先 openai は対象外）
                 sp = apply_internal_sentinel(system_prompt, backend)
-                return call(cfg, sp, user_prompt)
+                text = call(cfg, sp, user_prompt)
+                if trace is not None:
+                    trace.attempts.append(GenerationAttempt(backend, attempt + 1, "success"))
+                    trace.actual_backend = backend
+                    trace.fallback_used = backend != trace.configured_backend
+                return text
             except BackendUnavailable as e:
                 last_error = e
+                if trace is not None:
+                    trace.attempts.append(GenerationAttempt(
+                        backend, attempt + 1, "failure", _provider_failure_reason(e)
+                    ))
                 break  # 環境起因の失敗はリトライしても直らない
             except AdvisorError as e:
                 last_error = e
+                if trace is not None:
+                    trace.attempts.append(GenerationAttempt(
+                        backend, attempt + 1, "failure", _provider_failure_reason(e)
+                    ))
                 if attempt < cfg.retries:
                     print(f"⚠️  {backend} の呼び出しに失敗（{attempt + 1}回目）。"
                           f"{cfg.retry_wait_seconds}秒後に再試行します: {e}")
