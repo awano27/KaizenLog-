@@ -127,9 +127,15 @@ class OpsLedger:
         while True:
             con = sqlite3.connect(self.path, timeout=5.0)
             try:
+                version = int(con.execute("PRAGMA user_version").fetchone()[0])
+                if version == 0:
+                    con.execute("PRAGMA user_version=1")
+                elif version != 1:
+                    raise RuntimeError(
+                        f"Operational ledger has newer unsupported schema version {version}"
+                    )
                 con.execute("PRAGMA busy_timeout=5000")
                 con.execute("PRAGMA journal_mode=WAL")
-                con.execute("PRAGMA user_version=1")
                 con.execute(
                     """
                     CREATE TABLE IF NOT EXISTS runs (
@@ -152,6 +158,9 @@ class OpsLedger:
                 con.execute("CREATE INDEX IF NOT EXISTS idx_runs_command_ts ON runs(command, ts)")
                 con.execute("CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id)")
                 return con
+            except RuntimeError:
+                con.close()
+                raise
             except sqlite3.OperationalError:
                 con.close()
                 if time.monotonic() >= deadline:

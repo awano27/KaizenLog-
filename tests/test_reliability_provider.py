@@ -47,3 +47,37 @@ def test_generate_text_trace_records_actual_fallback_backend(monkeypatch):
         FailureReason.PROVIDER_AUTH_REQUIRED,
         FailureReason.NONE,
     ]
+
+
+def test_successful_claude_text_mentioning_http_403_is_not_auth_failure(monkeypatch):
+    """Treating ordinary successful model text as a status envelope would reject advice."""
+    completed = subprocess.CompletedProcess(
+        ["claude"],
+        0,
+        stdout=json.dumps({
+            "is_error": False,
+            "result": "HTTP 403 is a useful example in the advice.",
+        }),
+        stderr="",
+    )
+    monkeypatch.setattr(advisor.shutil, "which", lambda _: "claude.exe")
+    monkeypatch.setattr(advisor.subprocess, "run", lambda *a, **k: completed)
+
+    assert advisor._call_claude_code_cli(LLMConfig(), "system", "user") == (
+        "HTTP 403 is a useful example in the advice."
+    )
+
+
+def test_claude_error_envelope_with_http_401_is_auth_failure(monkeypatch):
+    """A non-success envelope carrying 401 must still avoid retrying Claude."""
+    completed = subprocess.CompletedProcess(
+        ["claude"],
+        0,
+        stdout=json.dumps({"is_error": True, "result": "HTTP 401 token expired"}),
+        stderr="",
+    )
+    monkeypatch.setattr(advisor.shutil, "which", lambda _: "claude.exe")
+    monkeypatch.setattr(advisor.subprocess, "run", lambda *a, **k: completed)
+
+    with pytest.raises(BackendUnavailable, match="未認証"):
+        advisor._call_claude_code_cli(LLMConfig(), "system", "user")

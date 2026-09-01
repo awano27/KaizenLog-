@@ -3,6 +3,7 @@ from __future__ import annotations
 from kaizenlog import advisor
 from kaizenlog.advice_evidence import build_advice_evidence
 from kaizenlog.config import LLMConfig
+from kaizenlog.reliability import FailureReason
 from kaizenlog.runlog import load_runs, log_advise_health
 
 
@@ -68,3 +69,34 @@ def test_advice_health_keeps_unknown_actual_backend_distinct(tmp_path):
 
     assert row["actual_backend"] is None
     assert row["backend"] == "claude-code-cli"
+
+
+def test_primary_auth_fallback_repairs_with_active_local_backend_once(monkeypatch):
+    """Re-probing a dead primary during repair would exceed the provider call bound."""
+    from tests.test_advice_evidence import CURRENT, VALID_ADVICE_JSON
+
+    calls: list[str] = []
+    evidence = build_advice_evidence(CURRENT)
+
+    def unavailable(*_):
+        calls.append("claude-code-cli")
+        raise advisor.BackendUnavailable("not logged in")
+
+    def local(_, __, ___):
+        calls.append("openai-compatible")
+        return "not json" if calls.count("openai-compatible") == 1 else VALID_ADVICE_JSON
+
+    monkeypatch.setattr(advisor, "_call_claude_code_cli", unavailable)
+    monkeypatch.setattr(advisor, "_call_openai_compatible", local)
+    cfg = LLMConfig(
+        backend="claude-code-cli",
+        fallback_to_local=True,
+        retries=2,
+        system_prompt="daily_advisor",
+    )
+
+    result = advisor.generate_advice(cfg, "today", [], evidence=evidence)
+
+    assert calls == ["claude-code-cli", "openai-compatible", "openai-compatible"]
+    assert result.actual_backend == "openai-compatible"
+    assert result.reason_codes == [FailureReason.PROVIDER_AUTH_REQUIRED.value]

@@ -280,25 +280,42 @@ _CLAUDE_AUTH_FAILURE_NEEDLES = (
     "/login",
     "unauthor",
     "oauth",
-    "401",
-    "403",
 )
 
 
-def _claude_auth_failure(text: str, data: dict | None) -> bool:
+def _claude_auth_failure(
+    text: str,
+    data: dict | None,
+    *,
+    non_success: bool = False,
+) -> bool:
     """Return whether a Claude CLI response indicates that authentication is required."""
-    payload = ""
-    if data is not None:
-        payload = json.dumps(data, ensure_ascii=False, default=str)
+    payload = json.dumps(data, ensure_ascii=False, default=str) if data is not None else ""
     combined = f"{text}\n{payload}".lower()
-    return any(needle in combined for needle in _CLAUDE_AUTH_FAILURE_NEEDLES)
+    if any(needle in combined for needle in _CLAUDE_AUTH_FAILURE_NEEDLES):
+        return True
+
+    # A successful model answer may legitimately discuss HTTP 401/403. Numeric
+    # status codes are evidence only in an error envelope or structured
+    # status/error field, never in ordinary result text.
+    structured = ""
+    is_error = False
+    if isinstance(data, dict):
+        is_error = data.get("is_error") is True
+        structured = "\n".join(
+            str(value)
+            for key, value in data.items()
+            if "status" in str(key).lower() or "error" in str(key).lower()
+        )
+    numeric_context = f"{structured}\n{text if non_success or is_error else ''}"
+    return any(code in numeric_context for code in ("401", "403"))
 
 
 def _provider_failure_reason(error: AdvisorError) -> FailureReason:
     """Classify a provider exception without recording its potentially sensitive detail."""
     message = str(error).lower()
     if isinstance(error, BackendUnavailable):
-        if any(needle in message for needle in ("login", "auth", "oauth", "401", "403")):
+        if any(needle in message for needle in ("login", "logged in", "auth", "oauth", "401", "403")):
             return FailureReason.PROVIDER_AUTH_REQUIRED
         if "timeout" in message or "タイムアウト" in message:
             return FailureReason.PROVIDER_TIMEOUT
@@ -458,7 +475,7 @@ def _call_claude_code_cli(cfg: LLMConfig, system_prompt: str, user_prompt: str) 
         # 入ることがある（実CLI: exit 1・stderr空・stdoutに "401 OAuth ... expired"）。
         # 両方を見て判定しないと、リトライで直らない未認証を一時エラー扱いして
         # 20秒×リトライを空回りさせた挙句、意味不明な空メッセージを出す
-        if _claude_auth_failure(f"{stderr}\n{stdout}", data):
+        if _claude_auth_failure(f"{stderr}\n{stdout}", data, non_success=True):
             # 未認証はリトライで直らない → 即フォールバック対象
             raise BackendUnavailable(
                 f"Claude Code CLI が未認証の可能性があります。"
@@ -1236,6 +1253,22 @@ def generate_advice(
 
     def _generate_with_trace(run_cfg: LLMConfig, system: str, user: str) -> str:
         """追跡可能な実装と、既存の3引数テストダブルの両方を受け入れる。"""
+        # Once generate_text has made a non-retryable provider fallback, any
+        # repair in this same pipeline must use the successful local backend
+        # directly. Re-entering the configured CLI would re-probe a known-dead
+        # provider and violate the bounded-attempt contract.
+        active_cfg = run_cfg
+        if (
+            run_cfg.backend == trace.configured_backend
+            and trace.actual_backend
+            and trace.actual_backend != run_cfg.backend
+        ):
+            active_cfg = replace(
+                run_cfg,
+                backend=trace.actual_backend,
+                fallback_to_local=False,
+                retries=0,
+            )
         try:
             parameters = inspect.signature(generate_text).parameters.values()
             accepts_trace = any(
@@ -1247,14 +1280,24 @@ def generate_advice(
             accepts_trace = False
         attempts_before = len(trace.attempts)
         if accepts_trace:
-            text = generate_text(run_cfg, system, user, trace=trace)
+            text = generate_text(active_cfg, system, user, trace=trace)
         else:
-            text = generate_text(run_cfg, system, user)
+            text = generate_text(active_cfg, system, user)
         if len(trace.attempts) == attempts_before:
-            trace.attempts.append(GenerationAttempt(run_cfg.backend, 1, "success"))
-            trace.actual_backend = run_cfg.backend
-            trace.fallback_used = run_cfg.backend != trace.configured_backend
+            trace.attempts.append(GenerationAttempt(active_cfg.backend, 1, "success"))
+            trace.actual_backend = active_cfg.backend
+            trace.fallback_used = active_cfg.backend != trace.configured_backend
         return text
+
+    def _trace_reason_codes() -> list[str]:
+        codes: list[str] = []
+        for attempt in trace.attempts:
+            if attempt.reason is FailureReason.NONE:
+                continue
+            code = attempt.reason.value
+            if code not in codes:
+                codes.append(code)
+        return codes
 
     # 日次プロンプト以外は従来どおり素通し
     if not requires_daily_contract(cfg):
@@ -1264,6 +1307,7 @@ def generate_advice(
             outcome="ok",
             actual_backend=trace.actual_backend,
             fallback_used=trace.fallback_used,
+            reason_codes=_trace_reason_codes(),
         )
 
     assert evidence_ctx is not None
@@ -1275,13 +1319,14 @@ def generate_advice(
         redactor=redactor,
         generate_fn=_generate_with_trace,
     )
-    reason_codes: list[str] = []
+    reason_codes = _trace_reason_codes()
     if (
         not report.final_ok
         and cfg.fallback_to_local
         and trace.actual_backend != "openai-compatible"
     ):
-        reason_codes = [FailureReason.CONTRACT_INVALID.value]
+        if FailureReason.CONTRACT_INVALID.value not in reason_codes:
+            reason_codes.append(FailureReason.CONTRACT_INVALID.value)
         local_cfg = replace(
             cfg,
             backend="openai-compatible",

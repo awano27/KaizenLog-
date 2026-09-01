@@ -259,3 +259,34 @@ def test_doctor_claude_auth_probe_maps_unavailable_probe_results(monkeypatch, fa
     doctor._check_llm(c, cfg)
 
     assert expected in "\n".join(c.lines)
+
+
+@pytest.mark.parametrize(
+    ("stdout", "returncode", "expected"),
+    [
+        ("[]", 0, "provider_probe_unknown"),
+        ("null", 0, "provider_probe_unknown"),
+        ("{}", 0, "provider_probe_unknown"),
+        ('"false"', 0, "provider_probe_unknown"),
+        ('{"loggedIn": "true"}', 0, "provider_probe_unknown"),
+        ('{"loggedIn": true}', 0, "認証状態: ok"),
+        ('{"loggedIn": false}', 0, "provider_auth_required"),
+        ('{"loggedIn": true}', 2, "provider_probe_unknown"),
+    ],
+)
+def test_doctor_claude_auth_probe_accepts_only_boolean_logged_in(
+    monkeypatch, stdout, returncode, expected
+):
+    """Malformed or unexpected auth-probe output must not crash or become healthy."""
+    from kaizenlog import doctor
+
+    monkeypatch.setattr(
+        doctor.subprocess,
+        "run",
+        lambda *a, **k: type("Done", (), {"returncode": returncode, "stdout": stdout, "stderr": "secret"})(),
+    )
+    c = Check()
+
+    doctor._check_claude_auth(c, "claude")
+
+    assert expected in "\n".join(c.lines)

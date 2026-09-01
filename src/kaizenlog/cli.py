@@ -117,7 +117,7 @@ from .collector import (
 )
 from .ops_ledger import bind_run, new_run_context, new_run_id, record_run_source_quality
 from .focus import compute_input_stats
-from .reliability import QualityState
+from .reliability import FailureReason, QualityState
 from .intervention import detect_time_sinks, render_leechblock_options, render_plan, suggest_rules
 from .config import Config, ConfigError, find_config_file, load_config
 from .experiments import (
@@ -232,9 +232,12 @@ def _safe_log_notify_failed(cfg: Config, context: str) -> None:
             "notify",
             ok=False,
             duration_seconds=0.0,
-            error=f"notify_failed: {context}"[:500],
+            # Notification title/body can contain lock-screen-visible user
+            # content. Durable operational rows retain only a stable reason.
+            error="NotificationDeliveryError",
             retention_days=cfg.log_retention_days,
             notify_failed=True,
+            reason_codes=[FailureReason.NOTIFICATION_FAILED],
             ops_db_path=cfg.operational_db_path,
         )
     except Exception:
@@ -247,8 +250,20 @@ def _notify(cfg: Config, title: str, message: str, **kwargs) -> bool | None:
     # False のみ失敗。None は送出未試行（スキップ）なので runlog に残さない
     if result is False:
         print(f"⚠️  Windows 通知の送出に失敗しました: {title}", file=sys.stderr)
-        _safe_log_notify_failed(cfg, f"{title}: {message[:80]}")
+        _safe_log_notify_failed(cfg, "notification delivery failed")
     return result
+
+
+def _operational_reason_codes(error: BaseException) -> list[str]:
+    """Derive durable reason codes without persisting provider exception text."""
+    codes: list[str] = []
+    for value in getattr(error, "reason_codes", []) or []:
+        code = str(getattr(value, "value", value))
+        if code and code not in codes:
+            codes.append(code)
+    if isinstance(error, AdvisorError) and not codes:
+        codes.append(FailureReason.PROVIDER_ERROR.value)
+    return codes
 
 
 def cmd_generate(
@@ -988,7 +1003,7 @@ def _log_digest_skipped(
             "digest_skipped",
             ok=False,
             duration_seconds=0.0,
-            error=str(reason)[:500],
+            error="DigestSkipped",
             note=day.isoformat(),
             retention_days=cfg.log_retention_days,
         )
@@ -1569,7 +1584,7 @@ def cmd_morning(cfg: Config, day: date, *, skip_catch_up: bool = False) -> int:
         log_run(
             cfg.logs_path, "morning", ok=False,
             duration_seconds=monotonic() - t0,
-            error=str(e),
+            error=e,
             retention_days=cfg.log_retention_days,
         )
         if cfg.notify_on_failure:
@@ -4573,7 +4588,7 @@ def main(argv: list[str] | None = None) -> int:
                     "weekly-context",
                     ok=False,
                     duration_seconds=monotonic() - t0,
-                    error=f"{type(e).__name__}: {e}",
+                    error=e,
                     retention_days=cfg.log_retention_days,
                 )
                 return 0
@@ -4652,8 +4667,9 @@ def main(argv: list[str] | None = None) -> int:
         if not dry_run:
             log_run(cfg.logs_path, args.command, ok=False,
                     duration_seconds=monotonic() - start_time,
-                    error=str(e), retention_days=cfg.log_retention_days,
+                    error=e, retention_days=cfg.log_retention_days,
                     run_id=run_id, configured_backend=cfg.llm.backend,
+                    reason_codes=_operational_reason_codes(e),
                     source_quality=run_context.source_quality,
                     ops_db_path=cfg.operational_db_path)
             if cfg.notify_on_failure:
@@ -4666,7 +4682,7 @@ def main(argv: list[str] | None = None) -> int:
         if not dry_run:
             log_run(cfg.logs_path, args.command, ok=False,
                     duration_seconds=monotonic() - start_time,
-                    error=f"想定外のエラー: {e.__class__.__name__}: {e}",
+                    error=e,
                     retention_days=cfg.log_retention_days,
                     run_id=run_id, configured_backend=cfg.llm.backend,
                     source_quality=run_context.source_quality,

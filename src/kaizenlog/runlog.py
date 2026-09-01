@@ -85,12 +85,41 @@ def _append_run_entry(
     )
 
 
+def _safe_error_summary(error: object) -> str:
+    """Keep exception payloads out of durable operational stores."""
+    if isinstance(error, BaseException):
+        return type(error).__name__
+    return str(error)[:500]
+
+
+def _append_ledger_health(
+    logs_dir: Path,
+    original: dict,
+    *,
+    retention_days: int,
+    now: datetime,
+) -> None:
+    """Expose a failed SQLite dual-write in JSONL without attempting SQLite again."""
+    entry = {
+        "schema_version": 2,
+        "run_id": new_run_id(),
+        "parent_run_id": str(original["run_id"]),
+        "ts": now.isoformat(),
+        "command": "ops_ledger_health",
+        "ok": False,
+        "duration_seconds": 0.0,
+        "reason_codes": [FailureReason.LEDGER_WRITE_FAILED.value],
+        "error": "OpsLedgerWriteError",
+    }
+    _append_run_entry(logs_dir, entry, retention_days=retention_days, now=now)
+
+
 def log_run(
     logs_dir: Path,
     command: str,
     ok: bool,
     duration_seconds: float,
-    error: str | None = None,
+    error: object | None = None,
     retention_days: int = 90,
     now: datetime | None = None,
     *,
@@ -115,7 +144,7 @@ def log_run(
         "duration_seconds": round(duration_seconds, 1),
     }
     if error:
-        entry["error"] = str(error)[:500]
+        entry["error"] = _safe_error_summary(error)
     if notify_failed:
         entry["notify_failed"] = True
     if note:
@@ -140,6 +169,9 @@ def log_run(
     try:
         OpsLedger(ops_db_path).append(entry)
     except Exception:
+        _append_ledger_health(
+            logs_dir, entry, retention_days=retention_days, now=now
+        )
         return FailureReason.LEDGER_WRITE_FAILED
     return None
 
@@ -252,6 +284,10 @@ def log_advise_health(
     try:
         OpsLedger(ops_db_path).append(entry)
     except Exception:
+        _append_ledger_health(
+            logs_dir, entry, retention_days=retention_days,
+            now=now or datetime.now(timezone.utc),
+        )
         return FailureReason.LEDGER_WRITE_FAILED
     return None
 

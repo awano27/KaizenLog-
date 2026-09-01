@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from types import SimpleNamespace
+
+import pytest
 
 from kaizenlog.config import Config, load_config
 from kaizenlog.ops_ledger import (
@@ -17,7 +20,7 @@ from kaizenlog.ops_ledger import (
 )
 from kaizenlog.reliability import FailureReason, QualityState
 from kaizenlog.report import DailySummary
-from kaizenlog.runlog import load_operational_runs, load_runs, log_advise_health, log_run
+from kaizenlog.runlog import load_operational_runs, load_runs, log_advise_health, log_run, render_status
 
 
 def _entry(run_id: str, *, ts: str = "2026-09-01T00:00:00+00:00") -> dict:
@@ -85,9 +88,11 @@ def test_log_run_keeps_jsonl_when_ledger_write_fails(tmp_path, monkeypatch):
     )
 
     assert failure is FailureReason.LEDGER_WRITE_FAILED
-    assert load_operational_runs(
+    rows = load_operational_runs(
         Config(vault_dir=tmp_path, logs_dir=".", ops_db_path=path)
-    )[-1]["command"] == "run"
+    )
+    assert any(row["command"] == "run" for row in rows)
+    assert rows[-1]["command"] == "ops_ledger_health"
 
 
 def test_advice_health_inherits_bound_parent_run_id(tmp_path):
@@ -248,3 +253,103 @@ def test_config_only_enables_default_ledger_after_file_backed_load(tmp_path, mon
 
     assert cfg.operational_db_path == default_ops_db_path()
     assert not (tmp_path / "local").exists()
+
+
+def test_sqlite_ledger_failure_adds_visible_jsonl_health_row_without_private_text(tmp_path, monkeypatch):
+    """A dual-write outage must remain visible without copying provider or notification content."""
+    path = tmp_path / "ops.sqlite3"
+    secret = "sentinel-provider-notification-body"
+
+    def fail_append(self, entry):
+        raise OSError(secret)
+
+    monkeypatch.setattr(OpsLedger, "append", fail_append)
+
+    from kaizenlog.advisor import AdvisorError
+    from kaizenlog.cli import _notify
+
+    failure = log_run(
+        tmp_path,
+        "advise",
+        ok=False,
+        duration_seconds=1.0,
+        error=AdvisorError(secret),
+        reason_codes=[FailureReason.PROVIDER_ERROR],
+        ops_db_path=path,
+    )
+    cfg = Config(vault_dir=tmp_path, logs_dir=".", ops_db_path=path)
+    monkeypatch.setattr("kaizenlog.cli.notify", lambda *args, **kwargs: False)
+    assert _notify(cfg, "private title", secret) is False
+
+    rows = load_runs(tmp_path)
+    health = [row for row in rows if row["command"] == "ops_ledger_health"]
+    assert failure is FailureReason.LEDGER_WRITE_FAILED
+    assert len(health) == 2
+    assert all(row["reason_codes"] == [FailureReason.LEDGER_WRITE_FAILED.value] for row in health)
+    assert all(row["parent_run_id"] for row in health)
+    serialized = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows)
+    assert secret not in serialized
+    assert "private title" not in serialized
+    assert FailureReason.LEDGER_WRITE_FAILED.value in render_status(rows)
+
+
+def test_ledger_refuses_newer_user_version_without_downgrade(tmp_path):
+    """Blindly assigning user_version=1 would corrupt a newer future schema."""
+    path = tmp_path / "ops.sqlite3"
+    with sqlite3.connect(path) as con:
+        con.execute("PRAGMA user_version=2")
+
+    with pytest.raises(RuntimeError, match="newer"):
+        OpsLedger(path).append(_entry("future-schema"))
+
+    with sqlite3.connect(path) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 2
+
+
+def test_operational_stores_redact_provider_exception_and_notification_content(tmp_path, monkeypatch):
+    """Both durable copies must exclude provider diagnostics and notification bodies."""
+    from kaizenlog.advisor import AdvisorError
+    from kaizenlog.cli import _notify
+
+    path = tmp_path / "ops.sqlite3"
+    secret = "sentinel-private-provider-and-notification-content"
+    log_run(
+        tmp_path,
+        "advise",
+        ok=False,
+        duration_seconds=1.0,
+        error=AdvisorError(secret),
+        reason_codes=[FailureReason.PROVIDER_ERROR],
+        ops_db_path=path,
+    )
+    cfg = Config(vault_dir=tmp_path, logs_dir=".", ops_db_path=path)
+    monkeypatch.setattr("kaizenlog.cli.notify", lambda *args, **kwargs: False)
+    assert _notify(cfg, "private title", secret) is False
+
+    jsonl = (tmp_path / "runs.jsonl").read_text(encoding="utf-8")
+    sqlite_payloads = json.dumps(OpsLedger(path).load_runs(), ensure_ascii=False)
+    for store in (jsonl, sqlite_payloads):
+        assert secret not in store
+        assert "private title" not in store
+
+
+def test_advice_health_ledger_failure_adds_jsonl_only_health_row(tmp_path, monkeypatch):
+    """Advice-health dual-write degradation must be visible and correlated without recursion."""
+    path = tmp_path / "ops.sqlite3"
+    monkeypatch.setattr(OpsLedger, "append", lambda *args: (_ for _ in ()).throw(OSError("disk full")))
+
+    failure = log_advise_health(
+        tmp_path,
+        day="2026-09-01",
+        backend="claude-code-cli",
+        outcome="ok",
+        duration_seconds=0.1,
+        ops_db_path=path,
+    )
+
+    rows = load_runs(tmp_path)
+    advice = next(row for row in rows if row["command"] == "advise_health")
+    health = next(row for row in rows if row["command"] == "ops_ledger_health")
+    assert failure is FailureReason.LEDGER_WRITE_FAILED
+    assert health["parent_run_id"] == advice["run_id"]
+    assert health["reason_codes"] == [FailureReason.LEDGER_WRITE_FAILED.value]

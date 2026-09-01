@@ -253,15 +253,25 @@ def _check_claude_auth(c: Check, path: str) -> None:
     if result.returncode == 1:
         c.error("Claude Code 認証状態: provider_auth_required")
         return
+    if result.returncode != 0:
+        c.warn("Claude Code 認証状態: provider_probe_unknown")
+        return
     try:
         payload = json.loads(result.stdout)
     except (TypeError, json.JSONDecodeError):
         c.warn("Claude Code 認証状態: provider_probe_unknown")
         return
-    if not bool(payload.get("loggedIn")):
+    if not isinstance(payload, dict):
+        c.warn("Claude Code 認証状態: provider_probe_unknown")
+        return
+    logged_in = payload.get("loggedIn")
+    if logged_in is False:
         c.error("Claude Code 認証状態: provider_auth_required")
         return
-    c.ok("Claude Code 認証状態: ok")
+    if logged_in is True:
+        c.ok("Claude Code 認証状態: ok")
+        return
+    c.warn("Claude Code 認証状態: provider_probe_unknown")
 
 
 def _check_screenpipe(c: Check, cfg: Config) -> None:
