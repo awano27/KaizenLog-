@@ -107,8 +107,15 @@ from .skill_manager import (
     skill_description,
 )
 from .classifier import Classifier, known_category_names
-from .collector import ActivityWatchClient, ActivityWatchError, collect_day, collect_input
+from .collector import (
+    ActivityWatchClient,
+    ActivityWatchError,
+    collect_day,
+    collect_input,
+    collect_input_observation,
+)
 from .focus import compute_input_stats
+from .reliability import QualityState
 from .intervention import detect_time_sinks, render_leechblock_options, render_plan, suggest_rules
 from .config import Config, ConfigError, find_config_file, load_config
 from .experiments import (
@@ -262,10 +269,21 @@ def cmd_generate(
     classified = Classifier(cfg.rules).classify_all(events)
     summary = summarize(day, classified, gap_minutes=cfg.session_gap_minutes)
 
-    # aw-watcher-input 導入時のみ集中ブロックを算出（未導入ならNone）
-    input_raw = collect_input(client, day_start, day_end)
-    input_stats = (compute_input_stats(input_raw, day_start=day_start, day_end=day_end)
-                   if input_raw is not None else None)
+    # 空バケットを数値ゼロとして扱わず、実測されたイベントだけを数値化する。
+    input_observation = collect_input_observation(client, day_start, day_end)
+    input_stats = (
+        compute_input_stats(
+            input_observation.events, day_start=day_start, day_end=day_end
+        )
+        if input_observation.state is QualityState.OBSERVED
+        else None
+    )
+    input_quality = {
+        "state": input_observation.state,
+        "reason": input_observation.reason,
+        "bucket_id": input_observation.bucket_id,
+        "last_event_at": input_observation.last_event_at,
+    }
 
     from .privacy import make_redactor
     from .report import build_session_spans
@@ -537,6 +555,7 @@ def cmd_generate(
         outcome_git=outcome_git_payload,
         screenpipe=screenpipe_stats,
         effort=effort_payload,
+        input_quality=input_quality,
     )
     previous_day = (day - timedelta(days=1)).isoformat()
     previous_stats = next(
@@ -603,6 +622,7 @@ def cmd_generate(
         outcome_git=outcome_git_payload,
         screenpipe=screenpipe_stats,
         effort=effort_payload,
+        input_quality=input_quality,
     )
 
     # 実験の実測追記: running 全件 + adopted（deadline から30日以内のみ）

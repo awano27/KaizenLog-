@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import requests
+
+from .reliability import FailureReason, QualityState
 
 # タブ情報の合成対象とするブラウザのプロセス名
 BROWSER_APP_RE = re.compile(r"chrome|msedge|\bedge\b|firefox|brave|vivaldi|opera", re.IGNORECASE)
@@ -55,6 +57,17 @@ class ActivityEvent:
 
 class ActivityWatchError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class InputObservation:
+    """Target-day input data together with whether it is a valid measurement."""
+
+    state: QualityState
+    events: list[dict]
+    bucket_id: str | None
+    reason: FailureReason
+    last_event_at: str | None = None
 
 
 class ActivityWatchClient:
@@ -316,11 +329,73 @@ def collect_day(
     return events, afk_watcher_available
 
 
+def collect_input_observation(
+    client: ActivityWatchClient, day_start: datetime, day_end: datetime
+) -> InputObservation:
+    """Collect input events without treating an empty bucket as a numeric zero."""
+    bucket, raw = _pick_busiest_bucket(client, "os.hid.input", day_start, day_end)
+    if bucket is None:
+        return InputObservation(
+            state=QualityState.MISSING,
+            events=[],
+            bucket_id=None,
+            reason=FailureReason.INPUT_BUCKET_MISSING,
+        )
+    if not raw:
+        return InputObservation(
+            state=QualityState.UNAVAILABLE,
+            events=[],
+            bucket_id=bucket,
+            reason=FailureReason.INPUT_EVENTS_ABSENT,
+        )
+    last_event_at = max(
+        (str(event.get("timestamp")) for event in raw if event.get("timestamp")),
+        default=None,
+    )
+    return InputObservation(
+        state=QualityState.OBSERVED,
+        events=raw,
+        bucket_id=bucket,
+        reason=FailureReason.NONE,
+        last_event_at=last_event_at,
+    )
+
+
 def collect_input(
     client: ActivityWatchClient, day_start: datetime, day_end: datetime
 ) -> list[dict] | None:
-    """入力量イベント（aw-watcher-input）を取得する。watcher未導入ならNone。"""
-    bucket, raw = _pick_busiest_bucket(client, "os.hid.input", day_start, day_end)
-    if bucket is None:
-        return None
-    return raw
+    """Compatibility wrapper returning input events only for observed input."""
+    observation = collect_input_observation(client, day_start, day_end)
+    return observation.events if observation.state is QualityState.OBSERVED else None
+
+
+def classify_input_bucket_health(
+    buckets: dict, *, now: datetime, stale_after: timedelta = timedelta(hours=26)
+) -> tuple[QualityState, FailureReason, str | None]:
+    """Classify input watcher freshness from ActivityWatch bucket metadata."""
+    candidates = [
+        (bucket_id, info)
+        for bucket_id, info in buckets.items()
+        if isinstance(info, dict) and info.get("type") == "os.hid.input"
+    ]
+    if not candidates:
+        return QualityState.MISSING, FailureReason.INPUT_BUCKET_MISSING, None
+
+    reference = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+    parsed: list[tuple[datetime, str]] = []
+    for bucket_id, info in candidates:
+        value = info.get("last_updated")
+        try:
+            updated = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=reference.tzinfo)
+        parsed.append((updated, bucket_id))
+    if not parsed:
+        return QualityState.UNKNOWN, FailureReason.UNKNOWN, candidates[0][0]
+
+    updated, bucket_id = max(parsed, key=lambda item: item[0])
+    if reference - updated > stale_after:
+        return QualityState.STALE, FailureReason.INPUT_SOURCE_STALE, bucket_id
+    return QualityState.OBSERVED, FailureReason.NONE, bucket_id

@@ -85,6 +85,7 @@ def build_stats(
     outcome_git: list[dict] | None = None,
     screenpipe: Mapping[str, Any] | None = None,
     effort: Mapping[str, Any] | None = None,
+    input_quality: Mapping[str, Any] | None = None,
 ) -> dict:
     projects: dict[str, dict] = {}
     for s in cc_sessions:
@@ -269,6 +270,13 @@ def build_stats(
             "focus_blocks": len(input_stats.focus_blocks),
             "focus_minutes": round(input_stats.focus_minutes, 1),
         }
+    if input_quality is not None:
+        stats.setdefault("source_quality", {})["input"] = {
+            "state": str(input_quality["state"]),
+            "reason": str(input_quality["reason"]),
+            "bucket_id": str(input_quality.get("bucket_id") or ""),
+            "last_event_at": input_quality.get("last_event_at"),
+        }
     if activity_md is not None:
         stats["activity_sha256"] = activity_fingerprint(activity_md)
     # AFK 欠測フラグ。旧 stats はキー無し → 読み手は true（従来挙動）とみなす。
@@ -321,6 +329,7 @@ def write_stats(
     outcome_git: list[dict] | None = None,
     screenpipe: Mapping[str, Any] | None = None,
     effort: Mapping[str, Any] | None = None,
+    input_quality: Mapping[str, Any] | None = None,
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
@@ -345,6 +354,7 @@ def write_stats(
                 outcome_git=outcome_git,
                 screenpipe=screenpipe,
                 effort=effort,
+                input_quality=input_quality,
             ),
             ensure_ascii=False,
             indent=1,

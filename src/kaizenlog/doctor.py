@@ -9,12 +9,15 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 
 from .config import Config, default_config_path, existing_config_candidates, find_config_file
+from .collector import classify_input_bucket_health
 from .memory import MEMORY_FILE
+from .reliability import QualityState
 from .runlog import consecutive_bad_advise_outcomes, load_runs
 from .setup_detect import query_task_registered
 
@@ -113,11 +116,30 @@ def _check_activitywatch(c: Check, cfg: Config) -> None:
     else:
         c.warn("ブラウザwatcher未導入（サイト別集計・site_minutes指標は無効）。"
                "ブラウザに aw-watcher-web 拡張を入れると有効になります")
-    if "os.hid.input" in types:
-        c.ok("入力watcher検出（aw-watcher-input、集中ブロック指標が有効）")
+    input_state, input_reason, _ = classify_input_bucket_health(
+        buckets, now=datetime.now(timezone.utc)
+    )
+    if input_state is QualityState.OBSERVED:
+        c.ok(
+            "入力watcher検出（aw-watcher-input、集中ブロック指標が有効）"
+            f"（{input_reason.value}）"
+        )
+    elif input_state is QualityState.STALE:
+        c.warn(
+            "入力watcherの更新が古いため集中ブロック・focus_blocks指標は無効です"
+            f"（{input_reason.value}）"
+        )
+    elif input_state is QualityState.UNKNOWN:
+        c.warn(
+            "入力watcherの更新時刻を確認できないため集中ブロック・focus_blocks指標は不明です"
+            f"（{input_reason.value}）"
+        )
     else:
-        c.warn("入力watcher未導入（集中ブロック・focus_blocks指標は無効）。"
-               "`pipx install aw-watcher-input` → `aw-watcher-input` 起動で有効になります")
+        c.warn(
+            "入力watcher未導入（集中ブロック・focus_blocks指標は無効）。"
+            "`pipx install aw-watcher-input` → `aw-watcher-input` 起動で有効になります"
+            f"（{input_reason.value}）"
+        )
 
 
 def _list_api_models(base_url: str, headers: dict) -> list[str] | None:
