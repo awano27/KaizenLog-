@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from kaizenlog.decay import detect_kzn_decay
+from kaizenlog.collector import InputObservation
 from kaizenlog.digest import build_digest
 from kaizenlog.memory import (
     TERMINAL_STATUSES,
@@ -24,6 +25,7 @@ from kaizenlog.memory import (
 )
 from kaizenlog.outcome_git import collect_commit_stats
 from kaizenlog.report import DailySummary
+from kaizenlog.reliability import FailureReason, QualityState
 from kaizenlog.stats import write_stats
 from kaizenlog.vault import (
     ACTIONS_MARKER,
@@ -664,7 +666,13 @@ def test_c1_prm_line_in_generate_section(tmp_path, monkeypatch):
     captured = {}
 
     monkeypatch.setattr(cli_mod, "collect_day", lambda *a: ([], True))
-    monkeypatch.setattr(cli_mod, "collect_input", lambda *a: None)
+    monkeypatch.setattr(
+        cli_mod,
+        "collect_input_observation",
+        lambda *args: InputObservation(
+            QualityState.MISSING, [], None, FailureReason.INPUT_BUCKET_MISSING
+        ),
+    )
     monkeypatch.setattr(
         cli_mod, "summarize", lambda day, *a, **k: _summary(day)
     )

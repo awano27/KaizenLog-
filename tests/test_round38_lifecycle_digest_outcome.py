@@ -12,6 +12,7 @@ import pytest
 from kaizenlog.advice_evidence import build_advice_evidence
 from kaizenlog.advice_format import validate_advice
 from kaizenlog.decay import detect_kzn_decay
+from kaizenlog.collector import InputObservation
 from kaizenlog.digest import build_digest
 from kaizenlog.memory import (
     MemoryEntry,
@@ -25,6 +26,7 @@ from kaizenlog.memory import (
 )
 from kaizenlog.outcome_git import collect_commit_stats
 from kaizenlog.report import DailySummary
+from kaizenlog.reliability import FailureReason, QualityState
 from kaizenlog.stats import write_stats
 from kaizenlog.vault import (
     ADVICE_MARKER,
@@ -545,7 +547,13 @@ def test_c3_outcome_git_false_no_subprocess(monkeypatch, tmp_path):
 
     monkeypatch.setattr("kaizenlog.outcome_git.collect_commit_stats", boom)
     monkeypatch.setattr(cli_mod, "collect_day", lambda *a: ([], True))
-    monkeypatch.setattr(cli_mod, "collect_input", lambda *a: None)
+    monkeypatch.setattr(
+        cli_mod,
+        "collect_input_observation",
+        lambda *args: InputObservation(
+            QualityState.MISSING, [], None, FailureReason.INPUT_BUCKET_MISSING
+        ),
+    )
     monkeypatch.setattr(
         cli_mod,
         "summarize",

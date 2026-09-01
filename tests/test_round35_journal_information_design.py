@@ -35,6 +35,8 @@ from kaizenlog.memory import assign_action_ids
 from kaizenlog.verdict import parse_pass_condition
 from tests.test_advice_format import _valid_data
 from kaizenlog.config import Config
+from kaizenlog.collector import InputObservation
+from kaizenlog.reliability import FailureReason, QualityState
 from kaizenlog.vault import (
     ACTIVITY_MARKER,
     ADVICE_MARKER,
@@ -726,7 +728,13 @@ def test_c2_cmd_generate_uses_only_calendar_previous_stats_and_hashes_written_se
         ]
 
     monkeypatch.setattr(cli_mod, "collect_day", lambda *args: ([], True))
-    monkeypatch.setattr(cli_mod, "collect_input", lambda *args: None)
+    monkeypatch.setattr(
+        cli_mod,
+        "collect_input_observation",
+        lambda *args: InputObservation(
+            QualityState.MISSING, [], None, FailureReason.INPUT_BUCKET_MISSING
+        ),
+    )
     monkeypatch.setattr(cli_mod, "summarize", lambda *args, **kwargs: summary)
     monkeypatch.setattr(cli_mod, "render_markdown", lambda *args, **kwargs: "### activity")
     monkeypatch.setattr(cli_mod, "load_stats", fake_load_stats)
