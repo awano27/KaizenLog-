@@ -140,12 +140,28 @@ def test_stats_persist_input_quality_without_creating_missing_numeric_input() ->
 
     assert "input" not in stats
     assert stats["source_quality"]["input"] == {
-        "state": "QualityState.UNAVAILABLE",
-        "reason": "FailureReason.INPUT_EVENTS_ABSENT",
+        "state": "unavailable",
+        "reason": "input_events_absent",
         "bucket_id": "input-host",
         "last_event_at": None,
     }
     assert "events" not in stats["source_quality"]["input"]
+
+    canonical = build_stats(
+        date(2026, 9, 1),
+        _summary(date(2026, 9, 1)),
+        [],
+        input_quality={
+            "state": "missing",
+            "reason": "input_bucket_missing",
+        },
+    )
+    assert canonical["source_quality"]["input"] == {
+        "state": "missing",
+        "reason": "input_bucket_missing",
+        "bucket_id": "",
+        "last_event_at": None,
+    }
 
 
 def test_doctor_warns_with_stable_reason_for_stale_input_bucket(
@@ -217,5 +233,5 @@ def test_generate_omits_unavailable_input_but_records_quality(
 
     stats = json.loads((cfg.stats_path / f"{day.isoformat()}.json").read_text("utf-8"))
     assert "input" not in stats
-    assert stats["source_quality"]["input"]["state"] == "QualityState.UNAVAILABLE"
-    assert stats["source_quality"]["input"]["reason"] == "FailureReason.INPUT_EVENTS_ABSENT"
+    assert stats["source_quality"]["input"]["state"] == "unavailable"
+    assert stats["source_quality"]["input"]["reason"] == "input_events_absent"

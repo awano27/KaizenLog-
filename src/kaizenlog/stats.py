@@ -38,6 +38,12 @@ def _source_name(value: object) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else "unknown"
 
 
+def _quality_code(value: object) -> str:
+    """Serialize string enums by their stable wire value, not their class name."""
+    enum_value = getattr(value, "value", value)
+    return enum_value if isinstance(enum_value, str) else str(enum_value)
+
+
 def activity_fingerprint(activity_md: str) -> str:
     """Activityセクションと統計が同じ生成結果か確認する指紋。"""
     canonical = activity_md.replace("\r\n", "\n").replace("\r", "\n").strip()
@@ -272,8 +278,8 @@ def build_stats(
         }
     if input_quality is not None:
         stats.setdefault("source_quality", {})["input"] = {
-            "state": str(input_quality["state"]),
-            "reason": str(input_quality["reason"]),
+            "state": _quality_code(input_quality["state"]),
+            "reason": _quality_code(input_quality["reason"]),
             "bucket_id": str(input_quality.get("bucket_id") or ""),
             "last_event_at": input_quality.get("last_event_at"),
         }
