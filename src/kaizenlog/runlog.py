@@ -183,7 +183,8 @@ def log_advise_health(
             seen_reasons.add(reason_s)
             uniq_reasons.append(reason_s)
     configured = str(configured_backend or backend or "")
-    actual = str(actual_backend or configured or backend or "")
+    actual = str(actual_backend) if actual_backend else None
+    legacy_backend = actual or configured or str(backend or "")
     entry = {
         "schema_version": 2,
         "run_id": uuid.uuid4().hex,
@@ -192,7 +193,7 @@ def log_advise_health(
         "ok": outcome in ("ok", "repaired"),
         "duration_seconds": round(float(duration_seconds), 1),
         "date": day_s,
-        "backend": actual,
+        "backend": legacy_backend,
         "configured_backend": configured,
         "actual_backend": actual,
         "outcome": outcome,

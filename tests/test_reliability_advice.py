@@ -51,3 +51,20 @@ def test_advice_health_records_configured_and_actual_backend(tmp_path):
     assert row["backend"] == "openai-compatible"
     assert row["reason_codes"] == ["contract_invalid"]
     assert len(row["run_id"]) == 32
+
+
+def test_advice_health_keeps_unknown_actual_backend_distinct(tmp_path):
+    log_advise_health(
+        tmp_path,
+        day="2026-09-01",
+        backend="claude-code-cli",
+        configured_backend="claude-code-cli",
+        actual_backend=None,
+        outcome="failed",
+        duration_seconds=1.2,
+    )
+
+    row = load_runs(tmp_path)[-1]
+
+    assert row["actual_backend"] is None
+    assert row["backend"] == "claude-code-cli"
