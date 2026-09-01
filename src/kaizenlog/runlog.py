@@ -13,7 +13,12 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from .vault import atomic_write_text
-from .ops_ledger import OpsLedger, current_run_id, new_run_id
+from .ops_ledger import (
+    OpsLedger,
+    current_run_id,
+    current_run_source_quality,
+    new_run_id,
+)
 from .reliability import FailureReason
 
 RUNS_FILE = "runs.jsonl"
@@ -125,6 +130,8 @@ def log_run(
         entry["actual_backend"] = str(actual_backend)
     if reason_codes:
         entry["reason_codes"] = [str(getattr(reason, "value", reason)) for reason in reason_codes]
+    if source_quality is None:
+        source_quality = current_run_source_quality()
     if source_quality is not None:
         entry["source_quality"] = source_quality
     _append_run_entry(logs_dir, entry, retention_days=retention_days, now=now)
@@ -235,6 +242,8 @@ def log_advise_health(
     parent = parent_run_id if parent_run_id is not None else current_run_id()
     if parent:
         entry["parent_run_id"] = parent
+    if source_quality is None:
+        source_quality = current_run_source_quality()
     if source_quality is not None:
         entry["source_quality"] = source_quality
     _append_run_entry(logs_dir, entry, retention_days=retention_days, now=now)
@@ -248,13 +257,18 @@ def log_advise_health(
 
 
 def load_operational_runs(cfg) -> list[dict]:
-    """Prefer nonempty local SQLite history, retaining JSONL compatibility."""
+    """Merge local ledger and JSONL, retaining post-upgrade compatibility rows."""
     ops_db_path = getattr(cfg, "operational_db_path", None)
-    if ops_db_path:
-        rows = OpsLedger(ops_db_path).load_runs()
-        if rows:
-            return rows
-    return load_runs(cfg.logs_path)
+    ledger_rows = OpsLedger(ops_db_path).load_runs() if ops_db_path else []
+    jsonl_rows = load_runs(cfg.logs_path)
+    merged: dict[str, dict] = {}
+    for index, row in enumerate(jsonl_rows):
+        key = str(row.get("run_id") or f"legacy:{index}:{row.get('ts')}:{row.get('command')}")
+        merged[key] = row
+    for index, row in enumerate(ledger_rows):
+        key = str(row.get("run_id") or f"ledger-legacy:{index}:{row.get('ts')}:{row.get('command')}")
+        merged[key] = row
+    return sorted(merged.values(), key=lambda row: str(row.get("ts") or ""))
 
 
 def advise_health_records(runs: list[dict]) -> list[dict]:

@@ -10,11 +10,22 @@ import time
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Mapping
 
 
-_RUN_ID: ContextVar[str | None] = ContextVar("kaizenlog_run_id", default=None)
+@dataclass
+class OperationalRunContext:
+    """Scoped correlation data for one command invocation."""
+
+    run_id: str
+    source_quality: dict | None = None
+
+
+_RUN_CONTEXT: ContextVar[OperationalRunContext | None] = ContextVar(
+    "kaizenlog_run_context", default=None
+)
 _DROP_PAYLOAD_KEYS = frozenset({"events", "raw_events", "input_events"})
 
 
@@ -32,18 +43,58 @@ def new_run_id() -> str:
     return uuid.uuid4().hex
 
 
+def new_run_context(run_id: str | None = None) -> OperationalRunContext:
+    return OperationalRunContext(run_id=run_id or new_run_id())
+
+
 def current_run_id() -> str | None:
-    return _RUN_ID.get()
+    context = _RUN_CONTEXT.get()
+    return context.run_id if context is not None else None
+
+
+def _quality_code(value: object) -> str:
+    return str(getattr(value, "value", value))
+
+
+def _canonical_source_quality(source_quality: Mapping[str, object]) -> dict:
+    """Keep the Task 3 input contract without raw watcher events."""
+    input_quality = source_quality.get("input")
+    if not isinstance(input_quality, Mapping):
+        return {}
+    last_event_at = input_quality.get("last_event_at")
+    return {
+        "input": {
+            "state": _quality_code(input_quality.get("state", "unknown")),
+            "reason": _quality_code(input_quality.get("reason", "unknown")),
+            "bucket_id": str(input_quality.get("bucket_id") or ""),
+            "last_event_at": str(last_event_at) if last_event_at is not None else None,
+        }
+    }
+
+
+def record_run_source_quality(source_quality: Mapping[str, object]) -> None:
+    """Attach canonical source quality to the active context, if one exists."""
+    context = _RUN_CONTEXT.get()
+    if context is not None:
+        context.source_quality = _canonical_source_quality(source_quality)
+
+
+def current_run_source_quality() -> dict | None:
+    context = _RUN_CONTEXT.get()
+    if context is None or context.source_quality is None:
+        return None
+    return json.loads(json.dumps(context.source_quality))
 
 
 @contextmanager
-def bind_run(run_id: str) -> Iterator[None]:
+def bind_run(run: str | OperationalRunContext) -> Iterator[None]:
     """Bind a top-level run id for correlated nested operational rows."""
-    token = _RUN_ID.set(str(run_id))
+    context = run if isinstance(run, OperationalRunContext) else new_run_context(str(run))
+    token = _RUN_CONTEXT.set(context)
     try:
         yield
     finally:
-        _RUN_ID.reset(token)
+        _RUN_CONTEXT.reset(token)
 
 
 def _payload(entry: dict) -> dict:

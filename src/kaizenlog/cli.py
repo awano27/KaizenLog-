@@ -115,7 +115,7 @@ from .collector import (
     collect_input,
     collect_input_observation,
 )
-from .ops_ledger import bind_run, new_run_id
+from .ops_ledger import bind_run, new_run_context, new_run_id, record_run_source_quality
 from .focus import compute_input_stats
 from .reliability import QualityState
 from .intervention import detect_time_sinks, render_leechblock_options, render_plan, suggest_rules
@@ -287,6 +287,7 @@ def cmd_generate(
         "bucket_id": input_observation.bucket_id,
         "last_event_at": input_observation.last_event_at,
     }
+    record_run_source_quality({"input": input_quality})
 
     from .privacy import make_redactor
     from .report import build_session_spans
@@ -4610,6 +4611,7 @@ def main(argv: list[str] | None = None) -> int:
 
     start_time = monotonic()
     run_id = new_run_id()
+    run_context = new_run_context(run_id)
     try:
         # ZoneInfo/日付解釈もtry内で行う。設定のタイムゾーンtypo等で夜間実行が
         # 落ちたとき、実行ログと失敗通知を必ず残すため（外だと素通りで無音になる）
@@ -4624,13 +4626,13 @@ def main(argv: list[str] | None = None) -> int:
                     cmd_backfill(cfg, cfg.auto_backfill_days, day)
                 # 前夜に advise まで走らなかった日の retro-advise（冪等）
                 # 直後 generate で同日 retro 分を即判定しないよう ID を返す
-                with bind_run(run_id):
+                with bind_run(run_context):
                     skip_verdict = catch_up_yesterday(cfg, day).new_ids
             if not dry_run:
-                with bind_run(run_id):
+                with bind_run(run_context):
                     cmd_generate(cfg, day, skip_verdict_ids=skip_verdict or None)
         if args.command in ("advise", "run"):
-            with bind_run(run_id):
+            with bind_run(run_context):
                 cmd_advise(cfg, day, dry_run=dry_run)
         # E1: run 後に nippou 決定論版を自動書き込み（LLM 変種は呼ばない）
         if (
@@ -4652,6 +4654,7 @@ def main(argv: list[str] | None = None) -> int:
                     duration_seconds=monotonic() - start_time,
                     error=str(e), retention_days=cfg.log_retention_days,
                     run_id=run_id, configured_backend=cfg.llm.backend,
+                    source_quality=run_context.source_quality,
                     ops_db_path=cfg.operational_db_path)
             if cfg.notify_on_failure:
                 _notify(cfg, "KaizenLog 失敗", f"{args.command}: {e}")
@@ -4666,6 +4669,7 @@ def main(argv: list[str] | None = None) -> int:
                     error=f"想定外のエラー: {e.__class__.__name__}: {e}",
                     retention_days=cfg.log_retention_days,
                     run_id=run_id, configured_backend=cfg.llm.backend,
+                    source_quality=run_context.source_quality,
                     ops_db_path=cfg.operational_db_path)
             if cfg.notify_on_failure:
                 _notify(cfg, "KaizenLog 失敗", f"{args.command}: {e.__class__.__name__}: {e}")
@@ -4675,6 +4679,7 @@ def main(argv: list[str] | None = None) -> int:
                 duration_seconds=monotonic() - start_time,
                 retention_days=cfg.log_retention_days,
                 run_id=run_id, configured_backend=cfg.llm.backend,
+                source_quality=run_context.source_quality,
                 ops_db_path=cfg.operational_db_path)
     return 0
 

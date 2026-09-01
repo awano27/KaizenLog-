@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
+from types import SimpleNamespace
 
 from kaizenlog.config import Config, load_config
-from kaizenlog.ops_ledger import OpsLedger, bind_run, default_ops_db_path
-from kaizenlog.reliability import FailureReason
-from kaizenlog.runlog import load_operational_runs, log_advise_health, log_run
+from kaizenlog.ops_ledger import (
+    OpsLedger,
+    bind_run,
+    current_run_source_quality,
+    default_ops_db_path,
+    new_run_context,
+)
+from kaizenlog.reliability import FailureReason, QualityState
+from kaizenlog.report import DailySummary
+from kaizenlog.runlog import load_operational_runs, load_runs, log_advise_health, log_run
 
 
 def _entry(run_id: str, *, ts: str = "2026-09-01T00:00:00+00:00") -> dict:
@@ -101,14 +110,111 @@ def test_advice_health_inherits_bound_parent_run_id(tmp_path):
     assert row["actual_backend"] is None
 
 
-def test_load_operational_runs_prefers_nonempty_ledger(tmp_path):
-    """A populated local ledger must win over stale compatibility JSONL."""
+def test_load_operational_runs_keeps_legacy_jsonl_alongside_ledger(tmp_path):
+    """A populated ledger must not hide an older compatibility JSONL row."""
     log_run(tmp_path, "run", ok=True, duration_seconds=1.0)
     path = tmp_path / "ops.sqlite3"
     OpsLedger(path).append(_entry("ledger-run"))
     cfg = Config(vault_dir=tmp_path, logs_dir=".", ops_db_path=path)
 
-    assert [row["run_id"] for row in load_operational_runs(cfg)] == ["ledger-run"]
+    assert {row["run_id"] for row in load_operational_runs(cfg)} == {
+        "ledger-run",
+        load_runs(tmp_path)[0]["run_id"],
+    }
+
+
+def test_load_operational_runs_merges_post_ledger_jsonl_without_duplicates(tmp_path):
+    """Exclusive SQLite preference must not hide a newer JSONL-only result."""
+    path = tmp_path / "ops.sqlite3"
+    OpsLedger(path).append(_entry("ledger-run"))
+    log_run(
+        tmp_path,
+        "morning",
+        ok=True,
+        duration_seconds=1.0,
+        run_id="jsonl-only",
+    )
+    cfg = Config(vault_dir=tmp_path, logs_dir=".", ops_db_path=path)
+
+    rows = load_operational_runs(cfg)
+
+    assert {row["run_id"] for row in rows} == {"ledger-run", "jsonl-only"}
+
+
+def test_generate_context_carries_canonical_input_quality_to_run_and_advice_rows(
+    tmp_path, monkeypatch
+):
+    """Dropping cmd_generate's observation must leave correlated rows without input quality."""
+    import kaizenlog.cli as cli
+
+    vault = tmp_path / "vault"
+    for name in ("notes", "stats", "mem", "logs", "exp"):
+        (vault / name).mkdir(parents=True, exist_ok=True)
+    cfg = Config(
+        vault_dir=vault,
+        daily_notes_dir="notes",
+        stats_dir="stats",
+        memory_dir="mem",
+        logs_dir="logs",
+        experiments_dir="exp",
+        ops_db_path=tmp_path / "ops.sqlite3",
+        timezone="UTC",
+    )
+    cfg.aiwork.enabled = False
+    day = date(2026, 9, 1)
+    observation = SimpleNamespace(
+        state=QualityState.UNAVAILABLE,
+        events=[],
+        bucket_id="input-host",
+        reason=FailureReason.INPUT_EVENTS_ABSENT,
+        last_event_at=None,
+    )
+    monkeypatch.setattr(cli, "collect_day", lambda *args: ([], True))
+    monkeypatch.setattr(cli, "collect_input_observation", lambda *args: observation)
+    monkeypatch.setattr(cli.Classifier, "classify_all", lambda self, events: [])
+    summary = DailySummary(
+        day=day,
+        total_minutes=0.0,
+        by_category={},
+        by_app={},
+        blocks=[],
+        ai_tool_minutes={},
+        ai_sessions=0,
+        context_switches=0,
+    )
+    monkeypatch.setattr(cli, "summarize", lambda *args, **kwargs: summary)
+    monkeypatch.setattr(cli, "render_markdown", lambda *args, **kwargs: "log")
+    monkeypatch.setattr(cli, "ActivityWatchClient", lambda url: SimpleNamespace())
+
+    context = new_run_context("run-context")
+    with bind_run(context):
+        assert cli.cmd_generate(cfg, day).name == f"{day.isoformat()}.md"
+        cli._safe_log_advise_health(cfg, day=day, outcome="ok", duration_seconds=0.1)
+        log_run(
+            cfg.logs_path,
+            "run",
+            ok=True,
+            duration_seconds=0.1,
+            run_id=context.run_id,
+            source_quality=current_run_source_quality(),
+            ops_db_path=cfg.operational_db_path,
+        )
+
+    rows = OpsLedger(cfg.operational_db_path).load_runs()
+    health = next(row for row in rows if row["command"] == "advise_health")
+    terminal = next(row for row in rows if row["command"] == "run")
+    expected = {
+        "input": {
+            "state": "unavailable",
+            "reason": "input_events_absent",
+            "bucket_id": "input-host",
+            "last_event_at": None,
+        }
+    }
+    assert health["parent_run_id"] == "run-context"
+    assert health["source_quality"] == expected
+    assert terminal["source_quality"] == expected
+    assert current_run_source_quality() is None
 
 
 def test_ops_ledger_drops_raw_input_events_from_payload(tmp_path):
