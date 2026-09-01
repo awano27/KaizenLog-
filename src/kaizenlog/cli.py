@@ -93,6 +93,7 @@ from .promptledger import (
 from .promptmine import cluster_prompts, render_prompt_report
 from .runlog import (
     advise_health_warning_line,
+    load_operational_runs,
     load_runs,
     log_advise_health,
     log_run,
@@ -114,6 +115,7 @@ from .collector import (
     collect_input,
     collect_input_observation,
 )
+from .ops_ledger import bind_run, new_run_id
 from .focus import compute_input_stats
 from .reliability import QualityState
 from .intervention import detect_time_sinks, render_leechblock_options, render_plan, suggest_rules
@@ -233,6 +235,7 @@ def _safe_log_notify_failed(cfg: Config, context: str) -> None:
             error=f"notify_failed: {context}"[:500],
             retention_days=cfg.log_retention_days,
             notify_failed=True,
+            ops_db_path=cfg.operational_db_path,
         )
     except Exception:
         pass
@@ -2074,6 +2077,7 @@ def _safe_log_advise_health(
             violations=violations,
             reason_codes=reason_codes,
             retention_days=cfg.log_retention_days,
+            ops_db_path=cfg.operational_db_path,
         )
     except Exception:
         pass
@@ -4350,7 +4354,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "status":
-        print(render_status(load_runs(cfg.logs_path)))
+        print(render_status(load_operational_runs(cfg)))
         # 北極星: 消化率 / PASS率（読み込み失敗で status 全体を落とさない）
         try:
             today = datetime.now(ZoneInfo(cfg.timezone)).date()
@@ -4605,6 +4609,7 @@ def main(argv: list[str] | None = None) -> int:
     dry_run = bool(getattr(args, "dry_run", False))
 
     start_time = monotonic()
+    run_id = new_run_id()
     try:
         # ZoneInfo/日付解釈もtry内で行う。設定のタイムゾーンtypo等で夜間実行が
         # 落ちたとき、実行ログと失敗通知を必ず残すため（外だと素通りで無音になる）
@@ -4619,11 +4624,14 @@ def main(argv: list[str] | None = None) -> int:
                     cmd_backfill(cfg, cfg.auto_backfill_days, day)
                 # 前夜に advise まで走らなかった日の retro-advise（冪等）
                 # 直後 generate で同日 retro 分を即判定しないよう ID を返す
-                skip_verdict = catch_up_yesterday(cfg, day).new_ids
+                with bind_run(run_id):
+                    skip_verdict = catch_up_yesterday(cfg, day).new_ids
             if not dry_run:
-                cmd_generate(cfg, day, skip_verdict_ids=skip_verdict or None)
+                with bind_run(run_id):
+                    cmd_generate(cfg, day, skip_verdict_ids=skip_verdict or None)
         if args.command in ("advise", "run"):
-            cmd_advise(cfg, day, dry_run=dry_run)
+            with bind_run(run_id):
+                cmd_advise(cfg, day, dry_run=dry_run)
         # E1: run 後に nippou 決定論版を自動書き込み（LLM 変種は呼ばない）
         if (
             args.command == "run"
@@ -4642,7 +4650,9 @@ def main(argv: list[str] | None = None) -> int:
         if not dry_run:
             log_run(cfg.logs_path, args.command, ok=False,
                     duration_seconds=monotonic() - start_time,
-                    error=str(e), retention_days=cfg.log_retention_days)
+                    error=str(e), retention_days=cfg.log_retention_days,
+                    run_id=run_id, configured_backend=cfg.llm.backend,
+                    ops_db_path=cfg.operational_db_path)
             if cfg.notify_on_failure:
                 _notify(cfg, "KaizenLog 失敗", f"{args.command}: {e}")
         return 1
@@ -4654,14 +4664,18 @@ def main(argv: list[str] | None = None) -> int:
             log_run(cfg.logs_path, args.command, ok=False,
                     duration_seconds=monotonic() - start_time,
                     error=f"想定外のエラー: {e.__class__.__name__}: {e}",
-                    retention_days=cfg.log_retention_days)
+                    retention_days=cfg.log_retention_days,
+                    run_id=run_id, configured_backend=cfg.llm.backend,
+                    ops_db_path=cfg.operational_db_path)
             if cfg.notify_on_failure:
                 _notify(cfg, "KaizenLog 失敗", f"{args.command}: {e.__class__.__name__}: {e}")
         return 1
     if not dry_run:
         log_run(cfg.logs_path, args.command, ok=True,
                 duration_seconds=monotonic() - start_time,
-                retention_days=cfg.log_retention_days)
+                retention_days=cfg.log_retention_days,
+                run_id=run_id, configured_backend=cfg.llm.backend,
+                ops_db_path=cfg.operational_db_path)
     return 0
 
 

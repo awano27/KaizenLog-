@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -215,6 +216,8 @@ def _check_llm(c: Check, cfg: Config) -> None:
         path = shutil.which(command)
         if path:
             c.ok(f"{name} 検出: {path}")
+            if llm.backend == "claude-code-cli":
+                _check_claude_auth(c, path)
         else:
             # フォールバックが効く場合は起動不能ではないため警告に留める
             report = c.warn if llm.fallback_to_local else c.error
@@ -229,6 +232,36 @@ def _check_llm(c: Check, cfg: Config) -> None:
     if llm.fallback_to_local:
         # 主CLIが欠けているなら予備経路が生命線 → その障害はエラー扱い
         _check_openai_compatible(c, llm, as_fallback=True, essential=(path is None))
+
+
+def _check_claude_auth(c: Check, path: str) -> None:
+    """Read Claude auth state without exposing its CLI response."""
+    try:
+        result = subprocess.run(
+            [path, "auth", "status", "--json"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        c.warn("Claude Code 認証状態: provider_probe_timeout")
+        return
+    except OSError:
+        c.warn("Claude Code 認証状態: provider_probe_unknown")
+        return
+    if result.returncode == 1:
+        c.error("Claude Code 認証状態: provider_auth_required")
+        return
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError):
+        c.warn("Claude Code 認証状態: provider_probe_unknown")
+        return
+    if not bool(payload.get("loggedIn")):
+        c.error("Claude Code 認証状態: provider_auth_required")
+        return
+    c.ok("Claude Code 認証状態: ok")
 
 
 def _check_screenpipe(c: Check, cfg: Config) -> None:

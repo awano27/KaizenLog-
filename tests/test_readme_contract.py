@@ -78,6 +78,9 @@ def test_readme_enforces_current_runtime_and_coach_boundaries():
         "日々の LLM 提案は現在の契約どおり1〜3件です。",
         "設定した endpoint（ローカル／リモートどちらもありうる）",
         "通常の `coach` は提案ファイルと diff を作成します。管理対象の coach 区間へ書き込むのは `coach --apply <proposal-file>` だけです。",
+        "`kaizenlog status` はこの端末のローカル運用 ledger を優先して読みます。",
+        "ボールト内の `runs.jsonl` は既存環境との互換エクスポートです。",
+        "Scheduled Tasks を自動修復することはありません。",
     ):
         assert required in text
 

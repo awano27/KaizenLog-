@@ -169,6 +169,10 @@ kaizenlog done KZN-20260801-001
 日々の LLM 提案は現在の契約どおり1〜3件です。振り返りを翌日の改善提案へ反映するときだけ、設定済みの LLM バックエンドを使います。
 `kaizenlog today` が出すのは実行できる候補だけで、判定済みの指標は `効果モニタリング N件（今日の候補ではありません）` と件数だけ表示されます。観測値が取れない日は達成・未達に丸めず「未判定」と表示します。
 
+### 運用ログと復旧
+
+`kaizenlog status` はこの端末のローカル運用 ledger を優先して読みます。ボールト内の `runs.jsonl` は既存環境との互換エクスポートです。`kaizenlog doctor` は Claude Code の認証状態と input watcher の鮮度も確認します。復旧は手動で行います。Claude Code は `claude` を起動して `/login`、input watcher は `aw-watcher-input` を再起動してください。Scheduled Tasks を自動修復することはありません。
+
 ### 手書きは消えない
 
 管理マーカー区間だけを更新し、その外側の手書き本文を置換しません。

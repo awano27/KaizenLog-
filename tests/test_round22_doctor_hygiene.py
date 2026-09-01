@@ -193,3 +193,69 @@ def test_query_task_registered_error_timeout_platform(monkeypatch):
 
     monkeypatch.setattr(setup_detect.sys, "platform", "linux")
     assert setup_detect.query_task_registered("X") is None
+
+
+def test_doctor_claude_auth_probe_reports_stable_reason_only(monkeypatch):
+    """Claude's raw auth response must never enter doctor output."""
+    from kaizenlog.doctor import _check_llm
+
+    class Completed:
+        returncode = 0
+        stdout = '{"loggedIn": false, "secret": "do-not-display"}'
+        stderr = "also-private"
+
+    observed = {}
+
+    def probe(*args, **kwargs):
+        observed.update(kwargs)
+        assert args[0] == ["C:/tools/claude.exe", "auth", "status", "--json"]
+        return Completed()
+
+    cfg = Config()
+    cfg.llm.backend = "claude-code-cli"
+    cfg.llm.claude_command = "claude"
+    cfg.llm.fallback_to_local = False
+    monkeypatch.setattr("kaizenlog.doctor.shutil.which", lambda _: "C:/tools/claude.exe")
+    monkeypatch.setattr("kaizenlog.doctor.subprocess.run", probe)
+    c = Check()
+
+    _check_llm(c, cfg)
+
+    text = "\n".join(c.lines)
+    assert "provider_auth_required" in text
+    assert "do-not-display" not in text
+    assert observed == {"capture_output": True, "text": True, "encoding": "utf-8", "timeout": 10}
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        ("timeout", "provider_probe_timeout"),
+        ("invalid-json", "provider_probe_unknown"),
+    ],
+)
+def test_doctor_claude_auth_probe_maps_unavailable_probe_results(monkeypatch, failure, expected):
+    """Timeout and malformed output must have stable non-secret classifications."""
+    from kaizenlog import doctor
+
+    cfg = Config()
+    cfg.llm.backend = "claude-code-cli"
+    cfg.llm.fallback_to_local = False
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "claude")
+    if failure == "timeout":
+        monkeypatch.setattr(
+            doctor.subprocess,
+            "run",
+            lambda *a, **k: (_ for _ in ()).throw(doctor.subprocess.TimeoutExpired(a[0], 10)),
+        )
+    else:
+        monkeypatch.setattr(
+            doctor.subprocess,
+            "run",
+            lambda *a, **k: type("Done", (), {"returncode": 0, "stdout": "not-json", "stderr": ""})(),
+        )
+    c = Check()
+
+    doctor._check_llm(c, cfg)
+
+    assert expected in "\n".join(c.lines)

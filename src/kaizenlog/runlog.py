@@ -8,12 +8,13 @@
 from __future__ import annotations
 
 import json
-import uuid
 import statistics
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from .vault import atomic_write_text
+from .ops_ledger import OpsLedger, current_run_id, new_run_id
+from .reliability import FailureReason
 
 RUNS_FILE = "runs.jsonl"
 
@@ -91,9 +92,18 @@ def log_run(
     notify_failed: bool = False,
     note: str | None = None,
     partial: bool = False,
-) -> None:
+    run_id: str | None = None,
+    parent_run_id: str | None = None,
+    configured_backend: str | None = None,
+    actual_backend: str | None = None,
+    reason_codes: list[str] | None = None,
+    source_quality: dict | None = None,
+    ops_db_path: Path | str | None = None,
+) -> FailureReason | None:
     now = now or datetime.now(timezone.utc)
     entry: dict = {
+        "schema_version": 2,
+        "run_id": run_id or new_run_id(),
         "ts": now.isoformat(),
         "command": command,
         "ok": ok,
@@ -107,7 +117,24 @@ def log_run(
         entry["note"] = str(note)[:500]
     if partial:
         entry["partial"] = True
+    if parent_run_id:
+        entry["parent_run_id"] = parent_run_id
+    if configured_backend is not None:
+        entry["configured_backend"] = str(configured_backend)
+    if actual_backend is not None:
+        entry["actual_backend"] = str(actual_backend)
+    if reason_codes:
+        entry["reason_codes"] = [str(getattr(reason, "value", reason)) for reason in reason_codes]
+    if source_quality is not None:
+        entry["source_quality"] = source_quality
     _append_run_entry(logs_dir, entry, retention_days=retention_days, now=now)
+    if ops_db_path is None:
+        return None
+    try:
+        OpsLedger(ops_db_path).append(entry)
+    except Exception:
+        return FailureReason.LEDGER_WRITE_FAILED
+    return None
 
 
 def classify_violation_kind(message: str) -> str:
@@ -158,7 +185,11 @@ def log_advise_health(
     reason_codes: list[str] | None = None,
     retention_days: int = 90,
     now: datetime | None = None,
-) -> None:
+    run_id: str | None = None,
+    parent_run_id: str | None = None,
+    source_quality: dict | None = None,
+    ops_db_path: Path | str | None = None,
+) -> FailureReason | None:
     """advise 品質レジャーを追記する。
 
     violations は種別タグのみ（プロンプト・提案本文を残さない — プライバシーと
@@ -187,7 +218,7 @@ def log_advise_health(
     legacy_backend = actual or configured or str(backend or "")
     entry = {
         "schema_version": 2,
-        "run_id": uuid.uuid4().hex,
+        "run_id": run_id or new_run_id(),
         "ts": (now or datetime.now(timezone.utc)).isoformat(),
         "command": ADVISE_HEALTH_COMMAND,
         "ok": outcome in ("ok", "repaired"),
@@ -201,7 +232,29 @@ def log_advise_health(
         "violations": uniq_kinds,
         "reason_codes": uniq_reasons,
     }
+    parent = parent_run_id if parent_run_id is not None else current_run_id()
+    if parent:
+        entry["parent_run_id"] = parent
+    if source_quality is not None:
+        entry["source_quality"] = source_quality
     _append_run_entry(logs_dir, entry, retention_days=retention_days, now=now)
+    if ops_db_path is None:
+        return None
+    try:
+        OpsLedger(ops_db_path).append(entry)
+    except Exception:
+        return FailureReason.LEDGER_WRITE_FAILED
+    return None
+
+
+def load_operational_runs(cfg) -> list[dict]:
+    """Prefer nonempty local SQLite history, retaining JSONL compatibility."""
+    ops_db_path = getattr(cfg, "operational_db_path", None)
+    if ops_db_path:
+        rows = OpsLedger(ops_db_path).load_runs()
+        if rows:
+            return rows
+    return load_runs(cfg.logs_path)
 
 
 def advise_health_records(runs: list[dict]) -> list[dict]:
@@ -300,6 +353,23 @@ def render_status(runs: list[dict]) -> str:
             lines.append("- 最後に成功: なし（一度も成功していません）")
         if not last.get("ok") and last.get("error"):
             lines.append(f"- 直近のエラー: {last['error']}")
+        if int(last.get("schema_version", 0) or 0) >= 2:
+            configured = last.get("configured_backend")
+            if configured is not None:
+                actual = last.get("actual_backend")
+                lines.append(
+                    f"- バックエンド: {configured} → {actual if actual else '不明'}"
+                )
+            reasons = last.get("reason_codes") or []
+            if reasons:
+                lines.append("- 理由コード: " + ", ".join(str(reason) for reason in reasons))
+            if last.get("parent_run_id"):
+                lines.append(f"- 親 run: {last['parent_run_id']}")
+            input_quality = (last.get("source_quality") or {}).get("input")
+            if isinstance(input_quality, dict):
+                state = input_quality.get("state", "不明")
+                event_at = input_quality.get("last_event_at") or "なし"
+                lines.append(f"- 入力: state={state} / last_event_at={event_at}")
         lines.append("")
 
     failures = [r for r in runs if not r.get("ok")][-5:]
@@ -340,4 +410,18 @@ def render_status(runs: list[dict]) -> str:
                 f"- ⚠ 実行時間が悪化（直近 {last_dur}s / 中央値 {med:.1f}s。"
                 "LLMタイムアウト接近の可能性）"
             )
+        last_valuable = next(
+            (row for row in reversed(advise_health_records(runs)) if row.get("outcome") in {"ok", "repaired"}),
+            None,
+        )
+        age = "不明"
+        if last_valuable is not None:
+            try:
+                recorded_at = datetime.fromisoformat(str(last_valuable["ts"]))
+                if recorded_at.tzinfo is None:
+                    recorded_at = recorded_at.replace(tzinfo=timezone.utc)
+                age = f"{max(0, (datetime.now(timezone.utc) - recorded_at).days)}日"
+            except (KeyError, TypeError, ValueError):
+                pass
+        lines.append(f"- 提案の最終正常値から: {age}")
     return "\n".join(lines)

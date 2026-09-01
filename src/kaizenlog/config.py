@@ -224,6 +224,7 @@ class Config:
     experiments_dir: str = "03 Areas/Kaizen Experiments"
     stats_dir: str = ".kaizenlog/stats"
     logs_dir: str = ".kaizenlog/logs"
+    ops_db_path: Path | None = None
     memory_dir: str = "Kaizen/Memory"
     monthly_dir: str = "04 Monthly"  # 月次レポート
     auto_backfill_days: int = 3  # 直近N日の欠損を毎晩自動補完（0で無効）
@@ -260,6 +261,10 @@ class Config:
     @property
     def logs_path(self) -> Path:
         return Path(self.vault_dir).expanduser() / self.logs_dir
+
+    @property
+    def operational_db_path(self) -> Path | None:
+        return self.ops_db_path
 
     @property
     def memory_path(self) -> Path:
@@ -523,6 +528,15 @@ def load_config(path: str | None = None) -> Config:
         data = tomllib.load(f)
 
     general = data.get("general", {})
+    # A Config constructed without a file must remain read-only with respect to
+    # the machine profile.  The default operational ledger is enabled only for
+    # a real configuration file.
+    if "ops_db_path" in general:
+        cfg.ops_db_path = Path(general["ops_db_path"]).expanduser()
+    else:
+        from .ops_ledger import default_ops_db_path
+
+        cfg.ops_db_path = default_ops_db_path()
     cfg.timezone = general.get("timezone", cfg.timezone)
     if "vault_dir" in general:
         cfg.vault_dir = Path(general["vault_dir"])

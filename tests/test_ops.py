@@ -41,6 +41,40 @@ def test_render_status_empty():
     assert "実行履歴はまだありません" in render_status([])
 
 
+def test_render_status_shows_v2_operational_correlation_and_value_age():
+    """Removing v2 diagnostics or an unparsable-age guard must be visible."""
+    status = render_status([
+        {
+            "schema_version": 2,
+            "run_id": "top",
+            "ts": "2026-09-01T00:00:00+00:00",
+            "command": "run",
+            "ok": True,
+            "duration_seconds": 1.0,
+            "configured_backend": "claude-code-cli",
+            "actual_backend": None,
+            "reason_codes": ["provider_auth_required"],
+            "source_quality": {"input": {"state": "stale", "last_event_at": None}},
+        },
+        {
+            "schema_version": 2,
+            "run_id": "health",
+            "parent_run_id": "top",
+            "ts": "not-a-timestamp",
+            "command": "advise_health",
+            "ok": True,
+            "duration_seconds": 0.1,
+            "outcome": "ok",
+        },
+    ])
+
+    assert "claude-code-cli → 不明" in status
+    assert "provider_auth_required" in status
+    assert "親 run: top" in status
+    assert "入力: state=stale / last_event_at=なし" in status
+    assert "提案の最終正常値から: 不明" in status
+
+
 def test_load_runs_skips_broken_lines(tmp_path):
     (tmp_path / "runs.jsonl").write_text('{"ts": "2026-07-06T00:00:00+00:00", "command": "run", "ok": true}\n{broken\n', encoding="utf-8")
     assert len(load_runs(tmp_path)) == 1
