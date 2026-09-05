@@ -22,8 +22,9 @@ jobs:
         run: pip install -e ".[dev]"
       - name: Run tests
         run: pytest -q
-      - name: CLI smoke (help / skill show / init-config)
-        run: |
-          kaizenlog --help
-          kaizenlog skill show
-          kaizenlog init-config
+      - name: CLI smoke (help)
+        run: kaizenlog --help
+      - name: CLI smoke (init-config)
+        run: kaizenlog init-config --output "${{ runner.temp }}/kaizenlog-smoke.toml"
+      - name: CLI smoke (skill show)
+        run: kaizenlog --config "${{ runner.temp }}/kaizenlog-smoke.toml" skill show
