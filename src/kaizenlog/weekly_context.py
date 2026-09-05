@@ -233,12 +233,13 @@ def render_weekly_context(
     # アクション実績（superseded / 終端 status は現役分母から除外）
     from .memory import (
         TERMINAL_STATUSES,
+        _is_iso_date,
         causal_mismatch_metrics,
         compute_action_stats,
         load_entries,
     )
 
-    entries = load_entries(memory_dir)
+    entries = [entry for entry in load_entries(memory_dir) if _is_iso_date(entry.date)]
     week_start_s = days[0].isoformat()
     week_end_s = days[-1].isoformat()
     week_entries = [

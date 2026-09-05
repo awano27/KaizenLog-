@@ -14,6 +14,8 @@ from importlib import resources
 from importlib.abc import Traversable
 from pathlib import Path, PurePosixPath
 
+from .vault import atomic_write_bytes
+
 
 # スキル本文の外にあるが、配布時に weekly-kaizen が所有する参照ファイル。
 # advisor.load_bundled_prompt() の既存利用先と同じ packaged prompt を正本に保つ。
@@ -227,12 +229,36 @@ def install_skill(vault_dir: Path, name: str, force: bool = False) -> tuple[str,
 
     # 衝突確認・変更判定を全て終えてから書く。ローカル改変がある bundle では
     # 参照だけの修復を行わず、部分更新を防ぐ。
-    for destination, _bundled in (*modified, *missing):
+    prepared = [(destination, bundled.encode("utf-8")) for destination, bundled in (*modified, *missing)]
+    snapshots = {
+        destination: destination.read_bytes() if destination.is_file() else None
+        for destination, _payload in prepared
+    }
+    for destination, _payload in prepared:
         destination.parent.mkdir(parents=True, exist_ok=True)
     for destination, _bundled in modified:
         shutil.copy2(destination, _safe_backup_path(destination))
-    for destination, bundled in (*modified, *missing):
-        destination.write_text(bundled, encoding="utf-8")
+    try:
+        for destination, payload in prepared:
+            atomic_write_bytes(destination, payload)
+    except Exception as error:
+        failed_restore: list[str] = []
+        for destination, original in reversed(snapshots.items()):
+            try:
+                current = destination.read_bytes() if destination.is_file() else None
+                if current == original:
+                    continue
+                if original is None:
+                    destination.unlink(missing_ok=True)
+                else:
+                    atomic_write_bytes(destination, original)
+            except Exception:
+                failed_restore.append(str(destination))
+        if failed_restore:
+            raise OSError(
+                "スキル導入失敗後に復元できませんでした: " + ", ".join(failed_restore)
+            ) from error
+        raise
 
     return ("overwritten" if modified else "installed"), primary
 

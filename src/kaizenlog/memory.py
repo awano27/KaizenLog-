@@ -18,6 +18,8 @@ from numbers import Real
 from pathlib import Path
 from typing import Any
 
+from .file_lock import file_lock
+
 MEMORY_FILE = "suggestions.jsonl"
 # 終端 status（寿命管理）。現役分母・📌・判定対象から除外する。
 TERMINAL_STATUSES = frozenset({"unmeasurable", "graduated", "retired"})
@@ -137,14 +139,32 @@ def load_entries(memory_dir: Path) -> list[MemoryEntry]:
     return sorted(entries.values(), key=lambda e: e.id)
 
 
+def memory_lock(memory_dir: Path, *, timeout: float = 10.0):
+    return file_lock(Path(memory_dir) / ".suggestions.lock", timeout=timeout)
+
+
+def entries_payload(entries: list[MemoryEntry], last_byte: bytes = b"") -> bytes:
+    """追記予定の bytes。保存と競合検出で同じレコード境界を使う。"""
+    payload = "".join(json.dumps(asdict(e), ensure_ascii=False) + "\n" for e in entries).encode("utf-8")
+    if payload and last_byte and last_byte not in (b"\n", b"\r"):
+        payload = b"\n" + payload
+    return payload
+
+
 def append_entries(memory_dir: Path, entries: list[MemoryEntry]) -> None:
     if not entries:
         return
+    payload = entries_payload(entries)
     memory_dir = Path(memory_dir)
     memory_dir.mkdir(parents=True, exist_ok=True)
-    with open(_memory_file(memory_dir), "a", encoding="utf-8") as f:
-        for e in entries:
-            f.write(json.dumps(asdict(e), ensure_ascii=False) + "\n")
+    with memory_lock(memory_dir), open(_memory_file(memory_dir), "a+b") as f:
+        f.seek(0, 2)
+        if f.tell():
+            f.seek(-1, 2)
+            # 既存の有効行・壊れた末尾の bytes は保ち、新規行だけを分離する。
+            if f.read(1) not in (b"\n", b"\r"):
+                payload = b"\n" + payload
+        f.write(payload)
 
 
 def next_id(existing: list[MemoryEntry], day: date, offset: int = 0) -> str:
@@ -247,6 +267,27 @@ def assign_action_ids(
         if entry.id not in used_ids
     )
     return "\n".join(lines), new_entries
+
+
+def update_statuses_from_notes(
+    note_contents: Sequence[str], entries: list[MemoryEntry], done_date: date
+) -> list[MemoryEntry]:
+    """優先順（新しい日付から）の明示チェックを確定してから差分を作る。
+
+    同じ台帳状態のチェックも先に採用する。差分だけを重複排除すると古い
+    ノートが次の実行で勝ち、done/skipped が交互に反転してしまう。
+    未チェックは完了の取り消しを意味しない。同日内は最初の明示状態を使う。
+    """
+    selected: dict[str, str] = {}
+    for content in note_contents:
+        for line in content.splitlines():
+            match = _CHECKBOX_RE.match(line)
+            if not match or match.group(2) not in ("x", "X", "-"):
+                continue
+            action_id = ID_PATTERN.search(match.group(4))
+            if action_id:
+                selected.setdefault(action_id.group(0), line)
+    return update_statuses_from_note("\n".join(selected.values()), entries, done_date)
 
 
 def update_statuses_from_note(
@@ -779,9 +820,10 @@ def consecutive_fail_actions(
 
 
 def _is_iso_date(s: str) -> bool:
+    if not isinstance(s, str):
+        return False
     try:
-        date.fromisoformat(s)
-        return True
+        return date.fromisoformat(s).isoformat() == s
     except ValueError:
         return False
 

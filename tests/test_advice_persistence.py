@@ -154,7 +154,7 @@ def test_partial_append_with_no_prior_ledger_removes_new_ledger_on_recovery(
     def write_then_fail(memory_dir: Path, entries: list[MemoryEntry]) -> None:
         original_append(memory_dir, entries[:1])
         with ledger_path.open("ab") as stream:
-            stream.write(b'{"partial_new_entry"')
+            stream.write(json.dumps(asdict(entries[1]), ensure_ascii=False).encode("utf-8")[:19])
         raise OSError("new ledger append interrupted")
 
     monkeypatch.setattr(cli, "append_entries", write_then_fail)
@@ -181,7 +181,7 @@ def test_ledger_restore_failure_reports_path_and_still_restores_note(
             return
         original_append(memory_dir, entries[:1])
         with ledger_path.open("ab") as stream:
-            stream.write(b'{"partial_new_entry"')
+            stream.write(json.dumps(asdict(entries[1]), ensure_ascii=False).encode("utf-8")[:19])
         raise OSError("generated ledger append interrupted")
 
     def fail_ledger_restore(path: Path, content: bytes) -> None:

@@ -387,12 +387,13 @@ def _effect_size_from_values(
     baseline: float | None, measurements: Sequence[float]
 ) -> float | None:
     """baseline と実測群から変化率(%)。baseline が None/0 または空なら None。"""
-    if baseline is None or baseline == 0:
+    if baseline is None or baseline == 0 or not math.isfinite(baseline):
         return None
-    if not measurements:
+    if not measurements or not all(math.isfinite(value) for value in measurements):
         return None
     med = float(median(list(measurements)))
-    return round((med - float(baseline)) / float(baseline) * 100.0, 1)
+    effect = (med - float(baseline)) / float(baseline) * 100.0
+    return round(effect, 1) if math.isfinite(effect) else None
 
 
 def effect_size(exp: Experiment) -> float | None:
@@ -526,6 +527,8 @@ def load_experiments(experiments_dir: Path) -> list[Experiment]:
         if fields.get("baseline"):
             try:
                 baseline = float(fields["baseline"])
+                if not math.isfinite(baseline):
+                    baseline = None
             except ValueError:
                 pass
         start = None

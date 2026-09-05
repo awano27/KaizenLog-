@@ -31,6 +31,8 @@ import argparse
 import re
 import sys
 import traceback
+from functools import wraps
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from time import monotonic
@@ -66,18 +68,20 @@ from .memory import (
     assign_action_ids,
     compute_action_stats,
     compute_streaks,
+    entries_payload,
     format_today_action_line,
     humanize_actions_section_markdown,
     humanize_advice_markdown_actions,
     load_entries,
     mark_entry_done,
     mark_entry_skipped,
+    memory_lock,
     partition_open_actions,
     render_action_stats_line,
     render_actions_section,
     resolve_action_id,
     summarize_for_prompt,
-    update_statuses_from_note,
+    update_statuses_from_notes,
 )
 from .nippou import generate_nippou_deterministic, generate_nippou_llm
 from .notify import notify
@@ -152,6 +156,7 @@ from .vault import (
     atomic_write_text,
     extract_heading_section,
     extract_section,
+    upsert_section,
 )
 from .verdict import (
     apply_verdicts_to_actions_note,
@@ -1784,11 +1789,23 @@ def cmd_block(cfg: Config, end_day: date, days: int, min_minutes: float,
 
 
 def _is_valid_date(s: str) -> bool:
+    if not isinstance(s, str):
+        return False
     try:
-        date.fromisoformat(s)
-        return True
+        return date.fromisoformat(s).isoformat() == s
     except ValueError:
         return False
+
+
+def _checkbox_status_updates(store: DailyNoteStore, day: date, entries: list[MemoryEntry]) -> list[MemoryEntry]:
+    scan_days = {day} | {
+        day - timedelta(days=i) for i in range(1, ACTIONS_HANDOFF_DAYS + 1)
+    } | {
+        date.fromisoformat(e.date) for e in entries
+        if e.status == "proposed" and _is_valid_date(e.date)
+    }
+    notes = [store.read(scan_day) or "" for scan_day in sorted(scan_days, reverse=True)]
+    return update_statuses_from_notes(notes, entries, day)
 
 
 def _save_advice_with_entries(
@@ -1797,11 +1814,24 @@ def _save_advice_with_entries(
     advice_md: str,
     memory_dir: Path,
     entries: list[MemoryEntry],
+    *,
+    expected_note: bytes | None = None,
+) -> Path:
+    with memory_lock(memory_dir):
+        return _save_advice_with_entries_locked(
+            store, day, advice_md, memory_dir, entries, expected_note=expected_note,
+        )
+
+
+def _save_advice_with_entries_locked(
+    store: DailyNoteStore, day: date, advice_md: str, memory_dir: Path,
+    entries: list[MemoryEntry], *, expected_note: bytes | None = None,
 ) -> Path:
     """新規提案の保存例外時にノートと台帳を復元する。
 
     完了同期・寿命管理の先行更新を残すため、保存直前に bytes を退避する。
-    通常の例外に対する補償であり、強制終了や外部の同時書き込みは扱わない。
+    協調する台帳更新は排他し、想定外の外部変更は復元せず競合として残す。
+    強制終了や、外部エディタとの厳密な原子的更新は保証しない。
     """
     snapshots: dict[Path, bytes | None] = {}
     for target in (store.path_for(day), Path(memory_dir) / MEMORY_FILE):
@@ -1810,9 +1840,28 @@ def _save_advice_with_entries(
         except FileNotFoundError:
             snapshots[target] = None
 
+    note_path = store.path_for(day)
+    ledger_path = Path(memory_dir) / MEMORY_FILE
+    original_note = snapshots[note_path]
+    if expected_note is not None and original_note != expected_note:
+        raise AdvisorError(f"ノートが変更されました。再実行してください: {note_path}")
+    written_note = (
+        upsert_section(original_note.decode("utf-8"), ADVICE_MARKER, advice_md).encode("utf-8")
+        if original_note is not None else None
+    )
+    original_ledger = snapshots[ledger_path] or b""
+    append_payload = entries_payload(entries, original_ledger[-1:])
+
     try:
         path = store.write_section(day, ADVICE_MARKER, advice_md)
+        current_note = note_path.read_bytes()
+        if written_note is None:
+            written_note = current_note
+        if current_note != written_note:
+            raise AdvisorError(f"保存中にノートが変更されました: {note_path}")
         append_entries(memory_dir, entries)
+        if append_payload and ledger_path.read_bytes() != original_ledger + append_payload:
+            raise AdvisorError(f"保存中に台帳が変更されました: {ledger_path}")
         return path
     except Exception as error:
         failed_restore: list[str] = []
@@ -1824,6 +1873,14 @@ def _save_advice_with_entries(
                     current = None
                 # 書き込み前に失敗したファイルは触らない（権限エラー等）。
                 if current == original:
+                    continue
+                if target == ledger_path:
+                    # 自分の追記の途中と確認できる場合だけ巻き戻す。
+                    if current is None or not current.startswith(original_ledger) or not append_payload.startswith(current[len(original_ledger):]):
+                        failed_restore.append(str(target))
+                        continue
+                elif current != written_note:
+                    failed_restore.append(str(target))
                     continue
                 if original is None:
                     target.unlink(missing_ok=True)
@@ -1838,6 +1895,54 @@ def _save_advice_with_entries(
                 + f"（保存エラー: {error}）"
             ) from error
         raise
+
+
+def _memory_command(fn):
+    @wraps(fn)
+    def locked(cfg, *args, **kwargs):
+        with memory_lock(cfg.memory_path):
+            return fn(cfg, *args, **kwargs)
+    return locked
+
+
+def _prepare_advice_memory(cfg: Config, store: DailyNoteStore, day: date, dry_run: bool):
+    with nullcontext() if dry_run else memory_lock(cfg.memory_path):
+        # Kaizen Memory: ノートのチェックボックスから done を検出する。
+        # 提案は (1) 提案日ノートの ADVICE、(2) 転記先ノートの 📌 の両方に現れうる。
+        # 転記ウィンドウ（直近 ACTIONS_HANDOFF_DAYS 日）を常に走査し、
+        # さらに未完了エントリの提案日（窓外の遅れチェック用）も足す。
+        entries = load_entries(cfg.memory_path)
+        status_updates = _checkbox_status_updates(store, day, entries)
+        # 同じIDが複数ノートに現れても更新は1件に畳む。チェック済みはユーザーが
+        # 既に確定した事実なので、新しいLLM提案の成否とは独立して永続化する。
+        effective_by_id = {entry.id: entry for entry in entries}
+        effective_by_id.update({entry.id: entry for entry in status_updates})
+        effective_entries = sorted(effective_by_id.values(), key=lambda entry: entry.id)
+        if status_updates and not dry_run:
+            append_entries(cfg.memory_path, status_updates)
+            print("📗 完了アクションを記録しました: "
+                  + ", ".join(entry.id for entry in status_updates))
+        # §A2/A3: チェック同期後・evidence 前に寿命管理（卒業差分）
+        lifecycle_notes: list[str] = []
+        if not dry_run:
+            from .memory import format_lifecycle_reader_notes, graduate_entries
+
+            graduated = graduate_entries(
+                effective_entries,
+                day,
+                stats_dir=cfg.stats_path,
+                known_categories=known_category_names(cfg.rules),
+            )
+            if graduated:
+                append_entries(cfg.memory_path, graduated)
+                for g in graduated:
+                    print(f"🎓 寿命管理: {g.id} → {g.status} ({g.closed_reason})")
+                effective_by_id.update({g.id: g for g in graduated})
+                effective_entries = sorted(
+                    effective_by_id.values(), key=lambda entry: entry.id
+                )
+                lifecycle_notes = format_lifecycle_reader_notes(graduated, today=day)
+        return effective_entries, effective_by_id, lifecycle_notes
 
 
 def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
@@ -1872,52 +1977,7 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
 
     experiments_ctx = render_experiments_context(load_experiments(cfg.experiments_path))
 
-    # Kaizen Memory: ノートのチェックボックスから done を検出する。
-    # 提案は (1) 提案日ノートの ADVICE、(2) 転記先ノートの 📌 の両方に現れうる。
-    # 転記ウィンドウ（直近 ACTIONS_HANDOFF_DAYS 日）を常に走査し、
-    # さらに未完了エントリの提案日（窓外の遅れチェック用）も足す。
-    entries = load_entries(cfg.memory_path)
-    scan_days = {day} | {
-        day - timedelta(days=i) for i in range(1, ACTIONS_HANDOFF_DAYS + 1)
-    } | {
-        date.fromisoformat(e.date) for e in entries
-        if e.status == "proposed" and _is_valid_date(e.date)
-    }
-    status_updates = []
-    for scan_day in sorted(scan_days, reverse=True):
-        past = store.read(scan_day)
-        if past:
-            status_updates.extend(update_statuses_from_note(past, entries, day))
-    # 同じIDが複数ノートに現れても更新は1件に畳む。チェック済みはユーザーが
-    # 既に確定した事実なので、新しいLLM提案の成否とは独立して永続化する。
-    status_updates = list({entry.id: entry for entry in status_updates}.values())
-    effective_by_id = {entry.id: entry for entry in entries}
-    effective_by_id.update({entry.id: entry for entry in status_updates})
-    effective_entries = sorted(effective_by_id.values(), key=lambda entry: entry.id)
-    if status_updates and not dry_run:
-        append_entries(cfg.memory_path, status_updates)
-        print("📗 完了アクションを記録しました: "
-              + ", ".join(entry.id for entry in status_updates))
-    # §A2/A3: チェック同期後・evidence 前に寿命管理（卒業差分）
-    lifecycle_notes: list[str] = []
-    if not dry_run:
-        from .memory import format_lifecycle_reader_notes, graduate_entries
-
-        graduated = graduate_entries(
-            effective_entries,
-            day,
-            stats_dir=cfg.stats_path,
-            known_categories=known_category_names(cfg.rules),
-        )
-        if graduated:
-            append_entries(cfg.memory_path, graduated)
-            for g in graduated:
-                print(f"🎓 寿命管理: {g.id} → {g.status} ({g.closed_reason})")
-            effective_by_id.update({g.id: g for g in graduated})
-            effective_entries = sorted(
-                effective_by_id.values(), key=lambda entry: entry.id
-            )
-            lifecycle_notes = format_lifecycle_reader_notes(graduated, today=day)
+    effective_entries, effective_by_id, lifecycle_notes = _prepare_advice_memory(cfg, store, day, dry_run)
     memory_ctx = summarize_for_prompt(effective_entries, day)
     action_stats = compute_action_stats(effective_entries, day)
     reflections = _extract_reflections(content)
@@ -2044,7 +2104,18 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
             advice_md = render_reader_advice(advice_md, evidence_ctx)
     except AdviceContractError as e:
         # 契約違反でも確定事実サマリーだけは残す（静かな失敗を防ぐ）。例外は再送出。
-        store.write_section(day, ADVICE_MARKER, _degraded_advice_section(evidence_ctx))
+        try:
+            with memory_lock(cfg.memory_path):
+                store.write_section(day, ADVICE_MARKER, _degraded_advice_section(evidence_ctx))
+        except Exception:
+            _safe_log_advise_health(
+                cfg, day=day, outcome="failed",
+                duration_seconds=monotonic() - t_advise,
+                violations=e.violations,
+                actual_backend=e.actual_backend,
+                reason_codes=[*e.reason_codes, "degraded_save_failed"],
+            )
+            raise
         print("⚠️  出力契約を満たせなかったため縮退セクションを保存しました")
         _safe_log_advise_health(
             cfg,
@@ -2065,60 +2136,81 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
             violations=["exception"],
         )
         raise
-    # 安定ID（KZN-YYYYMMDD-NNN）を付与して記録する
-    advice_md, new_entries = assign_action_ids(advice_md, day, effective_entries)
-    # §R1: ノート向け平文化は ID 付与の後（台帳 new_entries.action は機械構文のまま）
-    advice_md = humanize_advice_markdown_actions(advice_md)
-    path = _save_advice_with_entries(store, day, advice_md, cfg.memory_path, new_entries)
-    print(f"✅ 改善提案を書き込みました: {path}")
-    proposed_entries = [entry for entry in new_entries if entry.status == "proposed"]
-    if proposed_entries:
-        print("🆔 アクションID: " + ", ".join(e.id for e in proposed_entries))
-    # §B2: 冒頭 digest（失敗しても advise は成功扱い。日誌本体は触らない）
-    # 委譲小節は最大14日窓（days=15 − 当日）。baseline() は内部で7日に切る。
+    persistence_stage = "advice_save"
     try:
-        prior_hist = [
-            item
-            for item in load_stats(cfg.stats_path, days=15, end_day=day)
-            if item.get("day") != day.isoformat()
-        ]
-        _write_digest_for_day(
-            cfg,
-            store,
-            day,
-            source_status=source_status,
-            current_stats=current_stats,
-            entries=list(effective_by_id.values()) + list(new_entries),
-            redactor=redactor,
-            commit_stats=None,
-            stats_history=prior_hist,
-            log_skips=True,
-        )
-    except Exception as dig_err:
-        _log_digest_skipped(
-            cfg,
-            day=day,
-            reason=f"exception:{type(dig_err).__name__}:{dig_err}",
-        )
-        print(f"⚠️  digest 書き込みをスキップ: {type(dig_err).__name__}", file=sys.stderr)
-    # A2: ID 採番後の最新集合で翌日へ転記（dry_run ではここまで来ない）
-    merged = {e.id: e for e in effective_entries}
-    merged.update({e.id: e for e in new_entries})
-    _write_actions_handoff(cfg, store, day, list(merged.values()))
-    try:
-        _finalize_note_layout(store, day)
+        # LLM待ちの間に完了したアクションを古い proposed で上書きしない。
+        with memory_lock(cfg.memory_path):
+            expected_note = store.path_for(day).read_bytes()
+            latest = load_entries(cfg.memory_path)
+            updates = _checkbox_status_updates(store, day, latest)
+            if updates:
+                append_entries(cfg.memory_path, updates)
+            effective_by_id = {entry.id: entry for entry in latest}
+            effective_by_id.update({entry.id: entry for entry in updates})
+            effective_entries = sorted(effective_by_id.values(), key=lambda entry: entry.id)
+            advice_md, new_entries = assign_action_ids(advice_md, day, effective_entries)
+            advice_md = humanize_advice_markdown_actions(advice_md)
+            path = _save_advice_with_entries(
+                store, day, advice_md, cfg.memory_path, new_entries, expected_note=expected_note,
+            )
+            print(f"✅ 改善提案を書き込みました: {path}")
+            proposed_entries = [entry for entry in new_entries if entry.status == "proposed"]
+            if proposed_entries:
+                print("🆔 アクションID: " + ", ".join(e.id for e in proposed_entries))
+            # §B2: 冒頭 digest（失敗しても advise は成功扱い。日誌本体は触らない）
+            # 委譲小節は最大14日窓（days=15 − 当日）。baseline() は内部で7日に切る。
+            try:
+                prior_hist = [
+                    item
+                    for item in load_stats(cfg.stats_path, days=15, end_day=day)
+                    if item.get("day") != day.isoformat()
+                ]
+                _write_digest_for_day(
+                    cfg,
+                    store,
+                    day,
+                    source_status=source_status,
+                    current_stats=current_stats,
+                    entries=list(effective_by_id.values()) + list(new_entries),
+                    redactor=redactor,
+                    commit_stats=None,
+                    stats_history=prior_hist,
+                    log_skips=True,
+                )
+            except Exception as dig_err:
+                _log_digest_skipped(
+                    cfg,
+                    day=day,
+                    reason=f"exception:{type(dig_err).__name__}:{dig_err}",
+                )
+                print(f"⚠️  digest 書き込みをスキップ: {type(dig_err).__name__}", file=sys.stderr)
+            # A2: ID 採番後の最新集合で翌日へ転記（dry_run ではここまで来ない）
+            merged = {e.id: e for e in effective_entries}
+            merged.update({e.id: e for e in new_entries})
+            persistence_stage = "handoff"
+            _write_actions_handoff(cfg, store, day, list(merged.values()))
+            try:
+                _finalize_note_layout(store, day)
+            except Exception:
+                pass
+            _safe_log_advise_health(
+                cfg,
+                day=day,
+                outcome=outcome,
+                duration_seconds=monotonic() - t_advise,
+                violations=violations,
+                actual_backend=actual_backend,
+                reason_codes=reason_codes,
+            )
+            return path
     except Exception:
-        pass
-    _safe_log_advise_health(
-        cfg,
-        day=day,
-        outcome=outcome,
-        duration_seconds=monotonic() - t_advise,
-        violations=violations,
-        actual_backend=actual_backend,
-        reason_codes=reason_codes,
-    )
-    return path
+        _safe_log_advise_health(
+            cfg, day=day, outcome="failed",
+            duration_seconds=monotonic() - t_advise,
+            violations=violations, actual_backend=actual_backend,
+            reason_codes=[*reason_codes, persistence_stage + "_failed"],
+        )
+        raise
 
 
 def _safe_log_advise_health(
@@ -2150,6 +2242,7 @@ def _safe_log_advise_health(
         pass
 
 
+@_memory_command
 def _sync_checkbox_statuses(cfg: Config, day: date) -> tuple[list, int]:
     """ノートの [x] を Memory に反映してから表示する（表示が古いと信頼を失う）。
 
@@ -2158,19 +2251,7 @@ def _sync_checkbox_statuses(cfg: Config, day: date) -> tuple[list, int]:
     """
     store = DailyNoteStore(cfg.daily_notes_path)
     entries = load_entries(cfg.memory_path)
-    scan_days = {day} | {
-        day - timedelta(days=i) for i in range(1, ACTIONS_HANDOFF_DAYS + 1)
-    } | {
-        date.fromisoformat(e.date)
-        for e in entries
-        if e.status == "proposed" and _is_valid_date(e.date)
-    }
-    status_updates: list = []
-    for scan_day in sorted(scan_days, reverse=True):
-        past = store.read(scan_day)
-        if past:
-            status_updates.extend(update_statuses_from_note(past, entries, day))
-    status_updates = list({entry.id: entry for entry in status_updates}.values())
+    status_updates = _checkbox_status_updates(store, day, entries)
     if status_updates:
         append_entries(cfg.memory_path, status_updates)
     by_id = {e.id: e for e in entries}
@@ -2370,6 +2451,7 @@ def cmd_today(
     return 0
 
 
+@_memory_command
 def cmd_skip(cfg: Config, action_id: str, reason: str | None = None) -> int:
     """アクションをスキップ（拒否）として記録する。消化率分母から外す。"""
     from .memory import TERMINAL_STATUSES
@@ -2401,6 +2483,7 @@ def cmd_skip(cfg: Config, action_id: str, reason: str | None = None) -> int:
     return 0
 
 
+@_memory_command
 def cmd_done(cfg: Config, action_id: str, day: date) -> int:
     """ターミナルからアクションを消化する。"""
     from .memory import TERMINAL_STATUSES

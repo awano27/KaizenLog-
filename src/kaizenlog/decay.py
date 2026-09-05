@@ -17,7 +17,7 @@ from .experiments import (
     metric_from_stats,
     target_met,
 )
-from .memory import load_entries
+from .memory import _is_iso_date, load_entries
 from .promptledger import find_matching_entry, load_prompt_ledger
 from .stats import load_stats
 from .verdict import parse_pass_condition
@@ -68,6 +68,8 @@ def load_decay_events(
         if not isinstance(d, dict) or "ref_id" not in d:
             continue
         day = str(d.get("date") or "")
+        if (start_s is not None or end_s is not None) and not _is_iso_date(day):
+            continue
         if start_s and day and day < start_s:
             continue
         if end_s and day and day > end_s:
