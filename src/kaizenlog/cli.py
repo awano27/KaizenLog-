@@ -59,6 +59,8 @@ from .aiwork import (
 from .doctor import run_doctor
 from .memory import (
     ACTIONS_HANDOFF_DAYS,
+    MEMORY_FILE,
+    MemoryEntry,
     TODAY_CANDIDATE_CAP,
     append_entries,
     assign_action_ids,
@@ -146,6 +148,7 @@ from .vault import (
     ACTIVITY_MARKER,
     ADVICE_MARKER,
     DailyNoteStore,
+    atomic_write_bytes,
     atomic_write_text,
     extract_heading_section,
     extract_section,
@@ -1788,6 +1791,55 @@ def _is_valid_date(s: str) -> bool:
         return False
 
 
+def _save_advice_with_entries(
+    store: DailyNoteStore,
+    day: date,
+    advice_md: str,
+    memory_dir: Path,
+    entries: list[MemoryEntry],
+) -> Path:
+    """新規提案の保存例外時にノートと台帳を復元する。
+
+    完了同期・寿命管理の先行更新を残すため、保存直前に bytes を退避する。
+    通常の例外に対する補償であり、強制終了や外部の同時書き込みは扱わない。
+    """
+    snapshots: dict[Path, bytes | None] = {}
+    for target in (store.path_for(day), Path(memory_dir) / MEMORY_FILE):
+        try:
+            snapshots[target] = target.read_bytes()
+        except FileNotFoundError:
+            snapshots[target] = None
+
+    try:
+        path = store.write_section(day, ADVICE_MARKER, advice_md)
+        append_entries(memory_dir, entries)
+        return path
+    except Exception as error:
+        failed_restore: list[str] = []
+        for target, original in reversed(snapshots.items()):
+            try:
+                try:
+                    current = target.read_bytes()
+                except FileNotFoundError:
+                    current = None
+                # 書き込み前に失敗したファイルは触らない（権限エラー等）。
+                if current == original:
+                    continue
+                if original is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    atomic_write_bytes(target, original)
+            except Exception:
+                failed_restore.append(str(target))
+        if failed_restore:
+            raise AdvisorError(
+                "改善提案の保存に失敗し、次のファイルを復元できませんでした: "
+                + ", ".join(failed_restore)
+                + f"（保存エラー: {error}）"
+            ) from error
+        raise
+
+
 def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
     store = DailyNoteStore(cfg.daily_notes_path)
     content = store.read(day)
@@ -2017,8 +2069,7 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
     advice_md, new_entries = assign_action_ids(advice_md, day, effective_entries)
     # §R1: ノート向け平文化は ID 付与の後（台帳 new_entries.action は機械構文のまま）
     advice_md = humanize_advice_markdown_actions(advice_md)
-    path = store.write_section(day, ADVICE_MARKER, advice_md)
-    append_entries(cfg.memory_path, new_entries)
+    path = _save_advice_with_entries(store, day, advice_md, cfg.memory_path, new_entries)
     print(f"✅ 改善提案を書き込みました: {path}")
     proposed_entries = [entry for entry in new_entries if entry.status == "proposed"]
     if proposed_entries:
