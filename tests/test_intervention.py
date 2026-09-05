@@ -1,5 +1,9 @@
 """LeechBlock 介入（時間泥棒検出→ルール生成）のテスト。"""
 
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
 from kaizenlog.config import DEFAULT_RULES
 from kaizenlog.intervention import (
     BlockRule,
@@ -15,11 +19,14 @@ def _stats(day, by_site=None, blocks=None):
     return {"day": day, "by_site": by_site or {}, "blocks": blocks or []}
 
 
-def _block(start_hour, minutes, category="エンタメ", app="chrome.exe", title="YouTube"):
-    start = f"2026-07-19T{start_hour:02d}:00:00+09:00"
-    end_h, end_m = divmod(start_hour * 60 + minutes, 60)
-    end = f"2026-07-19T{end_h:02d}:{end_m:02d}:00+09:00"
-    return {"start": start, "end": end, "category": category,
+def _block(start_hour, minutes, category="エンタメ", app="chrome.exe", title="YouTube", *,
+           source_tz=None):
+    start = datetime(2026, 7, 19, start_hour).astimezone()
+    end = start + timedelta(minutes=minutes)
+    if source_tz is not None:
+        start = start.astimezone(source_tz)
+        end = end.astimezone(source_tz)
+    return {"start": start.isoformat(), "end": end.isoformat(), "category": category,
             "app": app, "minutes": float(minutes), "title": title}
 
 
@@ -39,15 +46,21 @@ def test_detect_below_threshold_is_ignored():
     assert detect_time_sinks(stats, DEFAULT_RULES) == []
 
 
-def test_detect_falls_back_to_block_titles():
+@pytest.mark.parametrize(
+    "source_tz",
+    [timezone.utc, timezone(timedelta(hours=9)), timezone(timedelta(hours=-7))],
+    ids=["UTC", "UTC+09", "UTC-07"],
+)
+def test_detect_falls_back_to_block_titles(source_tz):
     # aw-watcher-web 未導入: by_site が無く、ブロックのタイトルから推定
-    stats = [_stats(f"2026-07-{d:02d}", blocks=[_block(17, 45)]) for d in range(1, 8)]
+    stats = [_stats(f"2026-07-{d:02d}", blocks=[_block(17, 45, source_tz=source_tz)])
+             for d in range(1, 8)]
     sinks = detect_time_sinks(stats, DEFAULT_RULES)
     assert len(sinks) == 1
     assert sinks[0].label == "youtube.com"
     assert sinks[0].source == "title"
     assert sinks[0].avg_minutes == 45.0
-    assert sinks[0].hour_minutes.get(17, 0) > 0
+    assert sinks[0].hour_minutes == {17: 315.0}
 
 
 def test_site_data_preferred_when_comparable():
@@ -82,8 +95,14 @@ def test_no_window_for_empty_histogram():
 
 # ---- ルール提案 ----
 
-def test_window_rule_uses_hourly_limit():
-    stats = [_stats(f"2026-07-{d:02d}", blocks=[_block(17, 45)]) for d in range(1, 8)]
+@pytest.mark.parametrize(
+    "source_tz",
+    [timezone.utc, timezone(timedelta(hours=9)), timezone(timedelta(hours=-7))],
+    ids=["UTC", "UTC+09", "UTC-07"],
+)
+def test_window_rule_uses_hourly_limit(source_tz):
+    stats = [_stats(f"2026-07-{d:02d}", blocks=[_block(17, 45, source_tz=source_tz)])
+             for d in range(1, 8)]
     rules = suggest_rules(detect_time_sinks(stats, DEFAULT_RULES))
     assert len(rules) == 1
     r = rules[0]
