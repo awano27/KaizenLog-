@@ -12,7 +12,15 @@ from kaizenlog.vault import WEEKLY_CONTEXT_MARKER, extract_section
 @pytest.fixture
 def isolated_config(tmp_path, monkeypatch):
     cfg = Config(vault_dir=tmp_path / "vault", aiwork=AIWorkConfig(enabled=False))
-    monkeypatch.setattr(cli, "load_config", lambda *args, **kwargs: cfg)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f"[general]\nvault_dir = '{cfg.vault_dir.as_posix()}'\n"
+        "[aiwork]\nenabled = false\n",
+        encoding="utf-8",
+    )
+    # main() checks config existence before loading it; isolate both steps.
+    monkeypatch.setenv("KAIZENLOG_CONFIG", str(config_path))
+    monkeypatch.chdir(tmp_path)
 
     def unexpected_telemetry(*args, **kwargs):
         pytest.fail("Synthetic weekly test must not collect real telemetry")
