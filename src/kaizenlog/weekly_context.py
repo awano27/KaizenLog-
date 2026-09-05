@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Sequence
@@ -62,7 +63,7 @@ def expired_recommendation(hits: int, n: int) -> str:
 
     自動で status を adopted/rejected に書き換えない理由:
     frontmatter 簡易パーサでの書換はノート破損リスクが高く、
-    採否の最終決定は人間 / weekly-kaizen スキルに残す。
+    採否の最終決定は人間に残す。スキルは決定済みの内容だけを反映する。
     """
     if n <= 0:
         return "実測不足"
@@ -99,6 +100,14 @@ def format_ai_tokens_week_line(stats_list: list[dict]) -> str:
         f"AIトークン: 週計 {_format_token_count(week_sum)}"
         f" / 日平均 {_format_token_count(day_avg)}"
         f"（{len(totals)}日分の v2 統計）"
+    )
+
+
+def _experiment_as_of(exp, as_of: date):
+    """週次表示用に、基準日より後の実測を除いた実験コピーを返す。"""
+    return replace(
+        exp,
+        measurements={d: v for d, v in exp.measurements.items() if d <= as_of},
     )
 
 
@@ -195,7 +204,7 @@ def render_weekly_context(
             "## ⚠ 摩擦ワーストセッション",
             "",
             "スコア = ツールエラー + 中断×5 + リトライ関与×5。"
-            "日次は数値・内容抜粋のみ。入力/出力の質の判定は週次 LLM に委ねる。",
+            "観測された摩擦のみ。入力/出力の品質は直接証拠がないため Unknown。",
             "",
         ]
     )
@@ -264,8 +273,9 @@ def render_weekly_context(
     lines.extend(
         [
             "",
-            "## アクション実績",
+            "## アクション実績（対象週の提案 / 現在の状態）",
             "",
+            "- status・判定は現在の台帳値。週末時点の状態復元はしていない。",
             f"- 週の提案: {proposed}件 / 消化: {done}件（{done_rate}） / "
             f"判定: {judged}件 / PASS: {passed}件（{pass_rate}）{closed_part}",
             "",
@@ -291,7 +301,8 @@ def render_weekly_context(
         )
         if causal:
             lines.append(
-                "- 新規提案を抑制する指標: " + ", ".join(sorted(causal)[:12])
+                "- 新規提案を抑制する指標（現在の全台帳・対象週外を含む）: "
+                + ", ".join(sorted(causal)[:12])
             )
         lines.append(
             "- 同じ指標への新規アクションは避け、行動が測れる別指標へ切り替える。"
@@ -299,9 +310,22 @@ def render_weekly_context(
     else:
         lines.append("- （該当なし）")
 
-    # 実験（採否は表示のみ。frontmatter status は書き換えない — 人間/スキルが最終決定）
-    experiments = load_experiments(experiments_dir)
-    lines.extend(["", "## 実験サマリー", ""])
+    # 実験（採否は表示のみ。frontmatter status は書き換えない — 人間が最終決定）
+    experiments = [
+        _experiment_as_of(exp, week_end)
+        for exp in load_experiments(experiments_dir)
+        # start が欠落した旧記録は時点を確認できないため残す。未来日が明示された
+        # 実験だけを対象週へ混入させない。
+        if exp.start is None or exp.start <= week_end
+    ]
+    lines.extend(
+        [
+            "",
+            "## 実験サマリー（週末までの計測 / 現在のstatus）",
+            "",
+            "- 実測値は週末までの累積。status は現在のfrontmatter値であり、週末時点の状態復元ではない。",
+        ]
+    )
     running = [e for e in experiments if e.status == "running"]
     expired = [e for e in experiments if e.status == "expired"]
     adopted = [e for e in experiments if e.status == "adopted"]
@@ -354,7 +378,8 @@ def render_weekly_context(
     ledger = load_prompt_ledger(memory_dir)
     counts = ledger_status_counts(ledger)
     new_ents = [e for e in ledger if e.status == "new"]
-    lines.extend(["", "## プロンプト資産（未処理クラスタ）", ""])
+    lines.extend(["", "## プロンプト資産（現在の台帳状態）", ""])
+    lines.append("- status・件数は現在の台帳値。週末時点の状態復元はしていない。")
     if new_ents:
         for e in sorted(new_ents, key=lambda x: (-x.count_total, x.id)):
             lines.append(f"- {format_ledger_line(e)}")
@@ -428,7 +453,14 @@ def render_weekly_context(
 
         coach_sec = format_coach_weekly_section(load_coach_ledger(memory_dir))
         if coach_sec:
-            lines.extend(["", coach_sec, ""])
+            lines.extend(
+                [
+                    "",
+                    coach_sec,
+                    "- 注: 勝敗・監視中は現在の台帳状態。週末時点の状態復元はしていない。",
+                    "",
+                ]
+            )
     except OSError:
         pass
 
@@ -464,7 +496,14 @@ def render_weekly_context(
             )
             h_sec = format_weekly_handoff_roi_section(rows, h_ledger)
             if h_sec:
-                lines.extend(["", h_sec, ""])
+                lines.extend(
+                    [
+                        "",
+                        h_sec,
+                        "- 注: status・ROIは現在の台帳状態。週末時点の状態復元はしていない。",
+                        "",
+                    ]
+                )
     except OSError:
         pass
 

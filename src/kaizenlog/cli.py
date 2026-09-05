@@ -3835,7 +3835,7 @@ def cmd_skill(cfg: Config, args: argparse.Namespace) -> int:
         elif result == "unchanged":
             print(f"✅ {name}: 既に最新です")
         elif result == "overwritten":
-            print(f"♻️  {name}: 上書きしました（元ファイルは {dest.with_suffix('.md.bak').name} に退避）")
+            print(f"♻️  {name}: 上書きしました（変更した各ファイルを隣の .bak / .bak.N に退避）")
         else:  # skipped
             print(f"⚠️  {name}: 既存ファイルと差分があるため上書きしませんでした。")
             d = diff_skill(vault, name)
@@ -3994,6 +3994,11 @@ def main(argv: list[str] | None = None) -> int:
         "--write",
         action="store_true",
         help="Weekly Reviews/YYYY-Www.md のマーカー区間へ永続化（stdout も出す）",
+    )
+    wc.add_argument(
+        "--strict-write",
+        action="store_true",
+        help="--write 必須。保存失敗時は終了コード1を返す（自動レビュー用）",
     )
     blk = sub.add_parser("block", help="時間泥棒からLeechBlockのブロックルールを生成（介入）")
     blk.add_argument("--days", type=int, default=14, help="分析する日数（デフォルト14）")
@@ -4517,6 +4522,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "weekly-context":
+        if args.strict_write and not args.write:
+            print("❌ --strict-write には --write が必要です。", file=sys.stderr)
+            return 1
         from .weekly_context import (
             monday_of,
             parse_iso_week,
@@ -4581,7 +4589,7 @@ def main(argv: list[str] | None = None) -> int:
                     note="write",
                 )
             except Exception as e:
-                # 無人実行を止めない: 警告 + runlog
+                # 既定の継続動作を保ち、保存必須の呼び出し元には失敗を返す。
                 print(f"⚠️  週次コンテキストの書き込みに失敗: {e}", file=sys.stderr)
                 log_run(
                     cfg.logs_path,
@@ -4591,7 +4599,7 @@ def main(argv: list[str] | None = None) -> int:
                     error=e,
                     retention_days=cfg.log_retention_days,
                 )
-                return 0
+                return 1 if args.strict_write else 0
         return 0
 
     if args.command == "block":

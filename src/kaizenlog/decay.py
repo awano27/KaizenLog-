@@ -43,7 +43,7 @@ class DecayEvent:
 def load_decay_events(
     memory_dir: Path, *, window_days: int | None = None, as_of: date | None = None
 ) -> list[DecayEvent]:
-    """台帳を読み、任意で直近 window_days に絞る。"""
+    """台帳を読み、任意で直近 window_days と as_of 以前に絞る。"""
     path = Path(memory_dir) / DECAY_LEDGER
     if not path.is_file():
         return []
@@ -51,10 +51,11 @@ def load_decay_events(
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
-    as_of = as_of or date.today()
     start_s = None
     if window_days is not None:
-        start_s = (as_of - timedelta(days=window_days - 1)).isoformat()
+        reference_day = as_of or date.today()
+        start_s = (reference_day - timedelta(days=window_days - 1)).isoformat()
+    end_s = as_of.isoformat() if as_of is not None else None
     out: list[DecayEvent] = []
     for line in text.splitlines():
         line = line.strip()
@@ -69,6 +70,8 @@ def load_decay_events(
         day = str(d.get("date") or "")
         if start_s and day and day < start_s:
             continue
+        if end_s and day and day > end_s:
+            continue
         out.append(
             DecayEvent(
                 date=day,
@@ -82,10 +85,11 @@ def load_decay_events(
 
 
 def _recent_ref_ids(memory_dir: Path, as_of: date, cooldown_days: int) -> set[str]:
-    start = (as_of - timedelta(days=cooldown_days - 1)).isoformat()
     ids: set[str] = set()
-    for e in load_decay_events(memory_dir):
-        if e.date and e.date >= start:
+    for e in load_decay_events(
+        memory_dir, window_days=cooldown_days, as_of=as_of
+    ):
+        if e.date:
             ids.add(e.ref_id)
     return ids
 

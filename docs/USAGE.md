@@ -64,7 +64,7 @@ kaizenlog init-config --output PATH   # 任意パスへ雛形を出力
    ├─ 🧪 実行中の実験に実測値を追記（✅/❌判定）
    ├─ 📈 統計JSONを蓄積（パターン検出の材料）
    └─ 🚀 LLMが改善提案を追記（計画vs実績・AI使い方の改善・Kaizen Memoryで重複提案を回避）
-[毎週日曜18:00] claude -p "/weekly-kaizen" → 週次レビュー作成・実験の採用/棄却
+[毎週日曜18:00] claude -p "/weekly-kaizen" → 週次レビュー作成・実験の採否推奨
 [4週ごと] claude -p "/kaizen-autopilot" → 自動化コードをPR/提案ノートとして提出
 ```
 
@@ -75,9 +75,9 @@ KaizenLogはClaude Codeを「LLMバックエンドの1つ」としても「自�
 | 方式 | 何をするか | 向いている場面 |
 | --- | --- | --- |
 | **A. バックエンド運用** | `kaizenlog advise` がClaude Code CLIを`-p`（ヘッドレス）で1回呼び出し、テキストを受け取ってKaizenLog側がマーカー区間に書き込む。ファイル操作はClaude Codeにさせない | 他のバックエンド（Copilot CLI / Ollama / GitHub Models）と同列に差し替えたいとき。動作が一番シンプルで予測可能 |
-| **B. スキル運用** | `daily-kaizen` / `weekly-kaizen` / `kaizen-autopilot` スキルをボールトにインストールし、`claude -p "/daily-kaizen"` のようにClaude Code自身にログを読ませて提案を書かせる | ボールト全体の文脈（CLAUDE.md・過去ノート・プロジェクトノート）を踏まえた深い提案が欲しいとき。週次・自動化提案は元々この方式 |
+| **B. スキル運用** | `daily-kaizen` / `weekly-kaizen` / `kaizen-autopilot` をボールトにインストールし、`/daily-kaizen` などを実行する。日次は同じ `kaizenlog advise` を呼び出し、週次は決定論の集約をもとに考察を書く | 会話から日次処理を起動したいとき、週次の考察や自動化案を作りたいとき |
 
-どちらもマーカー区間だけを更新し、手書きメモは壊しません。迷ったらAで始めて、物足りなくなったらBのスキルを足すのがおすすめです。
+日次の保存はどちらもKaizenLogのCLIが担当します。週次の考察はweekly-contextマーカーの外に書き、既存の手書きメモを保持します。スキル内のCLI実行には、実行環境で許可されたコマンド実行ツールが必要です。
 
 ---
 
@@ -221,7 +221,9 @@ kaizenlog skill install                           # config.tomlのvault_dirへ�
 kaizenlog skill doctor                            # インストール状態を確認（未導入/更新あり等）
 ```
 
-既にボールト側にスキルがあり内容が異なる場合は**上書きせずdiffを案内**します。意図的に上書きしたいときだけ `kaizenlog skill install --force`（既存ファイルは`.bak`にバックアップされます）。別のボールトに入れる場合は `--vault "C:\path\to\vault"` を指定してください。
+本文に加えて週次レビューの参照資料 `weekly-kaizen/references/ai_work_deep_review.md` も配置し、`skill doctor` は両方を確認します。参照資料だけ欠けていて他に変更がなければ、通常のinstallで補います。
+
+既存の配布対象ファイルに変更がある場合は、そのスキル全体を**上書きせずdiffを案内**します。意図的に上書きしたいときだけ `kaizenlog skill install --force` を使います。置換する各ファイルは`.bak`、既存バックアップがあれば`.bak.1`などに退避し、独自に追加したファイルは保持します。別のボールトに入れる場合は `--vault "C:\path\to\vault"` を指定してください。
 
 ## Step 7: 自動実行の登録
 
@@ -311,11 +313,13 @@ kaizenlog report --no-llm # LLMを待たず事実ベースの箇条書きで即�
 
 ### 週次（読むだけ）
 
-日曜夜に `01 Daily Notes/Weekly Reviews/` に週次レビューができています。期限切れの実験は採用/棄却が判定済み。手動で今すぐやりたいときはボールトでClaude Codeを開いて `/weekly-kaizen`。
+週次タスクの登録と実行が成功すると、`01 Daily Notes/Weekly Reviews/` にレビューが保存されます。実験の採否は推奨として表示し、最終判断は人間が行います。手動ではボールトでClaude Codeを開いて `/weekly-kaizen`。実験の実測は対象週末まで、台帳の状態は現在値として区別します。
 
-### 今日の分をClaude Codeに深掘りしてほしいとき
+集約のみを保存する場合は `kaizenlog weekly-context --week 2026-W30 --write --strict-write` を使います。`--strict-write` は保存失敗で終了コード1を返すため、失敗時に古いノートでレビューを続けるのを防げます。従来の `--write` だけの呼び出しは、保存失敗を警告・実行ログへ記録して終了コード0を返す動作を維持します。
 
-`kaizenlog advise`（バックエンド運用）の代わりに、Claude Codeでボールトを開いて `/daily-kaizen` を実行すると、CLAUDE.mdやプロジェクトノートも踏まえた提案を書いてもらえます（Step 6の`skill install`が前提）。書き込み先・マーカー区間・Kaizen Memoryとの連携は同じです。
+### 会話から今日の改善提案を生成するとき
+
+Claude Codeでボールトを開いて `/daily-kaizen` を実行します（Step 6の`skill install`が前提）。スキルは対象日と既存設定を確認して `kaizenlog advise` を呼び出します。設定済みのLLMバックエンドによる生成、根拠検証、KZN-ID採番、ノートとKaizen Memoryへの保存が共通の経路で行われます。コマンドを実行できない場合は制約を報告し、直接のノート編集には切り替えません。
 
 ### 3日以上溜まったら: パターン検出
 
@@ -359,6 +363,7 @@ kaizenlog prompts mark 001 dismissed
 | `kaizenlog prompts mark <id> skilled\|dismissed [--skill NAME]` | クラスタをスキル化済み/却下に記録 |
 | `kaizenlog skill install [--vault PATH] [--force]` | Claude Codeスキル3種をボールトに配置（既存は上書きせずdiff案内） |
 | `kaizenlog skill show` / `skill doctor` | 同梱スキルの一覧／インストール状態の確認 |
+| `kaizenlog weekly-context [--week YYYY-Www] [--write] [--strict-write]` | 週次の集約と保存。`--strict-write` は `--write` 必須で、保存失敗を終了コード1で通知 |
 | `kaizenlog setup` | 対話式セットアップウィザード（導入の正規経路） |
 | `kaizenlog doctor` | 環境の一発診断（AW接続・LLM認証・パス等を✅/⚠️/❌で表示） |
 | `kaizenlog status` | 実行履歴の確認（最終成功・直近の失敗理由・partial） |
