@@ -855,7 +855,7 @@ def test_r11_finish_creates_advice_note(tmp_path: Path):
         as_of=today,
     )
     line = format_abtest_journal_line(exp)
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     store.write_section(today, ADVICE_MARKER, line + "\n")
     note = store.read(today)
     assert note is not None
@@ -865,7 +865,7 @@ def test_r11_finish_creates_advice_note(tmp_path: Path):
 
 
 def test_r11_preserves_handwritten_when_adding_advice(tmp_path: Path):
-    store = DailyNoteStore(tmp_path / "notes")
+    store = DailyNoteStore(Config(vault_dir=tmp_path, daily_notes_dir="notes"))
     day = date(2026, 7, 10)
     p = tmp_path / "notes" / f"{day.isoformat()}.md"
     p.parent.mkdir(parents=True)
@@ -925,7 +925,7 @@ def test_r11_cli_appends_to_existing_advice_activity_unchanged(tmp_path: Path):
     cfg = _abtest_cfg(tmp_path)
     create_abtest(cfg.experiments_path, today=date(2026, 7, 1), predict_pct=30, days=7)
     day = date(2026, 7, 10)
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     store.write_section(day, ACTIVITY_MARKER, "- 開発: 1時間00分\n")
     store.write_section(day, ADVICE_MARKER, "既存アドバイス行\n")
     note_path = store.path_for(day)
@@ -952,7 +952,7 @@ def test_r11_cli_insufficient_sample_writes_line_and_card(tmp_path: Path):
 
     assert _run_finish(cfg) == 0
     day = date(2026, 7, 10)
-    adv = extract_section(DailyNoteStore(cfg.daily_notes_path).read(day) or "", ADVICE_MARKER) or ""
+    adv = extract_section(DailyNoteStore(cfg).read(day) or "", ADVICE_MARKER) or ""
     assert "abtest完了" in adv
     assert "不成立" in adv
     assert "実測実測" not in adv  # 文言重複の回帰
@@ -974,7 +974,7 @@ def test_r11_cli_no_duplicate_line_on_refinish(tmp_path: Path):
     )
     assert _run_finish(cfg) == 0
     day = date(2026, 7, 10)
-    adv = extract_section(DailyNoteStore(cfg.daily_notes_path).read(day) or "", ADVICE_MARKER) or ""
+    adv = extract_section(DailyNoteStore(cfg).read(day) or "", ADVICE_MARKER) or ""
     assert adv.count("abtest完了") == 1
 
 

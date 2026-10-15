@@ -18,6 +18,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Callable
 
+from .file_lock import locked_read_modify_write
 from .promptmine import DEFAULT_SIMILARITY, PromptCluster, normalize
 
 LEDGER_FILE = "prompt_clusters.jsonl"
@@ -101,9 +102,11 @@ def append_prompt_ledger(
         return
     memory_dir = Path(memory_dir)
     memory_dir.mkdir(parents=True, exist_ok=True)
-    with open(_ledger_path(memory_dir), "a", encoding="utf-8") as f:
-        for e in entries:
-            f.write(json.dumps(asdict(e), ensure_ascii=False) + "\n")
+    path = _ledger_path(memory_dir)
+    with locked_read_modify_write(path):
+        with open(path, "a", encoding="utf-8") as f:
+            for e in entries:
+                f.write(json.dumps(asdict(e), ensure_ascii=False) + "\n")
 
 
 def next_prm_id(existing: list[PromptLedgerEntry], day: date, offset: int = 0) -> str:
@@ -162,7 +165,7 @@ def _redact_display(
     return t.strip()
 
 
-def upsert_clusters(
+def _upsert_clusters_unlocked(
     memory_dir: Path,
     clusters: list[PromptCluster],
     *,
@@ -256,6 +259,28 @@ def upsert_clusters(
 
     append_prompt_ledger(memory_dir, to_append)
     return touched
+
+
+def upsert_clusters(
+    memory_dir: Path,
+    clusters: list[PromptCluster],
+    *,
+    as_of: date,
+    redactor: Callable[[str], str] | None = None,
+    similarity: float = DEFAULT_SIMILARITY,
+) -> list[PromptLedgerEntry]:
+    """Serialize the complete ledger read/upsert/append operation."""
+    memory_dir = Path(memory_dir)
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    path = _ledger_path(memory_dir)
+    with locked_read_modify_write(path):
+        return _upsert_clusters_unlocked(
+            memory_dir,
+            clusters,
+            as_of=as_of,
+            redactor=redactor,
+            similarity=similarity,
+        )
 
 
 def resolve_prm_id(

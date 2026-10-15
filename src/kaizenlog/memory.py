@@ -18,7 +18,7 @@ from numbers import Real
 from pathlib import Path
 from typing import Any
 
-from .file_lock import file_lock
+from .file_lock import file_lock, lock_path_for
 
 MEMORY_FILE = "suggestions.jsonl"
 # 終端 status（寿命管理）。現役分母・📌・判定対象から除外する。
@@ -140,7 +140,7 @@ def load_entries(memory_dir: Path) -> list[MemoryEntry]:
 
 
 def memory_lock(memory_dir: Path, *, timeout: float = 10.0):
-    return file_lock(Path(memory_dir) / ".suggestions.lock", timeout=timeout)
+    return file_lock(lock_path_for(_memory_file(memory_dir)), timeout=timeout)
 
 
 def entries_payload(entries: list[MemoryEntry], last_byte: bytes = b"") -> bytes:

@@ -18,6 +18,7 @@ from .aiwork import (
     detect_retry_chains,
     estimate_sessions_cost,
     max_loop_episode,
+    measured_metric_total,
     retry_chain_excerpts,
 )
 from .config import Config
@@ -33,9 +34,9 @@ class DayBucket:
     episode_count: int = 0
     wasted_tokens: int | None = None  # None = 不明
     est_cost_usd: float | None = None
-    tool_errors: int = 0
+    tool_errors: int | None = 0
     sessions: int = 0
-    output_tokens: int = 0
+    output_tokens: int | None = 0
 
 
 @dataclass
@@ -43,13 +44,13 @@ class ExcavateReport:
     start: date
     end: date
     session_count: int
-    output_tokens: int
+    output_tokens: int | None
     est_cost_usd: float | None  # 不明は None
     loop_episodes: int
     loop_wasted_tokens: int | None
     loop_cost_usd: float | None
     retry_chain_count: int
-    tool_errors: int
+    tool_errors: int | None
     worst_days: list[DayBucket] = field(default_factory=list)
     worst_excerpt: str | None = None
     adapters_used: list[str] = field(default_factory=list)
@@ -117,7 +118,6 @@ def run_excavate(
     total_loop_cost: float | None = 0.0
     any_loop_tok_unknown = False
     any_loop_cost_unknown = False
-    total_tool_err = 0
     worst_excerpt: str | None = None
     worst_ep_len = -1
 
@@ -138,9 +138,12 @@ def run_excavate(
             else:
                 total_loop_cost = float(total_loop_cost or 0.0) + float(cost)
         total_loop_eps += tax.episode_count
-        err = sum(int(s.tool_errors or 0) for s in day_sess)
-        total_tool_err += err
-        out_tok = sum(int(s.output_tokens or 0) for s in day_sess)
+        err = measured_metric_total(
+            day_sess, "tool_errors", "tool_metrics_measurable"
+        )
+        out_tok = measured_metric_total(
+            day_sess, "output_tokens", "output_tokens_measurable"
+        )
         day_buckets.append(
             DayBucket(
                 day=d,
@@ -173,7 +176,9 @@ def run_excavate(
     # 期間セッションコスト（モデル不明混在 → 不明）
     est_cost, uncosted, _ = estimate_sessions_cost(sessions, pricing)
     period_cost: float | None
-    if uncosted > 0:
+    if uncosted > 0 or measured_metric_total(
+        sessions, "output_tokens", "output_tokens_measurable"
+    ) is None:
         period_cost = None  # fail-closed: 不明混在
     else:
         period_cost = float(est_cost)
@@ -193,13 +198,17 @@ def run_excavate(
         start=start,
         end=end,
         session_count=len(sessions),
-        output_tokens=sum(int(s.output_tokens or 0) for s in sessions),
+        output_tokens=measured_metric_total(
+            sessions, "output_tokens", "output_tokens_measurable"
+        ),
         est_cost_usd=period_cost,
         loop_episodes=total_loop_eps,
         loop_wasted_tokens=total_loop_tok,
         loop_cost_usd=total_loop_cost,
         retry_chain_count=len(chains),
-        tool_errors=total_tool_err,
+        tool_errors=measured_metric_total(
+            sessions, "tool_errors", "tool_metrics_measurable"
+        ),
         worst_days=worst_days,
         worst_excerpt=worst_excerpt,
         adapters_used=adapter_names,
@@ -213,7 +222,8 @@ def format_excavate_report(report: ExcavateReport) -> str:
         f"# 発掘監査 {report.period_label}",
         "",
         f"ソース: {', '.join(report.adapters_used) or '（なし）'}",
-        f"セッション: {report.session_count} / 出力トークン: {report.output_tokens:,}",
+        f"セッション: {report.session_count} / 出力トークン: "
+        f"{'不明' if report.output_tokens is None else f'{report.output_tokens:,}'}",
     ]
     if report.est_cost_usd is None:
         lines.append("推定コスト: 不明（モデル単価不明混在）")
@@ -238,7 +248,9 @@ def format_excavate_report(report: ExcavateReport) -> str:
             lm += f"（¥{int(round(report.loop_cost_usd * report.usd_jpy))}）"
         lines.append(f"空転税: {lm}")
     lines.append(f"リトライ連鎖: {report.retry_chain_count}")
-    lines.append(f"ツールエラー: {report.tool_errors}")
+    lines.append(
+        f"ツールエラー: {'不明' if report.tool_errors is None else report.tool_errors}"
+    )
 
     lines.append("")
     lines.append("## 最悪ループ日 Top5")

@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "include": [
+    "src/**",
+    "tests/**",
+    "browser-extension/**",
+    "scripts/**",
+    "packaging/**",
+    "assets/readme/**",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "docs/USAGE.md",
+    "pyproject.toml",
+    "config.example.toml"
+  ],
+  "exclude": [
+    ".git/**",
+    ".venv/**",
+    "venv/**",
+    "build/**",
+    "dist/**",
+    "*.egg-info/**",
+    "__pycache__/**",
+    "*.pyc",
+    "userlogs/**",
+    ".grok/**",
+    ".kaizenlog/**",
+    ".env",
+    ".env.*",
+    "secrets/**",
+    "credentials/**",
+    "*.secret",
+    "*.key",
+    "*.pem"
+  ],
+  "required": [
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "docs/USAGE.md",
+    "pyproject.toml",
+    "packaging/source-manifest.json",
+    "packaging/portable_cli.py",
+    "packaging/portable_gui.py",
+    "packaging/kaizenlog-cli.spec",
+    "packaging/kaizenlog-gui.spec",
+    "scripts/build-source-manifest.ps1",
+    "scripts/build-portable.ps1",
+    "scripts/verify-portable.ps1"
+  ]
+}

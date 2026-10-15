@@ -1,3 +1,4 @@
+from kaizenlog.config import Config
 from datetime import timedelta
 
 import pytest
@@ -13,7 +14,7 @@ from tests.test_advise_integration import DAY, VALID_GENERATED, _config
 def test_newest_explicit_state_is_stable_across_three_advise_runs(monkeypatch, tmp_path, newest, older, want, initial):
     cfg = _config(tmp_path)
     cfg.aiwork.enabled = False
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     prior = DAY - timedelta(days=1)
     action_id = "KZN-20260720-001"
     store.write_section(DAY, ACTIVITY_MARKER, "## Activity Log\n**合計**: 10m")

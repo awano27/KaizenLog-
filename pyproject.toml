@@ -22,11 +22,14 @@ dev = ["pytest>=7.0"]
 [project.scripts]
 kaizenlog = "kaizenlog.cli:main"
 
+[project.gui-scripts]
+kaizenlog-home = "kaizenlog.home_gui:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-kaizenlog = ["prompts/*.md", "skills/*/SKILL.md", "eval_samples/*.json"]
+kaizenlog = ["prompts/*.md", "skills/*/SKILL.md", "eval_samples/*.json", "scripts/*.ps1", "resources/*.json"]
 
 [tool.pytest.ini_options]
 # "." はリポジトリルート。一部のテストが `from tests.xxx import` で共有 fixture を

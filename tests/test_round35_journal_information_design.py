@@ -766,7 +766,7 @@ def test_c2_cmd_generate_uses_only_calendar_previous_stats_and_hashes_written_se
     } in load_calls
     assert {"days": 1, "end_day": day} in load_calls  # digest 用 stats 再読込
 
-    stored = DailyNoteStore(cfg.daily_notes_path).read(day) or ""
+    stored = DailyNoteStore(cfg).read(day) or ""
     section = extract_section(stored, ACTIVITY_MARKER) or ""
     assert "| 合計アクティブ | 1h40m | 2h05m | +25m |" in section
     assert captured["activity_md"] == section

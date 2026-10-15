@@ -35,7 +35,7 @@
 ## 🧭 これは何をするツールか
 
 **「今日、何に時間を使ったか」を記録し、日報や翌日の振り返りに使うためのツールです。**
-ActivityWatch が記録したアプリ名・ウィンドウタイトル・時間を読み取り、カテゴリ別の作業時間とタイムラインを Markdown ファイルに保存します。操作はターミナルから行います。
+ActivityWatch が記録したアプリ名・ウィンドウタイトル・時間を読み取り、カテゴリ別の作業時間とタイムラインを Markdown ファイルに保存します。操作はターミナルから行え、毎日の確認にはローカルの `home` 画面も使えます。
 保存した日誌は Obsidian で読めます。保存先は通常のフォルダでもよく、Obsidian の起動は生成処理の必須条件ではありません。
 
 | できること | 手に入るもの | 使うコマンド・条件 |
@@ -47,6 +47,37 @@ ActivityWatch が記録したアプリ名・ウィンドウタイトル・時間
 | **AIへの依頼を見直す** | 繰り返し依頼やリトライに費やした時間の集計 | `prompts --roi` など。対応する AI セッションログが必要 |
 
 まずは **作業日誌だけ**を作れます。AI による改善提案と、AI 利用ログの分析は、それぞれ必要な入力を用意したときに追加します。
+
+### 初めて使う人が選ぶ機能
+
+KaizenLog の中心は、ActivityWatch の観測を本人が確認できる日誌へまとめることです。最初から AI や自動実行を有効にする必要はありません。
+
+| 目的 | 使うもの | 保存・実行の境界 |
+| --- | --- | --- |
+| 最初の日誌を確認する | 初回セットアップのプレビュー、日誌専用生成、生成済みノートを開く操作 | プレビュー・閲覧は保存せず、「日誌を作る」を選んだときだけ管理区間を更新 |
+| 毎日の入口を使う | ローカルの `home` 画面 | 表示・更新・本人入力・日報作成を別操作に分け、候補を見るだけでは採用・完了にしない |
+| LLMなしで始める | 日誌生成と `report --no-llm --write` | 日誌・日報の決定論処理は LLM を探索・呼び出ししない。改善提案は別途設定する |
+| 自分の判断を残す | 成果1行、次に試す1件、表示用の分類・プロジェクト訂正 | 自動計測の原本と分離し、本人入力・未反映・競合を表示する |
+| 依頼文を編集する | `prompts draft <PRM-ID>` | 未検証の草案をプレビューし、`--write --project PATH` を明示したときだけ保存する |
+
+初回の日誌を作るときは、保存先と更新予定を確認してから明示的な生成操作を選びます。次の入口は、この checkout の CLI で利用できます。`home` の起動だけでは ActivityWatch の取得や日誌生成を始めません。
+
+```powershell
+# 毎日の画面（GUIの表示・操作はこのコマンドを選んだときだけ）
+kaizenlog home --date YYYY-MM-DD --config PATH
+
+# 日誌だけを対象日に作る（追いつき・助言・LLM呼出しなし）
+kaizenlog generate --date YYYY-MM-DD --skip-catch-up
+
+# 設定後に今日の日誌を作る場合も明示オプションが必要
+kaizenlog setup --vault PATH --yes --skip-aw --skip-task --skip-skills --generate-today
+
+# 依頼文は既定でプレビュー。保存時はプロジェクトを明示
+kaizenlog prompts draft PRM-20261015-001
+kaizenlog prompts draft PRM-20261015-001 --project PATH --write
+```
+
+このソース checkout では上記の追加入口を利用できます。wheel には `kaizenlog-home` と package 内の `scripts/register-task.ps1` が含まれます。portable はこのソースから作るローカル候補と build 資材を確認済みで、CLI の架空 ActivityWatch 入力による検証まで実施しています。実 GUI 操作と Python なし Windows 環境での確認は未実施です。公開ソース／GitHub Releases の提供状況は、それぞれのリンクで確認してください。
 
 <p align="center">
   <img src="./assets/readme/slide-overview.png" width="100%" alt="KaizenLogとは — PC作業ログ / AI利用ログ / 日次メモ を集約し、日報Markdown・改善ポイント・次のアクションを出す">
@@ -92,8 +123,8 @@ AI セッションログや Git の成果を取得できない場合、日報に
 
 ## 📦 ダウンロードしたものだけで動く？
 
-**ソース ZIP からインストールして使えます。日誌生成には、別途 Python・ActivityWatch・保存先の設定が必要です。**
-Python の依存ライブラリは `pip install .` で取得します。ActivityWatch、Obsidian、LLM 本体はこのリポジトリに同梱していません。
+**ソース ZIP または Git clone からインストールして使えます。日誌生成には、別途 Python・Python 依存ライブラリ・ActivityWatch・保存先の設定が必要です。**
+ソース配布物には Python 実行環境を含めていません。`pip install .`（または `pipx install .`）で依存ライブラリを取得し、ActivityWatch は別途インストールして起動してください。Obsidian、LLM 本体、ActivityWatch はこのリポジトリに同梱していません。
 
 | 使いたい機能 | 別途必要なもの | 補足 |
 | --- | --- | --- |
@@ -105,16 +136,28 @@ Python の依存ライブラリは `pip install .` で取得します。Activity
 | AI による改善提案 | 対応する LLM バックエンド、必要に応じてログイン・API キー・モデル | Claude Code、GitHub Copilot CLI、OpenAI 互換 API に対応 |
 | AI 利用ログの分析 | 対応ツールのセッションログ、または同梱の Chrome 拡張で書き出した JSONL | ブラウザ用は `browser-extension/` を手動で読み込みます |
 | 毎日の自動実行 | Windows タスクスケジューラへの別途登録 | 手動コマンドでの利用には不要 |
+| Windows portable 配布物 | このソースから作るローカル候補（Python/Tcl/Tk を同梱する設計） | ActivityWatch、Obsidian、LLM は別途。CLI は検証済み、実 GUI 操作と Python なし Windows は未確認。公開提供状況は Releases の案内を確認 |
 
-**配布状況（2026-10-15 確認）** — 公開 `main` の `dafbbd1`（`1.5.0rc1`）を検証しました。[GitHub Releases](https://github.com/awano27/KaizenLog-/releases) は未作成です。現在の導入経路はソース ZIP または Git clone です。
+**配布状況（2026-10-15 の確認範囲）** — 過去の公開 `main` の `dafbbd1`（`1.5.0rc1`）を検証しました。今回のソース checkout では、wheel と portable CLI に架空 ActivityWatch データを与えた日誌・日報生成を確認しています。[GitHub Releases](https://github.com/awano27/KaizenLog-/releases) の提供状況はリンクで確認してください。導入手順はソース ZIP または Git clone を参照してください。
 
-- 公開 ZIP から空の Python 3.11 仮想環境へインストールし、CLI 起動、架空データでの日誌生成、LLM なしの日報・月次集計を確認しました。
-- 基本の CLI、プロンプト、Claude Code 用スキルは Python パッケージに入ります。`browser-extension/` は Python パッケージに入らないため、ソース ZIP のフォルダを使ってください。
-- 公開版ではタスク登録用の `scripts/register-task.ps1` が Python パッケージに入っていません。インストール後の `setup` による自動登録は使えないため、必要な場合はソース ZIP 内のスクリプトを手動で使います（[手順](docs/USAGE.md#step-7-自動実行の登録)）。
-- この作業ツリーの追加機能は公開 ZIP と異なります。[未公開の追加機能](#開発中の追加機能公開zipには未反映)を参照してください。
+- 過去の公開 ZIP から空の Python 3.11 仮想環境へインストールし、CLI 起動、架空データでの日誌生成、LLM なしの日報・月次集計を確認しました。
+- 今回のソースでは、基本の CLI、`home`、`generate --skip-catch-up`、`prompts draft`、Claude Code 用スキル、`scripts/register-task.ps1` が Python パッケージに入ります。`browser-extension/` は Python パッケージに入らないため、ソース ZIP のフォルダを使ってください。
+- portable ZIP は Python/Tcl/Tk を同梱する設計です。ActivityWatch は別途必要で、手元のローカル候補は CLI で検証済みです。実 GUI 操作と Python なし Windows の確認は未実施です。
 
-この確認は架空の入力を使った CLI 検証です。実際の ActivityWatch、Obsidian の画面、LLM 接続、Chrome 拡張、タスク登録の動作は今回の確認範囲に含みません。
-タスク登録スクリプトの既定の日次処理は `run`（LLM を使用）です。LLM なしで自動実行する場合は、`generate` を呼ぶタスクを別途設定してください。
+### portable ZIP が手元にある場合
+
+portable ZIP が手元にある場合、ZIP 全体を同じフォルダ構成のまま展開して使います。
+
+```powershell
+.\gui\kaizenlog-home.exe                         # 固定サンプル／初回設定
+.\cli\kaizenlog.exe --help                      # CLI の確認
+.\cli\kaizenlog.exe --config PATH generate --date YYYY-MM-DD --skip-catch-up
+```
+
+`gui`、`cli`、`_internal`、`data` はまとめて置き、exe だけ移動・削除しないでください。ActivityWatch は ZIP に含まれず、別途インストールして起動します。公開 Releases の入手先や Python なしの Windows 動作は、この案内だけでは確認済みとしません。
+
+このリポジトリの例では架空の入力を使っています。実際の ActivityWatch、Obsidian、LLM、Chrome 拡張、タスク登録はそれぞれの導入と設定が必要です。
+公開版の過去の検証ではタスク登録スクリプトの既定の日次処理は `run`（LLM を使用）でしたが、この checkout の新規登録は `generate --skip-catch-up`（日誌のみ）で、`-Mode advice` を指定した場合だけ `run` を使います。既存タスクは `Mode` を省略すると action を保持します。
 
 ---
 
@@ -151,6 +194,7 @@ Git を使う場合は `git clone https://github.com/awano27/KaizenLog-.git` で
 
 `setup` は保存先・タイムゾーンなどを設定するウィザードです。この例ではタスク登録と Claude Code スキルの配置を省略します。
 設定の既定場所は `%APPDATA%\kaizenlog\config.toml` です。
+`setup --yes` をボールト未指定で実行した場合は診断だけで、設定・日誌・ActivityWatch・タスク・スキルを作りません。保存先を `--vault PATH` で明示して `--yes` を付けると設定だけを保存します。初回日誌まで作るときは、`--generate-today` を追加した明示操作を使います。
 日誌だけで始める場合は、設定の LLM 欄を次の内容にします。
 
 ```toml
@@ -163,7 +207,7 @@ fallback_to_local = false
 
 ```powershell
 $day = Get-Date -Format 'yyyy-MM-dd'
-.\.venv\Scripts\kaizenlog.exe generate --date $day
+.\.venv\Scripts\kaizenlog.exe generate --date $day --skip-catch-up
 
 # 日報の下書きも追記したい場合（LLM 不要）
 .\.venv\Scripts\kaizenlog.exe report --date $day --no-llm --write
@@ -172,7 +216,7 @@ $day = Get-Date -Format 'yyyy-MM-dd'
 保存先の `01 Daily Notes` で当日の `.md` を開けば、最初の日誌を確認できます。
 以降の例の `kaizenlog` は、この仮想環境では `.\.venv\Scripts\kaizenlog.exe` に読み替えてください。
 
-日付なしの `generate` や `run` は追いつき処理を含むことがあるため、**初回は日付付き `generate` を推奨**します。
+日付なしの `generate` や `run` は追いつき処理を含むことがあるため、**初回は日付付き `generate --skip-catch-up` を推奨**します。日誌専用モードは、対象日だけを明示し、過去日の追いつき・助言・LLM呼出しを行いません。
 日付を指定しても、翌日のアクション欄を転記・更新する場合があります。`generate` は指定日のファイルだけに書くコマンドではありません。
 
 ---
@@ -189,6 +233,7 @@ AI を使わない日でも、日誌と工数の下書きは作れます。
 </p>
 
 > ③ の「要約」はコードによる決定論の集計です。文章での改善提案だけが任意の LLM を使います。
+振り返りを翌日の改善提案へ反映するときだけ、設定済みの LLM バックエンドを使います。
 
 ```powershell
 # 朝（任意）
@@ -218,20 +263,21 @@ kaizenlog done KZN-20260801-001
 
 `kaizenlog run` は `generate` と `advise` を順に実行します。
 `backend = "none"` の状態で `advise` を呼ぶと、LLM 生成を行わずエラーとして終了します。日誌だけなら `generate` を使ってください。
-日々の LLM 提案は1〜3件です。`advise` は本人の振り返りと観測された記録を材料に、翌日試す候補を作ります。
+日々の LLM 提案は現在の契約どおり1〜3件です。`advise` は本人の振り返りと観測された記録を材料に、翌日試す候補を作ります。
 `kaizenlog today` が出すのは実行できる候補だけで、判定済みの指標は `効果モニタリング N件（今日の候補ではありません）` と件数だけ表示されます。観測値が取れない日は達成・未達に丸めず「未判定」と表示します。
 
 ### 運用ログと復旧
 
 `kaizenlog status` で実行履歴、`kaizenlog doctor` で接続先や保存先の状態を確認できます。ActivityWatch に接続できない場合は起動状態を、ウィンドウ記録がない場合は `aw-watcher-window` を確認してください。
+`kaizenlog status` はこの端末のローカル運用 ledger を優先して読みます。ボールト内の `runs.jsonl` は既存環境との互換エクスポートです。Scheduled Tasks を自動修復することはありません。
 入力 watcher が無い場合は入力指標を取得できません。LLM の認証や入力 watcher の再起動は、それぞれのツールで行います。
 
-### 開発中の追加機能（公開ZIPには未反映）
+### このソースに含まれる追加機能と確認境界
 
 <details>
-<summary><b>この作業ツリーにある追加実装を見る</b></summary>
+<summary><b>このソースに含まれる追加実装を見る</b></summary>
 
-以下はローカルの追加実装です。2026-10-15 に確認した公開 `main`（`dafbbd1`）の ZIP には含まれません。
+以下は現在のソースに含まれる追加実装です。過去の公開 `main`（`dafbbd1`）の ZIP での検証結果とは分けて扱います。公開ソースと GitHub Releases の提供状況はリンクで確認してください。
 
 - 引数なしの `kaizenlog` で `today` を表示。通常のヘルプは日常の5コマンドに絞り、`kaizenlog --help --all` で全コマンドを表示。
 - `kaizenlog now` で日中の状況を読む、`kaizenlog recall "キーワード"` で過去の記録を検索。
@@ -239,8 +285,13 @@ kaizenlog done KZN-20260801-001
 - Grok / Cursor の対応形式のログ読取、ルール管理、依頼文の下書き出力、preflight、guard watch。
 - タスク登録スクリプトを Python パッケージに同梱。
 - `status` が端末内の運用 ledger を優先し、`doctor` が Claude Code の認証状態と入力 watcher の鮮度を診断。
+- 初回の日誌を確認するローカル `home` 画面、サンプル表示、保存先と更新予定のプレビュー。
+- 日誌専用生成（LLM・過去日の追いつきなし）、既存の日付形式を選べる日次ノート resolver。
+- 成果1行、次に試す1件、表示用の分類・プロジェクト訂正を自動計測の原本から分離して保存。
+- `prompts draft <PRM-ID>` による `UNVERIFIED_DRAFT / 効果未検証・編集用` のプレビューと、明示したプロジェクトへの保存。
+- Windows portable ZIP の build 資材（Python/Tcl/Tk を同梱する設計）。公開ダウンロードの有無は Releases の案内を確認してください。
 
-操作例はローカルの `docs/USAGE.md` に記載しています。追加機能とその操作例は、今後の公開予定です。
+操作例はこのソースの `docs/USAGE.md` に記載しています。公開ソースと配布物の提供状況は、公開物の検品結果と Releases の案内で確認してください。
 
 </details>
 

@@ -6,11 +6,20 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
 import re
+import threading
 import time
+import uuid
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from .file_lock import locked_read_modify_write
+
+if TYPE_CHECKING:
+    from .config import Config
 
 _FOOTNOTE_DEF_RE = re.compile(r"^\[\^(\d+)\]:\s*(.*)$")
 _FOOTNOTE_REF_RE = re.compile(r"\[\^(\d+)\]")
@@ -18,6 +27,30 @@ _FOOTNOTE_REF_RE = re.compile(r"\[\^(\d+)\]")
 # Obsidian 等が .md を掴んでいるときの WinError 5 / PermissionError 対策
 _REPLACE_RETRIES = 8
 _REPLACE_BASE_SLEEP_SEC = 0.05
+_EXPECTED_BYTES_UNSET = object()
+_WINDOWS_MAX_PATH = 260
+
+
+def _filesystem_path(path: Path) -> Path | str:
+    """Use extended-length syntax only when Windows needs it for this path."""
+    if os.name != "nt":
+        return path
+    raw = os.fspath(path)
+    if raw.startswith("\\\\?\\"):
+        return path
+    absolute = os.path.abspath(raw)
+    if len(absolute) < _WINDOWS_MAX_PATH:
+        return path
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute[2:]
+    return "\\\\?\\" + absolute
+
+
+def _unlink_missing_ok(path: Path) -> None:
+    try:
+        os.unlink(_filesystem_path(path))
+    except FileNotFoundError:
+        pass
 
 
 def _os_replace_with_retry(tmp: Path, path: Path) -> None:
@@ -25,7 +58,7 @@ def _os_replace_with_retry(tmp: Path, path: Path) -> None:
     last: BaseException | None = None
     for attempt in range(_REPLACE_RETRIES):
         try:
-            os.replace(tmp, path)
+            os.replace(_filesystem_path(tmp), _filesystem_path(path))
             return
         except PermissionError as e:
             last = e
@@ -38,19 +71,22 @@ def _os_replace_with_retry(tmp: Path, path: Path) -> None:
                 raise
         time.sleep(_REPLACE_BASE_SLEEP_SEC * (attempt + 1))
     assert last is not None
-    # 失敗時は .tmp を残して原因調査しやすくする（成功時は replace で消える）
     raise last
 
 
 def atomic_write_bytes(path: Path, content: bytes) -> None:
     """一時ファイルへbytesを書いて os.replace で置き換える。"""
     path = Path(path)
-    tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "wb") as f:
-        f.write(content)
-        f.flush()
-        os.fsync(f.fileno())
-    _os_replace_with_retry(tmp, path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _unique_temp_path(path)
+    try:
+        with open(_filesystem_path(tmp), "wb") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        _os_replace_with_retry(tmp, path)
+    finally:
+        _unlink_missing_ok(tmp)
 
 
 def atomic_write_text(path: Path, content: str, *, newline: str | None = None) -> None:
@@ -61,14 +97,27 @@ def atomic_write_text(path: Path, content: str, *, newline: str | None = None) -
     PermissionError / WinError 5 時は短い sleep のうえ再試行する。
     """
     path = Path(path)
-    tmp = path.with_name(path.name + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _unique_temp_path(path)
     # newline=\"\" は改行変換なし。None も変換なし（content 内の改行をそのまま）。
     nl = "" if newline is None else newline
-    with open(tmp, "w", encoding="utf-8", newline=nl) as f:
-        f.write(content)
-        f.flush()
-        os.fsync(f.fileno())
-    _os_replace_with_retry(tmp, path)
+    try:
+        with open(
+            _filesystem_path(tmp), "w", encoding="utf-8", newline=nl
+        ) as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        _os_replace_with_retry(tmp, path)
+    finally:
+        _unlink_missing_ok(tmp)
+
+
+def _unique_temp_path(path: Path) -> Path:
+    """Create a collision-resistant temporary sibling for an atomic write."""
+    return path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4()}.tmp"
+    )
 
 
 def read_text_preserve_newlines(path: Path) -> str:
@@ -108,6 +157,7 @@ WEEKLY_CONTEXT_MARKER = "kaizenlog:weekly-context"  # 週次スコアカード�
 AGENT_CONTEXT_MARKER = "kaizenlog:agent-context"  # handoff が CLAUDE.md/AGENTS.md へ注入
 COACH_MARKER = "kaizenlog:coach"  # coach --apply が追記する調教区間
 DIGEST_MARKER = "kaizenlog:digest"  # 冒頭30秒サマリ（決定論・generate/advise が所有）
+HUMAN_INPUT_MARKER = "kaizenlog:human-input"  # 本人入力・手動訂正の投影
 RESUME_MARKER = "kaizenlog:resume"  # きのうの続きから（決定論・generate が翌日ノートへ）
 DECISION_MARKER = "kaizenlog:decision"  # 朝決算カード（決定論・morning/generate）
 EFFORT_MARKER = "kaizenlog:effort"  # 工数のつけ先（決定論・generate が所有）
@@ -120,6 +170,7 @@ FOOTNOTES_MARKER = "kaizenlog:footnotes"  # 免責注釈の集約
 # 日誌区間の正準順序（未知マーカー・手書き・frontmatter は触らない）
 SECTION_ORDER: tuple[str, ...] = (
     DIGEST_MARKER,
+    HUMAN_INPUT_MARKER,
     RESUME_MARKER,
     DECISION_MARKER,
     GOAL_MARKER,
@@ -132,6 +183,8 @@ SECTION_ORDER: tuple[str, ...] = (
     ACTIVITY_MARKER,
     REFLECT_MARKER,
     COACH_MARKER,
+    'kaizenlog:anniversaries',
+    'kaizenlog:weekly-story',
     FOOTNOTES_MARKER,
 )
 
@@ -485,31 +538,83 @@ def extract_section(content: str, marker: str) -> str | None:
 
 
 class DailyNoteStore:
-    def __init__(self, daily_notes_dir: Path):
-        self.dir = Path(daily_notes_dir)
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.dir = cfg.daily_notes_path
 
     def path_for(self, day: date) -> Path:
-        return self.dir / f"{day.isoformat()}.md"
+        from .note_paths import DailyNoteResolutionError, resolve_daily_note
+
+        resolution = resolve_daily_note(self.cfg, day)
+        if resolution.status in {"conflict", "unsupported"}:
+            raise DailyNoteResolutionError(resolution)
+        assert resolution.path is not None
+        return resolution.path
 
     def read(self, day: date) -> str | None:
-        p = self.path_for(day)
+        from .note_paths import DailyNoteResolutionError, resolve_daily_note
+
+        resolution = resolve_daily_note(self.cfg, day)
+        if resolution.status in {"conflict", "unsupported"}:
+            raise DailyNoteResolutionError(resolution)
+        p = resolution.path
+        assert p is not None
         if not p.is_file():
             return None
         return read_text_preserve_newlines(p)
+
+    @contextmanager
+    def locked_note(
+        self,
+        day: date,
+        *,
+        expected_bytes: bytes | None | object = _EXPECTED_BYTES_UNSET,
+        expected_resolution: object | None = None,
+    ):
+        """Resolve, lock, re-resolve, and read one daily note as one transaction."""
+        from .note_paths import DailyNoteResolutionError, resolve_daily_note
+
+        initial = resolve_daily_note(self.cfg, day)
+        if expected_resolution is not None and initial != expected_resolution:
+            raise RuntimeError(
+                f"日次ノートの解決結果が保存待ちの間に変更されました: {initial.path}"
+            )
+        if initial.status in {"conflict", "unsupported"}:
+            raise DailyNoteResolutionError(initial)
+        path = initial.path
+        assert path is not None
+        with locked_read_modify_write(path):
+            current = resolve_daily_note(self.cfg, day)
+            if current != initial:
+                if current.status in {"conflict", "unsupported"}:
+                    raise DailyNoteResolutionError(current)
+                raise RuntimeError(
+                    f"日次ノートの解決結果が保存待ちの間に変更されました: {path}"
+                )
+            actual = path.read_bytes() if path.is_file() else None
+            if expected_bytes is not _EXPECTED_BYTES_UNSET and actual != expected_bytes:
+                raise ValueError(f"日次ノートが変更されました。再実行してください: {path}")
+            content = read_text_preserve_newlines(path) if path.is_file() else None
+            yield path, content
 
     def write_section(
         self,
         day: date,
         marker: str,
-        section_md: str,
+        body: str,
+        *,
         position: str = "bottom",
+        expected_bytes: bytes | None | object = _EXPECTED_BYTES_UNSET,
     ) -> Path:
-        self.dir.mkdir(parents=True, exist_ok=True)
-        p = self.path_for(day)
-        content = self.read(day)
-        if content is None:
-            content = default_frontmatter(day) + "\n"
-        atomic_write_text(
-            p, upsert_section(content, marker, section_md, position=position)
-        )
+        with self.locked_note(day, expected_bytes=expected_bytes) as (p, content):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if content is None:
+                content = default_frontmatter(day) + "\n"
+            if expected_bytes is not _EXPECTED_BYTES_UNSET:
+                actual = p.read_bytes() if p.is_file() else None
+                if actual != expected_bytes:
+                    raise ValueError(f"日次ノートが変更されました。再実行してください: {p}")
+            atomic_write_text(
+                p, upsert_section(content, marker, body, position=position)
+            )
         return p

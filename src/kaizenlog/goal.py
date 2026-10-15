@@ -173,7 +173,7 @@ def upsert_goal_in_content(content: str, section_md: str) -> str:
 
 
 def write_goal(
-    daily_notes_dir: Path,
+    cfg,
     day: date,
     text: str,
     *,
@@ -204,19 +204,17 @@ def write_goal(
     section = format_goal_section(
         parsed.text, parsed.category, achieved=parsed.achieved
     )
-    store = DailyNoteStore(daily_notes_dir)
-    store.dir.mkdir(parents=True, exist_ok=True)
-    path = store.path_for(day)
-    content = store.read(day)
-    if content is None:
-        content = default_frontmatter(day) + "\n"
-    updated = upsert_goal_in_content(content, section)
-    atomic_write_text(path, updated)
+    store = DailyNoteStore(cfg)
+    with store.locked_note(day) as (path, content):
+        if content is None:
+            content = default_frontmatter(day) + "\n"
+        updated = upsert_goal_in_content(content, section)
+        atomic_write_text(path, updated)
     return path, parsed
 
 
 def write_goal_achieved(
-    daily_notes_dir: Path,
+    cfg,
     day: date,
     achieved: int,
     *,
@@ -226,22 +224,20 @@ def write_goal_achieved(
     n = int(achieved)
     if not (0 <= n <= 100):
         raise ValueError("達成度は 0〜100 の整数で指定してください")
-    store = DailyNoteStore(daily_notes_dir)
-    content = store.read(day)
-    existing = read_goal(content, known_categories)
-    if existing is None or not existing.text.strip():
-        raise ValueError(
-            '目標が未設定です。先に `kaizenlog goal "..."` で登録してください'
+    store = DailyNoteStore(cfg)
+    with store.locked_note(day) as (path, content):
+        existing = read_goal(content, known_categories)
+        if existing is None or not existing.text.strip():
+            raise ValueError(
+                '目標が未設定です。先に `kaizenlog goal "..."` で登録してください'
+            )
+        section = format_goal_section(
+            existing.text, existing.category, achieved=n
         )
-    section = format_goal_section(
-        existing.text, existing.category, achieved=n
-    )
-    store.dir.mkdir(parents=True, exist_ok=True)
-    path = store.path_for(day)
-    if content is None:
-        content = default_frontmatter(day) + "\n"
-    updated = upsert_goal_in_content(content, section)
-    atomic_write_text(path, updated)
+        if content is None:
+            content = default_frontmatter(day) + "\n"
+        updated = upsert_goal_in_content(content, section)
+        atomic_write_text(path, updated)
     return path, DayGoal(
         text=existing.text,
         category=existing.category,
@@ -250,21 +246,19 @@ def write_goal_achieved(
     )
 
 
-def ensure_goal_placeholder(daily_notes_dir: Path, day: date) -> Path | None:
+def ensure_goal_placeholder(cfg, day: date) -> Path | None:
     """GOAL 区間が無ければプレースホルダを書く。既存があれば触らない。
 
     戻り値: 書いたパス。既存あり / 失敗時は None。
     """
-    store = DailyNoteStore(daily_notes_dir)
-    store.dir.mkdir(parents=True, exist_ok=True)
-    path = store.path_for(day)
-    content = store.read(day)
-    if content is None:
-        content = default_frontmatter(day) + "\n"
-    if extract_section(content, GOAL_MARKER) is not None:
-        return None
-    updated = upsert_goal_in_content(content, GOAL_PLACEHOLDER)
-    atomic_write_text(path, updated)
+    store = DailyNoteStore(cfg)
+    with store.locked_note(day) as (path, content):
+        if content is None:
+            content = default_frontmatter(day) + "\n"
+        if extract_section(content, GOAL_MARKER) is not None:
+            return None
+        updated = upsert_goal_in_content(content, GOAL_PLACEHOLDER)
+        atomic_write_text(path, updated)
     return path
 
 

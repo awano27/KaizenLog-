@@ -238,6 +238,7 @@ def test_available_adapters_and_doctor(tmp_path):
     cfg.aiwork.claude_projects_dir = str(tmp_path / "no-claude")
     cfg.aiwork.codex_sessions_dir = str(tmp_path / "no-codex")
     cfg.aiwork.browser_export_dir = str(tmp_path / "no-browser-export")
+    cfg.aiwork.grok_sessions_dir = str(tmp_path / 'no-grok')
     assert available_adapters(cfg) == []
 
     codex = tmp_path / "codex"

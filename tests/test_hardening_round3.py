@@ -188,7 +188,9 @@ def test_cmd_advise_saves_degraded_section_and_reraises(tmp_path, monkeypatch):
     section = extract_section(note, ADVICE_MARKER)
     assert section is not None
     assert "出力契約を満たさず" in section
-    assert "確定事実" in section
+    # Reader fallback never exposes machine-oriented evidence (delight #1).
+    assert "合計100分" not in section
+    assert "採用済み" in section
     assert "- [ ]" not in section
     assert "KZN-" not in section
 
@@ -198,7 +200,7 @@ def test_degraded_section_omits_facts_when_no_evidence():
 
     text = _degraded_advice_section(None)
     assert "出力契約を満たさず" in text
-    assert "確定事実サマリー" in text
+    assert "採用済み" in text
     # 事実本文は付かない
     assert text.count("\n\n") <= 2 or "###" not in text
 

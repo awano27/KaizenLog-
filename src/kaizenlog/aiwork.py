@@ -114,12 +114,32 @@ def estimate_sessions_cost(
     uncosted = 0
     per_source: dict[str, dict] = {}
     for s in sessions:
+        src = s.source.strip() if isinstance(s.source, str) and s.source.strip() else "unknown"
+        # Adapters which cannot observe output usage must remain visible as
+        # unknown instead of turning their sentinel 0 into a $0 estimate.
+        if not bool(getattr(s, "output_tokens_measurable", True)):
+            bucket = per_source.setdefault(
+                src,
+                {
+                    "est_cost_usd": 0.0,
+                    "uncosted_tokens": 0,
+                    "output_tokens": 0,
+                    "output_tokens_measurable": False,
+                },
+            )
+            bucket["output_tokens_measurable"] = False
+            continue
         # ブラウザ等: output_tokens 未設定 → コスト集計から除外（文字数をトークンと偽らない）
         if not s.tools_measurable and not s.output_tokens:
             continue
-        src = s.source.strip() if isinstance(s.source, str) and s.source.strip() else "unknown"
         bucket = per_source.setdefault(
-            src, {"est_cost_usd": 0.0, "uncosted_tokens": 0, "output_tokens": 0}
+            src,
+            {
+                "est_cost_usd": 0.0,
+                "uncosted_tokens": 0,
+                "output_tokens": 0,
+                "output_tokens_measurable": True,
+            },
         )
         bucket["output_tokens"] += int(s.output_tokens or 0)
         price = _resolve_session_price_costing(
@@ -182,6 +202,16 @@ class AISession:
     _files_order: list[str] = field(default_factory=list, repr=False)
     _cmd_counts: Counter = field(default_factory=Counter, repr=False)
     _last_assistant_raw: str = field(default="", repr=False)
+    # Capability fields are appended to retain the positional constructor order
+    # of existing AISession callers.
+    # 日次合算に含めるツール品質指標を観測したか。旧ブラウザは従来どおり
+    # CLI 合算から除外するだけなので true、新規 adapter は false にする。
+    tool_metrics_measurable: bool = True
+    # False: adapter が output token usage を取得できない。output_tokens=0 は
+    # 後方互換用の sentinel であり、ゼロ使用量の観測値ではない。
+    output_tokens_measurable: bool = True
+    # False: assistant_chars=0 が「応答なし」ではなく「未観測」を意味する。
+    assistant_chars_measurable: bool = True
 
     @property
     def minutes(self) -> float:
@@ -199,6 +229,29 @@ class AISession:
             + int(self.interruptions) * 5
             + int(retry_chain_touch) * 5
         )
+
+
+def metric_measurement_state(
+    sessions: Sequence[AISession], capability: str
+) -> str:
+    """Return measured, partial, or unknown for one session capability.
+
+    Existing adapters predate explicit capability metadata, so a missing flag is
+    deliberately treated as measured to preserve their established semantics.
+    """
+    known = sum(bool(getattr(session, capability, True)) for session in sessions)
+    if known == len(sessions):
+        return "measured"
+    return "partial" if known else "unknown"
+
+
+def measured_metric_total(
+    sessions: Sequence[AISession], attribute: str, capability: str
+) -> int | None:
+    """Sum an observed metric only when every included session observed it."""
+    if metric_measurement_state(sessions, capability) != "measured":
+        return None
+    return sum(int(getattr(session, attribute, 0) or 0) for session in sessions)
 
 
 def _parse_ts(record: dict) -> datetime | None:
@@ -663,6 +716,8 @@ class UserPrompt:
     project: str
     text: str
     source: str = "claude-code"
+    # 取得できるアダプタだけ設定する。無い旧ログは project 単位の互換挙動。
+    session_id: str | None = None
 
 
 @dataclass
@@ -682,7 +737,7 @@ def detect_retry_chains(
     window_minutes: int = _RETRY_WINDOW_MINUTES,
     similarity: float = _RETRY_SIMILARITY,
 ) -> list[RetryChain]:
-    """同一 project 内のほぼ同文・短時間再送をチェーンとして検出する。
+    """同一会話（なければ source/project）内の短時間再送を検出する。
 
     各プロンプトは進行中チェーンの末尾とだけ比較する（全ペア比較はしない）。
     window_minutes ちょうどは連結、超えたら分断。
@@ -690,14 +745,22 @@ def detect_retry_chains(
     # 遅延 import: promptmine → aiwork.UserPrompt の循環を避ける
     from .promptmine import normalize
 
-    # プロジェクトごとの進行中チェーン（末尾と比較）
-    open_chains: dict[str, list[UserPrompt]] = {}
+    # 会話 ID があるアダプタは会話をまたいで連鎖させない。旧ログは
+    # source/project の組で従来どおり扱い、異なるプロバイダは混在させない。
+    def _chain_key(prompt: UserPrompt) -> tuple[str, str]:
+        source = str(prompt.source or "claude-code")
+        if prompt.session_id:
+            return source, f"session:{prompt.session_id}"
+        return source, f"project:{prompt.project}"
+
+    open_chains: dict[tuple[str, str], list[UserPrompt]] = {}
     completed: list[RetryChain] = []
 
     for p in prompts:
-        current = open_chains.get(p.project)
+        key = _chain_key(p)
+        current = open_chains.get(key)
         if current is None:
-            open_chains[p.project] = [p]
+            open_chains[key] = [p]
             continue
         last = current[-1]
         delta_min = (p.timestamp - last.timestamp).total_seconds() / 60.0
@@ -705,7 +768,7 @@ def detect_retry_chains(
             # 時刻逆行は安全側で新規チェーン
             if len(current) >= 2:
                 completed.append(RetryChain(project=p.project, prompts=list(current)))
-            open_chains[p.project] = [p]
+            open_chains[key] = [p]
             continue
         ratio = SequenceMatcher(
             None, normalize(last.text), normalize(p.text)
@@ -715,11 +778,11 @@ def detect_retry_chains(
         else:
             if len(current) >= 2:
                 completed.append(RetryChain(project=p.project, prompts=list(current)))
-            open_chains[p.project] = [p]
+            open_chains[key] = [p]
 
-    for project, current in open_chains.items():
+    for _key, current in open_chains.items():
         if len(current) >= 2:
-            completed.append(RetryChain(project=project, prompts=list(current)))
+            completed.append(RetryChain(project=current[0].project, prompts=list(current)))
     return completed
 
 
@@ -841,6 +904,14 @@ def available_adapters(cfg) -> list[TelemetryAdapter]:
         from .aiwork_browser import BrowserAIAdapter
 
         adapters.append(BrowserAIAdapter(browser_dir))
+    grok_dir = str(getattr(cfg.aiwork, 'grok_sessions_dir', '~/.grok/sessions'))
+    if grok_dir and Path(grok_dir).expanduser().is_dir():
+        from .aiwork_grok import GrokAdapter
+        adapters.append(GrokAdapter(Path(grok_dir).expanduser()))
+    cursor_dir = str(getattr(cfg.aiwork, 'cursor_sessions_dir', ''))
+    if cursor_dir and Path(cursor_dir).expanduser().is_dir():
+        from .aiwork_cursor import CursorAdapter
+        adapters.append(CursorAdapter(Path(cursor_dir).expanduser()))
     return adapters
 
 
@@ -991,6 +1062,10 @@ class LoopTaxSummary:
 def _session_for_prompt(
     prompt: UserPrompt, sessions: Sequence[AISession]
 ) -> AISession | None:
+    if prompt.session_id:
+        sessions = [s for s in sessions if s.session_id == prompt.session_id and s.source == prompt.source]
+        if not sessions:
+            return None
     hits = [
         s
         for s in sessions
@@ -1399,8 +1474,10 @@ def session_digests_for_stats(
             cmds = [redactor(c) for c in cmds if c]
         reply = s.last_reply_digest
         retry_touch = _retry_touch_for_session(s, chains)
+        tool_metrics_measurable = bool(getattr(s, "tools_measurable", True))
+        chars_measurable = bool(getattr(s, "assistant_chars_measurable", True))
         tools_total = (
-            sum(s.tool_counts.values()) if s.tools_measurable else None
+            sum(s.tool_counts.values()) if tool_metrics_measurable else None
         )
         digests.append(
             {
@@ -1408,12 +1485,13 @@ def session_digests_for_stats(
                 "session_id": s.session_id,
                 "project": s.project,
                 "title": title,
-                "tool_errors": int(s.tool_errors),
-                "interruptions": int(s.interruptions),
+                "tool_errors": int(s.tool_errors) if tool_metrics_measurable else None,
+                "interruptions": int(s.interruptions) if tool_metrics_measurable else None,
+                "tool_metrics_measurable": tool_metrics_measurable,
                 "user_turns": int(s.user_turns),
-                "edits": int(s.edits),
-                "tests_run": bool(s.tests_run),
-                "ended_in_error": bool(s.ended_in_error),
+                "edits": int(s.edits) if tool_metrics_measurable else None,
+                "tests_run": bool(s.tests_run) if tool_metrics_measurable else None,
+                "ended_in_error": bool(s.ended_in_error) if tool_metrics_measurable else None,
                 "source": s.source or "claude-code",
                 "first_prompt_len": int(s.first_prompt_len),
                 "retry_touch": int(retry_touch),
@@ -1425,7 +1503,8 @@ def session_digests_for_stats(
                 "files_touched": files[:5],
                 "commands_run": cmds[:5],
                 "last_reply_digest": reply,
-                "assistant_chars": int(s.assistant_chars or 0),
+                "assistant_chars": int(s.assistant_chars or 0) if chars_measurable else None,
+                "assistant_chars_measurable": chars_measurable,
                 "start": s.start.isoformat() if s.start else None,
                 "end": s.end.isoformat() if s.end else None,
             }
@@ -1499,7 +1578,11 @@ def render_aiwork_markdown(
 
     total_turns = sum(s.user_turns for s in sessions)
     fragmented = sum(1 for s in sessions if s.is_fragmented)
-    # output_tokens: ブラウザは 0 のまま（assistant_chars は混ぜない）
+    # output_tokens=0 may be an adapter sentinel. Keep the observed subtotal for
+    # diagnostics, but never render it as the whole-day total when incomplete.
+    output_tokens_state = metric_measurement_state(
+        sessions, "output_tokens_measurable"
+    )
     output_tokens = sum(int(s.output_tokens or 0) for s in sessions)
     avg_turns = total_turns / len(sessions) if sessions else 0.0
     est_cost, uncosted, _ = estimate_sessions_cost(sessions, pricing)
@@ -1602,6 +1685,9 @@ def render_aiwork_markdown(
         f"（平均 {avg_turns:.1f}回/セッション、2往復以下: {fragmented}回）"
     )
     # ツール系は measurable セッションのみ合算（ブラウザは欠損）
+    tool_metrics_state = metric_measurement_state(
+        sessions, "tool_metrics_measurable"
+    )
     tool_sessions = [s for s in sessions if s.tools_measurable]
     tool_errors_m = sum(s.tool_errors for s in tool_sessions)
     interruptions_m = sum(s.interruptions for s in tool_sessions)
@@ -1626,15 +1712,24 @@ def render_aiwork_markdown(
         for source in measurable_sources
     }
     split_tool_metrics = len(measurable_sources) > 1 and all(source is not None for source in tool_sources)
-    errors_part = f"ツールエラー: {tool_errors_m}回"
-    interruptions_part = f"ユーザー中断・拒否: {interruptions_m}回"
-    if split_tool_metrics:
+    if tool_metrics_state == "measured":
+        errors_part = f"ツールエラー: {tool_errors_m}回"
+        interruptions_part = f"ユーザー中断・拒否: {interruptions_m}回"
+    elif tool_metrics_state == "partial":
+        errors_part = f"ツールエラー: 一部計測不能（測定済み {tool_errors_m}回）"
+        interruptions_part = (
+            f"ユーザー中断・拒否: 一部計測不能（測定済み {interruptions_m}回）"
+        )
+    else:
+        errors_part = "ツールエラー: 計測不能"
+        interruptions_part = "ユーザー中断・拒否: 計測不能"
+    if tool_metrics_state == "measured" and split_tool_metrics:
         error_detail = _source_detail(tool_errors_by_source)
         if any("codex" in source.lower() for source in measurable_sources):
             error_detail += "。codexは文字列判定・過大計上の可能性"
         errors_part += f"（{error_detail}）"
         interruptions_part += f"（{_source_detail(interruptions_by_source)}）"
-    elif any(source == "codex" for source in measurable_sources):
+    elif tool_metrics_state == "measured" and any(source == "codex" for source in measurable_sources):
         errors_part += "（codexは文字列判定・過大計上の可能性）"
 
     retry_part = f"リトライ連鎖: {retry_chain_count}回"
@@ -1657,17 +1752,18 @@ def render_aiwork_markdown(
     try:
         from .baseline import baseline, format_with_baseline
 
-        err_m, err_l = baseline(
-            prior, "ai.tool_errors", today_value=float(tool_errors_m)
-        )
-        errors_disp = format_with_baseline(
-            f"{tool_errors_m}回", err_m, err_l
-        )
-        # errors_part の先頭「ツールエラー: N回」を基準線付きに置換
-        if errors_part.startswith(f"ツールエラー: {tool_errors_m}回"):
-            errors_part = "ツールエラー: " + errors_disp + errors_part[
-                len(f"ツールエラー: {tool_errors_m}回") :
-            ]
+        if tool_metrics_state == "measured":
+            err_m, err_l = baseline(
+                prior, "ai.tool_errors", today_value=float(tool_errors_m)
+            )
+            errors_disp = format_with_baseline(
+                f"{tool_errors_m}回", err_m, err_l
+            )
+            # errors_part の先頭「ツールエラー: N回」を基準線付きに置換
+            if errors_part.startswith(f"ツールエラー: {tool_errors_m}回"):
+                errors_part = "ツールエラー: " + errors_disp + errors_part[
+                    len(f"ツールエラー: {tool_errors_m}回") :
+                ]
         ret_m, ret_l = baseline(
             prior, "ai.retry_chains", today_value=float(retry_chain_count)
         )
@@ -1675,17 +1771,27 @@ def render_aiwork_markdown(
             retry_part = format_with_baseline(
                 f"リトライ連鎖: {retry_chain_count}回", ret_m, ret_l
             )
-        tok_m, tok_l = baseline(
-            prior, "ai.output_tokens", today_value=float(output_tokens)
-        )
-        tok_disp = format_with_baseline(
-            f"{output_tokens:,}",
-            tok_m,
-            tok_l,
-            median_fmt=f"{int(tok_m):,}" if tok_m is not None else None,
-        )
+        if output_tokens_state == "measured":
+            tok_m, tok_l = baseline(
+                prior, "ai.output_tokens", today_value=float(output_tokens)
+            )
+            tok_disp = format_with_baseline(
+                f"{output_tokens:,}",
+                tok_m,
+                tok_l,
+                median_fmt=f"{int(tok_m):,}" if tok_m is not None else None,
+            )
+        elif output_tokens_state == "partial":
+            tok_disp = f"一部計測不能（測定済み {output_tokens:,}）"
+        else:
+            tok_disp = "計測不能"
     except Exception:
-        tok_disp = f"{output_tokens:,}"
+        if output_tokens_state == "measured":
+            tok_disp = f"{output_tokens:,}"
+        elif output_tokens_state == "partial":
+            tok_disp = f"一部計測不能（測定済み {output_tokens:,}）"
+        else:
+            tok_disp = "計測不能"
     lines.append(
         f"{errors_part} / {interruptions_part} / {retry_part}"
         f" / 出力トークン: {tok_disp}"
@@ -1708,7 +1814,13 @@ def render_aiwork_markdown(
     # 対象外トークンが計上分を上回る日は $ 額を出さない。
     # 総量の大半が単価不明だと「$0.04」がほぼ無意味で誤解を招くため。
     costed_tokens = max(0, int(output_tokens) - int(uncosted))
-    if int(uncosted) > costed_tokens:
+    if output_tokens_state != "measured":
+        lower_bound = f"測定済み分の下限 ${est_cost:.2f}" if est_cost > 0 else "測定済み分の金額なし"
+        lines.append(
+            "推定コスト: 計測不能（出力トークン未計測を含む。"
+            f"{lower_bound}）"
+        )
+    elif int(uncosted) > costed_tokens:
         lines.append(
             f"推定コスト(下限): 換算なし — 出力{output_tokens:,} tok のうち"
             f"単価未登録が{int(uncosted):,} tok。"
@@ -1751,7 +1863,8 @@ def render_aiwork_markdown(
     # total_wasted_tokens が None の日は最悪例行が出ないため、ここで抑止すると
     # 最悪チェーンの抜粋が日誌から完全に消える。
     if (
-        output_tokens > 0
+        output_tokens_state == "measured"
+        and output_tokens > 0
         and tax is not None
         and tax.episode_count > 0
         and tax.total_wasted_tokens is not None
@@ -1771,7 +1884,7 @@ def render_aiwork_markdown(
         tax_line = format_loop_tax_line(
             tax,
             usd_jpy=usd_jpy,
-            day_output_tokens=output_tokens,
+            day_output_tokens=(output_tokens if output_tokens_state == "measured" else None),
             redactor=redactor,
         )
         if tax_line:
@@ -1805,7 +1918,9 @@ def render_aiwork_markdown(
         if tools_total is None:
             # session_digests に無い場合は tool_counts 合計キーを探す
             tools_total = digest.get("tool_calls")
-        err_part = f"ツールエラー{errors}"
+        tools_known = digest.get('tool_metrics_measurable', True)
+        err_part = f"ツールエラー{errors}" if tools_known else 'ツールエラー未計測'
+        interruption_part = f'中断{interruptions}×5' if tools_known else '中断未計測'
         if isinstance(tools_total, (int, float)) and float(tools_total) > 0:
             rate = errors / float(tools_total) * 100
             err_part = (
@@ -1814,7 +1929,7 @@ def render_aiwork_markdown(
         lines.extend(
             [
                 f"⚠ 本日の摩擦ワースト: {project} ({source})「{title}」",
-                f"   — 摩擦{friction}（{err_part} ＋ 中断{interruptions}×5 ＋ リトライ連鎖関与{retry_touch}×5）",
+                f"   — 摩擦{friction}{'（測定済み部分）' if not tools_known else ''}（{err_part} ＋ {interruption_part} ＋ リトライ連鎖関与{retry_touch}×5）",
                 "   ※ 摩擦はスコア順位であり、AIの良し悪しの判定ではありません。",
             ]
         )
@@ -1941,9 +2056,10 @@ def render_aiwork_markdown(
             proj = s.project or "—"
             if redactor is not None:
                 proj = redactor(proj)
+            edits_label = f'編集{int(s.edits)}' if s.tool_metrics_measurable else '編集未計測'
             head = (
                 f"**{proj}（{start}-{end}・往復{int(s.user_turns)}"
-                f"・編集{int(s.edits)}）**"
+                f"・{edits_label}）**"
             )
             body_lines = [head]
             if first_prompt:
@@ -1951,8 +2067,11 @@ def render_aiwork_markdown(
             # 成果: last_reply + 変更ファイル + テスト有無
             outcome_bits: list[str] = []
             if is_browser and not reply:
-                chars = int(s.assistant_chars or 0)
-                outcome_bits.append(f"出力 {chars}字（本文ログなし）")
+                if bool(getattr(s, "assistant_chars_measurable", True)):
+                    chars = int(s.assistant_chars or 0)
+                    outcome_bits.append(f"出力 {chars}字（本文ログなし）")
+                else:
+                    outcome_bits.append("出力文字数: 計測不能")
             elif reply:
                 outcome_bits.append(f"「{reply}」")
             if files:

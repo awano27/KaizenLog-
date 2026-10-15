@@ -395,6 +395,24 @@ def _best_session_label(
     return best[1] if best else None
 
 
+def _observed_zero_input_week(day: date, history, current: InputStats) -> bool:
+    if current.focus_blocks or current.keypresses or current.clicks:
+        return False
+    by_day = {item.get('day'): item for item in history if isinstance(item, Mapping)}
+    for offset in range(1, 7):
+        item = by_day.get((day - timedelta(days=offset)).isoformat(), {})
+        quality = item.get('source_quality', {})
+        inp = item.get('input', {})
+        if not isinstance(quality, Mapping) or not isinstance(inp, Mapping):
+            return False
+        state = quality.get('input', {})
+        if not isinstance(state, Mapping) or state.get('state') != 'observed':
+            return False
+        if any(inp.get(key) != 0 for key in ('focus_blocks', 'keypresses', 'clicks')):
+            return False
+    return True
+
+
 def render_markdown(
     summary: DailySummary,
     tz: tzinfo,
@@ -406,6 +424,7 @@ def render_markdown(
     *,
     hide_private_titles: bool = True,
     stats_history: Sequence[Mapping[str, Any]] | None = None,
+    private_title_patterns: Sequence[str] = (),
 ) -> str:
     """デイリーノートに埋め込むアクティビティログのMarkdownを生成する。
 
@@ -441,7 +460,9 @@ def render_markdown(
     )
     lines.append("")
 
-    if input_stats is not None:
+    if input_stats is not None and _observed_zero_input_week(summary.day, prior, input_stats):
+        lines.extend(["※ 集中ブロック・キー入力・クリック: 実測0回が7日以上継続（`kaizenlog doctor` で確認）。", ""])
+    elif input_stats is not None:
         fb_n = len(input_stats.focus_blocks)
         fb_text = f"{fb_n}回"
         med_fb, lab_fb = baseline(
@@ -478,7 +499,7 @@ def render_markdown(
         public_sites: list[tuple[str, float]] = []
         for site, minutes in sorted(summary.by_site.items(), key=lambda x: -x[1]):
             if hide_private_titles and is_private_block(
-                category="ブラウジング", title=str(site), app=""
+                category="ブラウジング", title=str(site), app="", private_title_patterns=private_title_patterns
             ):
                 private_site_mins += float(minutes)
             else:
@@ -554,7 +575,7 @@ def render_markdown(
         raw_title = b.titles[0] if b.titles else ""
         private = False
         if hide_private_titles and is_private_block(
-            category=b.category, title=raw_title, app=b.app
+            category=b.category, title=raw_title, app=b.app, private_title_patterns=private_title_patterns
         ):
             private = True
         title = raw_title

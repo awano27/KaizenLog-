@@ -11,7 +11,10 @@ import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import datetime, tzinfo
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .human_input import HumanDay
 
 from .advisor import generate_text
 from .config import LLMConfig
@@ -394,6 +397,7 @@ def _screen_block_lines(
     *,
     min_block_minutes: float,
     limit: int = 3,
+    private_title_patterns: Sequence[str] = (),
 ) -> list[str]:
     """エンタメ・私的以外かつ min 分以上のスクリーンブロック（補完）。"""
     blocks = [
@@ -401,7 +405,7 @@ def _screen_block_lines(
         for b in stats.get("blocks", [])
         if isinstance(b, Mapping)
         and float(b.get("minutes") or 0) >= min_block_minutes
-        and not _is_private(b)
+        and not _is_private(b, private_title_patterns=private_title_patterns)
         and b.get("category") not in _PRIVATE_CATEGORIES
     ]
     blocks.sort(key=lambda b: -float(b.get("minutes") or 0))
@@ -614,6 +618,8 @@ def generate_nippou_deterministic(
     *,
     open_kzn_actions: Sequence[tuple[str, str]] | None = None,
     activity_md: str | None = None,
+    private_title_patterns: Sequence[str] = (),
+    human_day: HumanDay | None = None,
 ) -> str:
     """統計JSONから事実ベースの日報ドラフトを組み立てる。
 
@@ -639,7 +645,8 @@ def generate_nippou_deterministic(
     work.extend(_screenpipe_work_lines(stats, activity_md))
     # スクリーン補完（15分以上・エンタメ除外・最大3）
     work.extend(
-        _screen_block_lines(stats, tz, min_block_minutes=max(15.0, min_block_minutes), limit=3)
+        _screen_block_lines(stats, tz, min_block_minutes=max(15.0, min_block_minutes), limit=3,
+                            private_title_patterns=private_title_patterns)
     )
     if not work:
         work.append("- （本日の計測データがありません）")
@@ -675,5 +682,14 @@ def generate_nippou_deterministic(
         lines.append("【所感】")
         lines.append(impression)
         lines.append("")
+
+    if human_day is not None:
+        from .human_input import human_overlay_lines
+
+        human_lines = human_overlay_lines(human_day, source_stats=stats)
+        if human_lines:
+            lines.append("【本人入力・手動訂正】")
+            lines.extend(human_lines)
+            lines.append("")
 
     return "\n".join(lines)

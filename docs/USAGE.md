@@ -2,6 +2,22 @@
 
 Windowsの毎日の操作を自動記録し、Obsidianのデイリーノートに日誌として残し、LLMが改善提案（Kaizen）を行うツールのセットアップと日々の使い方です。所要時間は初期セットアップ約10〜30分。
 
+## 最初に知っておくこと
+
+KaizenLog は、次の順で小さく始められます。
+
+1. Python とこのプロジェクトの依存ライブラリを入れる（ソース ZIP / Git clone の導入では Python が必要です）。
+2. ActivityWatch を別途インストールして起動し、`aw-watcher-window` が対象日の記録を作る。
+3. 保存先のフォルダを `setup` で明示する。
+4. 日誌をプレビューして内容と保存先を確認し、本人が生成操作を選ぶ。
+5. 必要になったときだけ、日報、本人入力、改善提案、AI 利用ログの分析を追加する。
+
+日誌と `report --no-llm` は LLM なしで動かせます。LLM を設定していても、日誌専用の操作と `report --no-llm` は LLM の探索・送信・fallback を行わない契約です。ActivityWatch が停止中、記録がない、または保存先へ書けない場合は、空の日誌を成功扱いにせず、理由を表示します。
+
+初回画面は、サンプル表示、保存先と対象日・翌日の更新予定、明示的な「日誌を作る」、生成済みノートを開く操作を分けます。閲覧やプレビューだけではノート、台帳、統計、設定を作成・更新しません。`home`、日誌専用生成、`setup --generate-today`、`prompts draft <PRM-ID>` は、下記の明示的な入口から実行します。
+
+本人の成果1行、次に試す1件、表示用のカテゴリ・プロジェクト訂正は、自動計測の原本とは別の本人入力として保存します。日誌へまだ反映できないときは `本人入力は保存済み／日誌反映は未完了` として pending/conflict を残し、推測で別ブロックへ移しません。依頼文の草案は `UNVERIFIED_DRAFT / 効果未検証・編集用` と明記し、既存の採用台帳や `.claude/commands` を自動変更しません。
+
 ## 最短セットアップ（開発版）
 
 現行は **1.5.0rc1（RC）** です。PyPI 公開パッケージは未確認のため、GitHub から clone して入れます。
@@ -12,16 +28,20 @@ Windowsの毎日の操作を自動記録し、Obsidianのデイリーノート�
 git clone https://github.com/awano27/KaizenLog-.git
 cd KaizenLog-
 pipx install .
-kaizenlog setup
+kaizenlog setup --vault "C:\path\to\vault" --yes --skip-aw --skip-task --skip-skills
 kaizenlog doctor
-kaizenlog run
+kaizenlog generate --date 2026-09-06 --skip-catch-up
 ```
 
 1. `git clone` — 上記リポジトリを取得  
 2. `pipx install .` — クローン直下を開発版としてインストール  
 3. `kaizenlog setup` — 対話ウィザード（検出優先・不足だけ質問）  
 4. `kaizenlog doctor` — 環境診断  
-5. `kaizenlog run` — ActivityWatch 起動後に初回実行  
+5. `kaizenlog generate --date 2026-09-06` — 日付を今日に置き換え、ActivityWatch 起動後に初回生成（LLM不要）
+
+setup は Obsidian のボールト一覧とデイリーノート保存フォルダを読み取り、候補を確認できます。新規導入では LLM なしから始められます。引数なしの `setup --yes` は診断だけで、設定・日誌・ActivityWatch・タスク・スキルを作りません。`--vault PATH --yes` を明示すると設定だけを保存します。初回日誌を非対話で作るときは、`--generate-today` を追加した操作だけが typed journal 経路を実行します。デイリーノートの既定ファイル名は引き続き `YYYY-MM-DD.md` です。
+
+このソースから作成した配布 wheel にはタスク登録スクリプトを同梱しています。wheel を入手した場合は `pipx install <wheelのパス>` で clone なしの導入が可能です。PyPI 公開は別の承認・検証工程であり、この変更だけでは PyPI からの導入を保証しません。
 
 設定の既定先は **`%APPDATA%\kaizenlog\config.toml`**（Windows）です。CWD の `kaizenlog.toml` は移行期間のフォールバックです。設定が無い通常コマンドは終了コード 2 で止まります（診断だけは `kaizenlog doctor`）。
 
@@ -88,8 +108,9 @@ KaizenLogはClaude Codeを「LLMバックエンドの1つ」としても「自�
 | 必須 | Windows PC | 常時ではなく日中使うPCでOK |
 | 必須 | Python 3.11以上 | `python --version` で確認 |
 | 必須 | [ActivityWatch](https://activitywatch.net/downloads/) | 無料・オープンソース |
-| 必須 | LLM手段のいずれか1つ | Claude Code / Copilotサブスク / Ollama / GitHub PAT（Step 4参照） |
+| 任意 | LLM手段のいずれか1つ | 改善提案を使う場合のみ。活動日誌・決定論の集計は設定不要（Step 4参照） |
 | 任意 | Claude Code（CLI） | バックエンドとしても、スキル運用（週次分析・オートパイロット・日次エージェント）としても使用可能 |
+| ローカル候補の配布形態 | Windows portable ZIP | Python/Tcl/Tk を同梱する設計。build 資材とローカル候補があり、CLI は架空 ActivityWatch データで検証済み。ActivityWatch・Obsidian・LLM は別途必要。実 GUI 操作と Python なし Windows は未確認。公開提供状況は Releases の案内を確認 |
 
 ## Step 1: ActivityWatch のインストール
 
@@ -131,6 +152,29 @@ vault_dir = 'C:/develop/obsidian/2026'   # あなたのボールトのパス
 [llm]
 backend = "copilot-cli"   # Step 4 で選んだものに合わせる
 ```
+
+### 日次ノートのファイル名を選ぶ
+
+既定の保存先は `vault_dir / daily_notes_dir` です。`[general] daily_note_format` は次の3値だけを受け付けます。
+
+| 値 | 例 |
+| --- | --- |
+| `YYYY-MM-DD` | `2026-10-15.md` |
+| `YYYYMMDD` | `20261015.md` |
+| `YYYY/MM/DD` | `2026/10/15.md` |
+
+日付ごとに別の既存ノートを本人が明示して選ぶ場合は `[daily_notes.overrides]` を使います。値は `daily_notes_dir` を基点にした、拡張子 `.md` を含む相対完成パスです。絶対パス、`..` での脱出、symlink/junction 経由の Vault 外参照は拒否されます。
+
+```toml
+[general]
+daily_notes_dir = "01 Daily Notes"
+daily_note_format = "YYYY-MM-DD"
+
+[daily_notes.overrides]
+# "2026-10-15" = "2026/10/15.md"
+```
+
+候補が複数あるときは自動マージ・削除・改名をせず `conflict` として停止します。既存ノートの移動や一括改名は行いません。機械統計の日付キーは常に ISO 形式のままです。
 
 ## Step 4: LLMバックエンドの設定（4択から1つ）
 
@@ -210,6 +254,12 @@ kaizenlog run         # 上記2つをまとめて実行（毎晩の定期実行�
 ```
 
 > 既にそのノートに手書きメモがあっても消えません。KaizenLogは `<!-- kaizenlog:... -->` マーカーで囲まれた区間だけを更新します。何度実行しても同じ区間が置き換わるだけです。
+
+### 安全な明示操作
+
+画面またはサービス層の操作は、読取・プレビューと保存を分けます。保存前に対象日、保存先、翌日への転記を含む更新予定を確認します。生成、日報書込、本人入力、日誌への再投影、外部アプリを開く操作は、それぞれ本人が選んだときだけ実行します。選択や候補表示を、採用・完了・指標達成へ変換しません。
+
+保存は管理マーカー区間を対象にし、マーカー外の手書き本文を保持します。失敗・部分成功・競合は別状態で表示し、生成されていないノートを「開ける」と案内しません。複数ファイルを一括で原子的に保存できるとは扱わず、途中まで成功した保存単位を記録します。
 
 ## Step 6: Claude Codeスキルのインストール（Claude Codeを使うなら）
 
@@ -346,6 +396,22 @@ kaizenlog prompts mark 001 dismissed
 
 台帳は `<vault>/Kaizen/Memory/prompt_clusters.jsonl`（追記型後勝ち）。代表文は `[privacy] redact_patterns` 適用後に保存します。
 
+#### 未検証の依頼文草案
+
+既存の `prompts export` は効果を観測した skilled 済み PRM の出力です。別用途として、`prompts draft <PRM-ID>` は `new` または `skilled` の台帳 snapshot から、効果未検証の編集用草案を決定論的に作る設計です。前後30日の観測、export の再実行、元の会話ログの再収集、LLM 接続は草案作成の条件にしません。
+
+既定はプレビューです。`--write --project PATH` を明示した場合だけ、指定プロジェクトの `.kaizenlog/drafts/<PRM-ID>.md` へ保存します。PRM-ID は台帳の ID として厳密に検証し、パス文字列として扱いません。出力の先頭には `UNVERIFIED_DRAFT / 効果未検証・編集用`、PRM-ID、入力 fingerprint、`目的`・`前提`・`依頼`・`確認条件` の編集欄を置き、入力から分からない項目は「未記入」とします。
+
+```powershell
+# プレビュー（台帳やファイルを書き換えない）
+kaizenlog prompts draft PRM-20261015-001
+
+# 明示したプロジェクトへ保存
+kaizenlog prompts draft PRM-20261015-001 --project "C:\work\my-project" --write
+```
+
+プレビュー後に台帳が変わった場合は stale として保存を止めます。同じ内容の再保存は変更なし、異なる既存ファイルは明示の `--force` とバックアップなしには置き換えません。採用・却下などの台帳状態、`.claude/commands`、`AGENTS.md`、`CLAUDE.md` は自動変更しません。
+
 自動化まで任せるなら `claude -p "/kaizen-autopilot"` — 定型作業のスクリプト化や頻出依頼のスキル化が、PRまたは`00 Inbox/`の提案ノートとして提出され、**あなたが承認するまで何も有効化されません**。
 
 ---
@@ -354,8 +420,9 @@ kaizenlog prompts mark 001 dismissed
 
 | コマンド | 何をするか |
 | --- | --- |
+| `kaizenlog home [--date YYYY-MM-DD] [--config PATH]` | ローカル画面で日誌・計測状態・本人入力を確認し、選んだ操作だけを実行 |
 | `kaizenlog run` | ログ生成＋改善提案（毎晩の定期実行と同じ） |
-| `kaizenlog generate [--date YYYY-MM-DD]` | ログ生成のみ（実験計測・統計蓄積を含む） |
+| `kaizenlog generate [--date YYYY-MM-DD] [--skip-catch-up]` | ログ生成。`--skip-catch-up` は対象日のジャーナルだけを明示生成 |
 | `kaizenlog advise [--date YYYY-MM-DD]` | 改善提案のみ |
 | `kaizenlog morning [--skip-catch-up]` | 朝: 追いつき→📌再描画→通知 |
 | `kaizenlog today [--no-sync] [--all]` | 未完了一覧（既定でノートチェック同期） |
@@ -368,6 +435,7 @@ kaizenlog prompts mark 001 dismissed
 | `kaizenlog patterns [--days N]` | 繰り返しパターン検出レポート |
 | `kaizenlog report [--no-llm] [--write]` | 提出用の日報ドラフト生成 |
 | `kaizenlog prompts [--days N] [--min-count N] [--unhandled]` | 繰り返し依頼の発掘＋台帳 upsert |
+| `kaizenlog prompts draft <PRM-ID> [--project PATH] [--write] [--force]` | 未検証の依頼文草案をプレビュー／明示保存 |
 | `kaizenlog prompts mark <id> skilled\|dismissed [--skill NAME]` | クラスタをスキル化済み/却下に記録 |
 | `kaizenlog skill install [--vault PATH] [--force]` | Claude Codeスキル3種をボールトに配置（既存は上書きせずdiff案内） |
 | `kaizenlog skill show` / `skill doctor` | 同梱スキルの一覧／インストール状態の確認 |
@@ -379,6 +447,35 @@ kaizenlog prompts mark 001 dismissed
 | `kaizenlog advise --dry-run` | LLMに送る内容を送信せずに確認（監査用） |
 | `kaizenlog init-config [--output PATH]` | 設定ファイルの雛形生成（既定: AppData/XDG） |
 | `kaizenlog --config PATH <cmd>` | 明示設定パス（サブコマンドより前） |
+
+### 初回の日誌と毎日の入口
+
+初回は、まず保存先を設定し、対象日と更新予定を確認してから日誌を作ります。引数なしの `setup --yes` は診断だけで、設定・日誌・ActivityWatch・タスク・スキルを書きません。`--vault PATH --yes` を明示すると設定だけを保存します。初回日誌を非対話で作るときは、`--generate-today` を追加した操作だけが typed journal 経路を実行します。
+
+```powershell
+# 毎日の確認画面。表示・更新プレビューだけでは保存しない
+kaizenlog home --date YYYY-MM-DD --config PATH
+
+# 日誌だけを対象日に作る。過去日の追いつき・retro-advise・LLM/provider探索なし
+kaizenlog generate --date YYYY-MM-DD --skip-catch-up
+
+# 設定後に今日の日誌まで作るときは、明示オプションを付ける
+kaizenlog setup --vault PATH --yes --skip-aw --skip-task --skip-skills --generate-today
+```
+
+`home` の画面では、計測状態や今日の記録を確認し、日誌生成・日報書込・本人入力・外部アプリを開く操作を別々に選びます。候補を見るだけでは採用・完了になりません。ActivityWatch が停止中、記録がない、または保存先へ書けない場合は、空の日誌を成功扱いにしません。
+
+portable Windows ZIP は CLI と GUI を別フォルダに置き、Python/Tcl/Tk を同梱する設計です。このソースの build 資材とローカル候補があり、CLI は架空 ActivityWatch データで検証済みです。ActivityWatch は portable ZIP に含まれず、別途インストール・起動が必要です。実 GUI 操作と Python なし Windows の動作は未確認です。公開ダウンロードの有無は GitHub Releases の案内を確認してください。
+
+portable ZIP を入手済みなら、ZIP 全体を展開したまま次を使います。`gui`、`cli`、`_internal`、`data` は同じ配置に保ち、exe だけ移動・削除しません。
+
+```powershell
+.\gui\kaizenlog-home.exe
+.\cli\kaizenlog.exe --help
+.\cli\kaizenlog.exe --config PATH generate --date YYYY-MM-DD --skip-catch-up
+```
+
+ActivityWatch は ZIP とは別にインストールして起動してください。公開 Releases の入手先や Python なしの Windows 動作は、この手順だけでは確認済みとしません。
 
 
 ### 空転ブレーカー（第31弾）
@@ -490,6 +587,67 @@ kaizenlog eval run --cases path\to\cases --min-pass-rate 0.8
 
 **初回は同梱サンプル（`eval/samples/`）で動作確認し、自分のデータでは `eval record`。**  
 ユーザーケースが無いとき `eval run` は自動でサンプルへフォールバックします。pytest はモックのみで、**実 LLM は `eval run` の手動実行時のみ**呼び出します。
+
+## 追加機能の操作例
+
+日常ヘルプは5コマンドに絞っています。専門コマンドは従来の名前で使えます。
+
+```powershell
+kaizenlog                         # today と同じ（既存の状態同期も含む）
+kaizenlog --help --all
+kaizenlog now                     # 今日0時から現在。ノート・統計・実行ログを書かない
+kaizenlog recall "設計"            # stats 全期間。日付と一致する記録を表示
+kaizenlog backfill --days 30       # 欠損日を古い順に生成。進捗 i/n を表示
+kaizenlog monthly --month 2026-09  # プレビュー。SVGも作成しない
+kaizenlog monthly --month 2026-09 --write
+kaizenlog weekly-context --write  # 集計と「今週の物語」を別マーカーで更新
+```
+
+月次アルバムは当月提案の確定 KZN、当月の PRM 昇格件数、判定日のコーチ勝率をそれぞれ条件付きで表示します。採用状況など現在の台帳状態を参照する項目はその旨を明記します。費用・ループ税の SVG は月次フォルダの `assets` に保存し、欠測日は線をつなぎません。日誌末尾の「過去の今日」は1・3ヶ月前を参照し、存在しない月末日はその月の最終日に合わせます。
+
+分類候補は直近14日で120分以上使い、名前だけではルールに一致しないアプリ・サイトです。doctor と週次にも表示します。タイトルを含む分類全体の誤りを断定するものではありません。
+
+```powershell
+kaizenlog rules list
+kaizenlog rules add "設計作業" --pattern "my-editor"        # 追記内容のプレビュー
+kaizenlog rules add "設計作業" --pattern "my-editor" --write
+```
+
+既存の TOML とコメントは保持します。過去の分類を更新したい日だけ `generate --date` で再生成してください。
+
+Grok は `~/.grok/sessions/**/updates.jsonl` の検証済み形式を読みます。Cursor はネイティブ履歴を推測せず、`[aiwork] cursor_sessions_dir` に明示した raw stream-json キャプチャのみ対象です。ユーザーイベントに `timestamp_ms` がなければ日次に計上しません。両方とも未取得のトークン・コストを推測しません。[形式と制約](user-delight-20260906/adapter-evidence.md) を参照してください。
+
+```powershell
+kaizenlog prompts --roi
+kaizenlog prompts export PRM-20260801-001 --project "C:\work\my-project"
+kaizenlog prompts export PRM-20260801-001 --project "C:\work\my-project" --write
+```
+
+export は skilled 済み PRM の前後30日の再発減少を条件にし、毎日の依頼ログが揃わない期間は欠損として停止します。日数だけ経過した状態を観測完了とは扱いません。`.claude/commands` の編集用下書きには元の依頼例をマスクして掲載します。出力だけで採用台帳は変更しません。同じ内容は変更なし、異なる既存ファイルは停止し、`--force --write` の場合だけバックアップ付きで置き換えます。
+
+```powershell
+kaizenlog preflight                         # 事前文脈のプレビュー
+kaizenlog guard install --preflight         # フック設定のプレビュー
+kaizenlog guard install --preflight --project --write
+kaizenlog guard watch --once
+kaizenlog task install                      # 登録内容のプレビュー
+kaizenlog task install --weekly --guard-watch --write
+```
+
+`task install` は日次タスクを登録・更新します。`--weekly` は日曜の `weekly-context --write`、`--guard-watch` は5分毎の `guard watch --once` も登録します。設定ファイルのパスを各タスクへ渡します。watch は Codex とブラウザの新規依頼を読み、Claude Code は既存フックで扱います。トーストは `[guard] notify = true` のときだけ出し、推定不能な浪費額は不明のままです。ライブ通知履歴は夜間の費用集計へ加算しません。
+
+preflight は未チェックの候補・昨日の確定判定・今日の目標の存在する項目だけを最大360文字に収め、リポジトリごとに1日1回注入します。PRM 台帳にリポジトリ所属の証拠がないため、PRM本文の自動注入は行いません。実行ログには注入文字数と概算トークン数だけを残し、本文を保存しません。
+
+LLM 縮退日は読者向けの短い案内へ切り替えます。診断資料はマスクして `.kaizenlog/logs/advice-evidence-YYYY-MM-DD.md` に分け、`doctor` は契約違反の分類と修復導線を表示します。
+
+```toml
+[privacy]
+private_title_patterns = ["個人用", "private-project"]
+```
+
+標準の私的タイトル判定に上の正規表現を追加できます。履歴検索・タイムカプセル・日報などの表示で適用します。保存済みの raw stats を削除・書き換える設定ではありません。
+
+補助コマンドの用途も `--help` で確認できます: `rehumanize` は過去の提案区間を平文化、`screenpipe-probe` は接続診断、`excavate` は繰り返しの遡及調査、`handoff` はリポジトリ向け引き継ぎ、`coach` は承認付きルール改善、`abtest` は予測・体感・実測の比較です。
 
 ## トラブルシューティング
 

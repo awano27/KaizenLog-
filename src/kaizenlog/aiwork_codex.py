@@ -503,6 +503,7 @@ class CodexAdapter:
         min_chars: int,
     ) -> list[UserPrompt]:
         project = "unknown"
+        session_id = path.stem
         out: list[UserPrompt] = []
         with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -518,11 +519,17 @@ class CodexAdapter:
                 payload = _payload(record)
                 if record.get("type") == "session_meta":
                     project = _project_from_cwd(payload.get("cwd"))
+                    candidate = payload.get('session_id') or payload.get('id')
+                    if isinstance(candidate, str) and candidate.strip():
+                        session_id = candidate.strip()
                     continue
                 if record.get("type") != "event_msg":
                     continue
                 if payload.get("type") != "user_message":
                     continue
+                candidate = payload.get('session_id') or payload.get('sessionId')
+                if isinstance(candidate, str) and candidate.strip():
+                    session_id = candidate.strip()
                 ts = _parse_ts(record)
                 if ts is None or not (start <= ts < end):
                     continue
@@ -542,6 +549,7 @@ class CodexAdapter:
                         project=project,
                         text=text,
                         source="codex",
+                        session_id=session_id,
                     )
                 )
         return out

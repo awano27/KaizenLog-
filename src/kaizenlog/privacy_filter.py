@@ -19,6 +19,8 @@ def is_private_block(
     category: str | Mapping[str, Any] | None = None,
     title: str | None = None,
     app: str | None = None,
+    *,
+    private_title_patterns: tuple[str, ...] | list[str] = (),
 ) -> bool:
     """エンタメカテゴリ、または私的タイトル/アプリなら True。
 
@@ -32,4 +34,8 @@ def is_private_block(
     cat = str(category or "")
     if cat in PRIVATE_CATEGORIES:
         return True
-    return bool(PRIVATE_TITLE_RE.search(f"{title or ''} {app or ''}"))
+    text = f"{title or ''} {app or ''}"
+    return bool(PRIVATE_TITLE_RE.search(text)) or any(
+        re.search(pattern, text, re.IGNORECASE) is not None
+        for pattern in private_title_patterns
+    )

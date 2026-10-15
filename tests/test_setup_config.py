@@ -89,6 +89,20 @@ def test_write_config_creates_parents_atomically(tmp_path):
     assert cfg.llm.backend == "none"
 
 
+def test_write_config_explicit_missing_precondition_rejects_new_file(tmp_path):
+    dest = tmp_path / "config.toml"
+    dest.write_text("[general]\nvault_dir = \"existing\"\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        write_config_file(
+            dest,
+            vault_dir=tmp_path / "vault",
+            backend="none",
+            model="fixture",
+            merge=True,
+            expected_bytes=None,
+        )
+
+
 def test_write_config_merge_preserves_extra_text(tmp_path):
     dest = tmp_path / "config.toml"
     dest.write_text(
@@ -107,6 +121,96 @@ def test_write_config_merge_preserves_extra_text(tmp_path):
     assert "keep-me" in text
     assert "Custom" in text
     assert "newvault" in text.replace("\\", "/")
+
+
+def test_merge_updates_owner_tables_and_preserves_later_tables_and_comments(tmp_path: Path):
+    config = tmp_path / "config.toml"
+    config.write_bytes(
+        (
+            "[general]\r\n"
+            'vault_dir = "old" # general vault\r\n'
+            'daily_notes_dir = "old notes" # keep # inside comment\r\n'
+            "\r\n"
+            "[daily_notes]\r\n"
+            'format = "YYYYMMDD" # legacy alias\r\n'
+            "\r\n"
+            "[privacy]\r\n"
+            'replacement = "# quoted # value" # privacy comment\r\n'
+            "\r\n"
+            "[llm]\r\n"
+            'backend = "old-backend" # backend comment\r\n'
+            "\r\n"
+            "[llm.openai_compatible]\r\n"
+            'model = "old-model" # model comment\r\n'
+        ).encode("utf-8")
+    )
+
+    write_config_file(
+        config,
+        vault_dir=tmp_path / "new-vault",
+        backend="none",
+        model="new-model",
+        merge=True,
+        daily_notes_dir='Journal "Daily"',
+        daily_note_format="YYYY/MM/DD",
+    )
+
+    raw = config.read_bytes()
+    assert b'daily_note_format = "YYYY/MM/DD"\r\n' in raw
+    assert b'format = "YYYY/MM/DD" # legacy alias\r\n' in raw
+    assert b'replacement = "# quoted # value" # privacy comment\r\n' in raw
+    assert b'backend = "none" # backend comment\r\n' in raw
+    assert b'model = "new-model" # model comment\r\n' in raw
+    assert b'daily_note_format = "YYYY/MM/DD"\r\n[privacy]' not in raw
+    loaded = load_config(str(config))
+    assert loaded.daily_notes_dir == 'Journal "Daily"'
+    assert loaded.daily_note_format == "YYYY/MM/DD"
+    assert loaded.llm.backend == "none"
+    assert loaded.llm.model == "new-model"
+
+
+def test_merge_inserts_missing_general_format_inside_general_table(tmp_path: Path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[general]\nvault_dir = "old"\n\n[privacy]\nreplacement = "keep"\n',
+        encoding="utf-8",
+    )
+
+    write_config_file(
+        config,
+        vault_dir=tmp_path,
+        backend="none",
+        model="model",
+        merge=True,
+        daily_note_format="YYYYMMDD",
+    )
+
+    loaded = load_config(str(config))
+    assert loaded.daily_note_format == "YYYYMMDD"
+    text = config.read_text(encoding="utf-8")
+    assert text.index('daily_note_format = "YYYYMMDD"') < text.index("[privacy]")
+
+
+def test_legacy_daily_notes_format_is_fallback_and_merge_updates_both_forms(tmp_path: Path):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[general]\nvault_dir = "' + tmp_path.as_posix() + '"\n'
+        '[daily_notes]\nformat = "YYYYMMDD"\n',
+        encoding="utf-8",
+    )
+    assert load_config(str(config)).daily_note_format == "YYYYMMDD"
+
+    write_config_file(
+        config,
+        vault_dir=tmp_path,
+        backend="none",
+        model="model",
+        merge=True,
+        daily_note_format="YYYY/MM/DD",
+    )
+    loaded = load_config(str(config))
+    assert loaded.daily_note_format == "YYYY/MM/DD"
+    assert 'format = "YYYY/MM/DD"' in config.read_text(encoding="utf-8")
 
 
 def test_guard_notify_can_be_disabled_without_disabling_detection(tmp_path):

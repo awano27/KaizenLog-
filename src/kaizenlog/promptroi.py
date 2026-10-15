@@ -76,6 +76,10 @@ def _session_for_prompt(
     prompt: UserPrompt, sessions: Sequence[AISession]
 ) -> AISession | None:
     """同一 project かつ時刻が区間内のセッション。複数なら最も近い開始。"""
+    if prompt.session_id:
+        sessions = [s for s in sessions if s.session_id == prompt.session_id and s.source == prompt.source]
+        if not sessions:
+            return None
     hits = [
         s
         for s in sessions
@@ -112,6 +116,8 @@ def _session_tokens(
         if s is None or s.session_id in sess_ids:
             continue
         sess_ids.add(s.session_id)
+        if not s.output_tokens_measurable:
+            return None
         if s.output_tokens:
             any_tok = True
             tokens += int(s.output_tokens)

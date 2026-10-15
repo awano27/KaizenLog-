@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable, Sequence
 
-from .aiwork import AISession, UserPrompt
+from .aiwork import AISession, UserPrompt, measured_metric_total
 from .memory import load_entries
 from .promptledger import find_matching_entry, load_prompt_ledger
 from .stats import load_stats
@@ -279,18 +279,20 @@ def _measure_sess_metric(
     """
 
     def agg(start: date, end: date) -> int | None:
-        total = 0
-        any_s = False
-        for s in matched:
-            d = s.start.date()
-            if not (start <= d <= end):
-                continue
-            any_s = True
-            if kind == "retry":
-                total += 1 if s.is_fragmented else 0
-            else:
-                total += int(s.tool_errors or 0)
-        return total if any_s else None
+        window_sessions = [
+            session
+            for session in matched
+            if start <= session.start.date() <= end
+        ]
+        if not window_sessions:
+            return None
+        if kind == "retry":
+            return sum(1 for session in window_sessions if session.is_fragmented)
+        # A new adapter's sentinel 0 is not a measured error count.
+        # One unknown session invalidates the comparison window.
+        return measured_metric_total(
+            window_sessions, "tool_errors", "tool_metrics_measurable"
+        )
 
     before = agg(b0, b1)
     after = agg(a0, a1)

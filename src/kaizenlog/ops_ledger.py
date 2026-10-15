@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sqlite3
 import sys
@@ -13,6 +14,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Mapping
+from urllib.parse import quote
 
 
 @dataclass
@@ -27,6 +29,21 @@ _RUN_CONTEXT: ContextVar[OperationalRunContext | None] = ContextVar(
     "kaizenlog_run_context", default=None
 )
 _DROP_PAYLOAD_KEYS = frozenset({"events", "raw_events", "input_events"})
+
+
+@dataclass(frozen=True, slots=True)
+class OperationalRunSnapshot:
+    """Read-only view of the operational ledger.
+
+    ``available=False`` is deliberately different from an empty database.  A
+    missing database, a live WAL, or a concurrent file change must not be
+    presented as an observed empty run history.
+    """
+
+    available: bool
+    rows: tuple[dict, ...]
+    row_digests: dict[str, str]
+    reason: str | None = None
 
 
 def default_ops_db_path() -> Path:
@@ -198,6 +215,142 @@ class OpsLedger:
                     json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                 ),
             )
+
+    def readonly_snapshot(self) -> OperationalRunSnapshot:
+        """Read an existing ledger without schema/WAL/sidecar mutations.
+
+        ``OpsLedger._connect`` is intentionally not used here: it creates the
+        parent directory, changes journal mode, and creates schema objects.
+        SQLite's immutable URI is used only after checking that a database
+        exists and has no non-empty WAL.  If the file changes while reading,
+        the result is unavailable so callers can retry from a fresh snapshot.
+        """
+        path = self.path
+        if not path.is_file():
+            return OperationalRunSnapshot(False, (), {}, "ledger database is missing")
+        wal = Path(f"{path}-wal")
+        rollback = Path(f"{path}-journal")
+        shm = Path(f"{path}-shm")
+
+        def state() -> tuple[tuple[int, int] | None, tuple[int, int] | None, tuple[int, int] | None, tuple[int, int] | None]:
+            def one(candidate: Path) -> tuple[int, int] | None:
+                try:
+                    st = candidate.stat()
+                except FileNotFoundError:
+                    return None
+                return (st.st_size, st.st_mtime_ns)
+
+            return one(path), one(wal), one(shm), one(rollback)
+
+        before = state()
+        if before[1] is not None and before[1][0] > 0:
+            return OperationalRunSnapshot(False, (), {}, "ledger WAL is active; retry after it is quiescent")
+        if before[3] is not None and before[3][0] > 0:
+            return OperationalRunSnapshot(False, (), {}, "ledger rollback journal is active; retry after it is quiescent")
+        try:
+            uri = "file:" + quote(path.resolve().as_posix(), safe="/:") + "?mode=ro&immutable=1"
+            con = sqlite3.connect(uri, uri=True, timeout=0.2)
+        except (OSError, sqlite3.Error) as exc:
+            return OperationalRunSnapshot(False, (), {}, f"ledger readonly open failed: {type(exc).__name__}")
+        try:
+            try:
+                rows_raw = con.execute(
+                    "SELECT run_id, payload_json FROM runs ORDER BY ts ASC"
+                ).fetchall()
+            except sqlite3.Error as exc:
+                return OperationalRunSnapshot(False, (), {}, f"ledger schema unavailable: {type(exc).__name__}")
+        finally:
+            con.close()
+        after = state()
+        if before != after or (after[1] is not None and after[1][0] > 0) or (after[3] is not None and after[3][0] > 0):
+            return OperationalRunSnapshot(False, (), {}, "ledger changed while reading; retry")
+        rows: list[dict] = []
+        digests: dict[str, str] = {}
+        for run_id, payload_json in rows_raw:
+            if not isinstance(payload_json, str):
+                continue
+            try:
+                payload = json.loads(payload_json)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            rows.append(payload)
+            digests[str(run_id)] = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+        return OperationalRunSnapshot(True, tuple(rows), digests, None)
+
+    def append_if_payload_digest(
+        self,
+        entry: dict,
+        *,
+        expected_digest: str | None,
+        expected_exists: bool,
+    ) -> bool:
+        """Append one row only when its prior payload matches the preview.
+
+        The identity check and insert share one ``BEGIN IMMEDIATE``
+        transaction.  This is intentionally separate from the read-only
+        snapshot path; it is an explicit write API used after preflight.
+        """
+        payload = _payload(entry)
+        run_id = str(payload.get("run_id") or new_run_id())
+        payload["run_id"] = run_id
+        reason_codes = payload.get("reason_codes") or []
+        reason_code = str(reason_codes[0]) if reason_codes else payload.get("reason_code")
+        payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        con = self._connect()
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT payload_json FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if expected_exists:
+                if row is None or expected_digest is None:
+                    con.rollback()
+                    return False
+                actual = hashlib.sha256(str(row[0]).encode("utf-8")).hexdigest()
+                if actual != expected_digest:
+                    con.rollback()
+                    return False
+            elif row is not None:
+                con.rollback()
+                return False
+            con.execute(
+                """
+                INSERT OR REPLACE INTO runs (
+                    run_id, parent_run_id, ts, command, ok, partial, duration_seconds,
+                    configured_backend, actual_backend, outcome, reason_code,
+                    notify_failed, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    payload.get("parent_run_id"),
+                    str(payload["ts"]),
+                    str(payload["command"]),
+                    int(bool(payload.get("ok", False))),
+                    int(bool(payload.get("partial", False))),
+                    float(payload.get("duration_seconds", 0.0)),
+                    payload.get("configured_backend"),
+                    payload.get("actual_backend"),
+                    payload.get("outcome"),
+                    reason_code,
+                    int(bool(payload.get("notify_failed", False))),
+                    payload_json,
+                ),
+            )
+            con.commit()
+            # A completed receipt must be immediately readable by the
+            # immutable preflight reader.  Quiesce this short-lived writer's
+            # WAL while still owning the connection; legacy append() remains
+            # unchanged.
+            try:
+                con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.Error:
+                pass
+            return True
+        finally:
+            con.close()
 
     def load_runs(self) -> list[dict]:
         if not self.path.is_file():

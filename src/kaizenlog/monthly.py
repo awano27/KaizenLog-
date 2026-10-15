@@ -8,9 +8,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .human_input import HumanDay
 
 from .effort import BUCKET_PRIVATE
+from .file_lock import locked_read_modify_write
 from .memory import MemoryEntry
 from .report import _fmt_minutes
 from .vault import MONTHLY_MARKER, atomic_write_text, upsert_section
@@ -124,7 +128,36 @@ def aggregate_monthly(
     return rep
 
 
-def render_monthly_markdown(rep: MonthlyReport) -> str:
+def render_monthly_markdown(
+    rep: MonthlyReport,
+    *,
+    human_overlays: Mapping[str, HumanDay] | None = None,
+    source_stats_by_day: Mapping[str, Mapping[str, object]] | None = None,
+) -> str:
+    def append_humans(lines: list[str]) -> None:
+        if not human_overlays:
+            return
+        from .human_input import human_overlay_lines
+
+        rendered = [
+            (
+                str(day_key),
+                human_overlay_lines(
+                    human,
+                    source_stats=(source_stats_by_day or {}).get(str(day_key)),
+                ),
+            )
+            for day_key, human in sorted(human_overlays.items())
+        ]
+        rendered = [(day_key, values) for day_key, values in rendered if values]
+        if not rendered:
+            return
+        lines.extend(["### 本人入力・手動訂正（測定値とは別）", ""])
+        for day_key, overlay_lines in rendered:
+            lines.append(f"#### {day_key}")
+            lines.extend(overlay_lines)
+        lines.append("")
+
     label = f"{rep.year:04d}-{rep.month:02d}"
     lines = [f"## 📅 {label} の実績", ""]
     if rep.work_days <= 0:
@@ -135,6 +168,7 @@ def render_monthly_markdown(rep: MonthlyReport) -> str:
                 f"※ {rep.days_without_effort}日分は工数記録がないため集計対象外です。"
             )
             lines.append("")
+        append_humans(lines)
         return "\n".join(lines)
 
     avg = rep.total_minutes / rep.work_days if rep.work_days else 0.0
@@ -195,6 +229,7 @@ def render_monthly_markdown(rep: MonthlyReport) -> str:
             f"※ {rep.days_without_effort}日分は工数記録がないため集計対象外です。"
         )
         lines.append("")
+    append_humans(lines)
     return "\n".join(lines)
 
 
@@ -208,11 +243,13 @@ def write_monthly(
     vault_monthly_dir = Path(vault_monthly_dir)
     vault_monthly_dir.mkdir(parents=True, exist_ok=True)
     path = vault_monthly_dir / f"{year:04d}-{month:02d}.md"
-    if path.is_file():
-        content = path.read_text(encoding="utf-8")
-    else:
-        content = f"# {year:04d}-{month:02d}\n\n"
-    atomic_write_text(
-        path, upsert_section(content, MONTHLY_MARKER, body, position="bottom")
-    )
+    with locked_read_modify_write(path):
+        if path.is_file():
+            from .vault import read_text_preserve_newlines
+            content = read_text_preserve_newlines(path)
+        else:
+            content = f"# {year:04d}-{month:02d}\n\n"
+        atomic_write_text(
+            path, upsert_section(content, MONTHLY_MARKER, body, position="bottom")
+        )
     return path

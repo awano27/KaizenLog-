@@ -161,15 +161,20 @@ def build_coach_context(
     total_retry = 0
     total_err = 0
     total_sessions = 0
+    unknown_error_days = 0
     for s in stats_list:
         ai = s.get("ai") if isinstance(s.get("ai"), dict) else {}
         total_retry += int(ai.get("retry_chains") or 0)
-        total_err += int(ai.get("tool_errors") or 0)
+        if isinstance(ai.get('tool_errors'), (int, float)) and not isinstance(ai.get('tool_errors'), bool):
+            total_err += int(ai['tool_errors'])
+        else:
+            unknown_error_days += 1
         total_sessions += int(ai.get("sessions") or 0)
     if stats_list:
         lines.append(f"- AIセッション合計: {total_sessions}")
         lines.append(f"- リトライ連鎖合計: {total_retry}")
-        lines.append(f"- ツールエラー合計: {total_err}")
+        lines.append(f"- ツールエラー合計: {total_err}" if not unknown_error_days
+                     else f'- ツールエラー総計: 未計測を含むため不明（測定済み部分 {total_err}、未計測 {unknown_error_days}日）')
     else:
         lines.append("- （計測なし）")
 

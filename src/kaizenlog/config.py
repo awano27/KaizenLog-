@@ -6,10 +6,18 @@ import os
 import re
 import sys
 import tomllib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
+from .file_lock import locked_read_modify_write
 from .vault import atomic_write_text
+
+
+# Distinguish an omitted CAS precondition (legacy callers) from an explicit
+# expectation that the target file is absent (setup save).
+_EXPECTED_BYTES_UNSET = object()
 
 # デフォルトのカテゴリ分類ルール。上から順に評価され、最初にマッチしたものが採用される。
 # patterns は「アプリ名 | ウィンドウタイトル」を結合した文字列への正規表現（大文字小文字無視）。
@@ -19,7 +27,7 @@ DEFAULT_RULES: list[dict] = [
         "ai": True,
         "patterns": [
             r"claude", r"chatgpt", r"openai", r"copilot", r"cursor",
-            r"gemini", r"perplexity", r"ollama", r"lm studio", r"notebooklm",
+            r"gemini", r"perplexity", r"ollama", r"lm studio", r"notebooklm", r"\bgrok\b", r"x\.ai",
         ],
     },
     {
@@ -89,6 +97,20 @@ def _as_str_list(value, key) -> list[str]:
     raise ConfigError(f"設定値 {key} が不正です: {value!r}（文字列の配列を指定してください）")
 
 
+def _as_regex_list(value, key: str) -> list[str]:
+    """Load user supplied regular expressions without silently weakening privacy."""
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ConfigError(f"設定値 {key} が不正です: 文字列の配列を指定してください")
+    patterns: list[str] = []
+    for pattern in value:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ConfigError(f"設定値 {key} の正規表現が不正です: {pattern!r}") from exc
+        patterns.append(pattern)
+    return patterns
+
+
 def _as_choice(value, key: str, allowed: set[str]) -> str:
     if isinstance(value, str) and value in allowed:
         return value
@@ -128,6 +150,10 @@ class AIWorkConfig:
     enabled: bool = True
     claude_projects_dir: str = "~/.claude/projects"
     codex_sessions_dir: str = "~/.codex/sessions"
+    # Grok CLI sessions use this local default when the directory exists.
+    grok_sessions_dir: str = "~/.grok/sessions"
+    # Cursor locations vary by installation, so collection is explicit opt-in.
+    cursor_sessions_dir: str = ""
     # ブラウザ拡張の JSONL エクスポート先（Downloads 配下の既定フォルダ）
     browser_export_dir: str = "~/Downloads/kaizenlog-browser-ai"
     # モデル名部分一致 → USD / 100万 output tokens（既定表の上書き・追加）
@@ -149,6 +175,8 @@ class AIWorkConfig:
 @dataclass
 class PrivacyConfig:
     redact_patterns: list[str] = field(default_factory=list)
+    # 指定タイトルも私的扱いにする。表示前の判定は consumers が担う。
+    private_title_patterns: list[str] = field(default_factory=list)
     replacement: str = "[REDACTED]"
     # タイムラインで私的タイトルを（私的・非表示）にする
     hide_private_titles: bool = True
@@ -221,6 +249,8 @@ class Config:
     timezone: str = "Asia/Tokyo"
     vault_dir: Path = Path(".")
     daily_notes_dir: str = "01 Daily Notes"
+    daily_note_format: Literal["YYYY-MM-DD", "YYYYMMDD", "YYYY/MM/DD"] = "YYYY-MM-DD"
+    daily_note_overrides: dict[str, str] = field(default_factory=dict)
     experiments_dir: str = "03 Areas/Kaizen Experiments"
     stats_dir: str = ".kaizenlog/stats"
     logs_dir: str = ".kaizenlog/logs"
@@ -348,10 +378,13 @@ def render_config_template(
     vault_dir: Path | str,
     backend: str,
     model: str,
+    daily_notes_dir: str = "01 Daily Notes",
+    daily_note_format: str = "YYYY-MM-DD",
     **kwargs,
 ) -> str:
     """設定ファイル雛形の本文を生成する。"""
     vault = _toml_path_str(vault_dir)
+    daily_dir = json.dumps(daily_notes_dir, ensure_ascii=False)
     return f'''\
 # KaizenLog 設定ファイル
 # 置き場所: %APPDATA%/kaizenlog/config.toml（推奨）または
@@ -361,7 +394,8 @@ def render_config_template(
 [general]
 timezone = "Asia/Tokyo"
 vault_dir = "{vault}"   # Obsidianボールトのルート
-daily_notes_dir = "01 Daily Notes"
+daily_notes_dir = {daily_dir}
+daily_note_format = {json.dumps(daily_note_format)}
 experiments_dir = "03 Areas/Kaizen Experiments"   # カイゼン実験ノートの置き場所
 stats_dir = ".kaizenlog/stats"   # パターン検出用の日次統計JSON（ドットフォルダ=Obsidian非表示）
 logs_dir = ".kaizenlog/logs"     # 実行ログ（kaizenlog status で確認）
@@ -377,10 +411,15 @@ actions_position = "top"
 [notifications]
 on_failure = true   # 夜間実行が失敗したときWindows通知を出す
 
+[daily_notes.overrides]
+# "YYYY-MM-DD" = "保存先フォルダ内の完成パス.md"
+
 [privacy]
 # LLMへ送信する前にマスクする正規表現（ボールト内の日誌は原文のまま保持される）
 # 例: redact_patterns = ["(株)〇〇商事", "案件[A-Z]-\\d+", "\\S+@\\S+\\.co\\.jp"]
 redact_patterns = []
+# タイムラインで私的扱いにするタイトルの正規表現（文字列配列のみ）
+private_title_patterns = []
 replacement = "[REDACTED]"
 # hide_private_titles = true   # タイムラインで私的タイトルを伏せる
 
@@ -393,6 +432,11 @@ base_url = "http://localhost:5600"
 enabled = true
 claude_projects_dir = "~/.claude/projects"
 codex_sessions_dir = "~/.codex/sessions"  # Codex CLI ロールアウトログ（無ければ無効）
+# Grok CLI セッション（無ければ無効）
+grok_sessions_dir = "~/.grok/sessions"
+# Cursor: timestamp_ms を含む raw stream-json キャプチャの保存先を明示する
+# ネイティブ履歴の自動検出は行わない。既定は空文字（無効）
+# cursor_sessions_dir = "C:/captures/cursor-stream-json"
 # ブラウザ拡張の JSONL（Downloads/kaizenlog-browser-ai）。無ければ無効
 browser_export_dir = "~/Downloads/kaizenlog-browser-ai"
 # セッション表の「内容」列（初回依頼の先頭40字）。false で非表示。
@@ -481,12 +525,153 @@ timeout_seconds = 600
 '''
 
 
-def _upsert_toml_assignment(text: str, key: str, value: str) -> str:
-    """先頭の `key = ...` 行を置換する。無ければ末尾に追記する。"""
-    pattern = re.compile(rf"(?m)^({re.escape(key)}\s*=\s*).*$")
-    if pattern.search(text):
-        return pattern.sub(rf'\1"{value}"', text, count=1)
-    return text.rstrip() + f'\n{key} = "{value}"\n'
+_TOML_TABLE_RE = re.compile(r"^\s*\[([^\]\r\n]+)\]")
+
+
+def _line_newline(line: str, fallback: str) -> str:
+    if line.endswith("\r\n"):
+        return "\r\n"
+    if line.endswith("\n"):
+        return "\n"
+    return fallback
+
+
+def _unquoted_comment_index(value: str) -> int:
+    quote: str | None = None
+    escaped = False
+    for index, char in enumerate(value):
+        if quote == '"':
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif quote == "'":
+            if char == quote:
+                quote = None
+        elif char in {'"', "'"}:
+            quote = char
+        elif char == "#":
+            return index
+    return -1
+
+
+def _table_line_range(lines: list[str], table: str) -> tuple[int, int] | None:
+    start = None
+    for index, line in enumerate(lines):
+        match = _TOML_TABLE_RE.match(line.rstrip("\r\n"))
+        if not match:
+            continue
+        if start is not None:
+            return start, index
+        if match.group(1).strip() == table:
+            start = index + 1
+    return (start, len(lines)) if start is not None else None
+
+
+def _replace_toml_assignment_line(line: str, key: str, encoded: str, newline: str) -> str | None:
+    body = line.rstrip("\r\n")
+    match = re.match(rf"^(\s*{re.escape(key)}\s*=\s*)(.*)$", body)
+    if not match:
+        return None
+    prefix, rest = match.groups()
+    comment_at = _unquoted_comment_index(rest)
+    if comment_at >= 0:
+        value_part, comment = rest[:comment_at], rest[comment_at:]
+        spacing = value_part[len(value_part.rstrip()):]
+        return f"{prefix}{encoded}{spacing}{comment}{_line_newline(line, newline)}"
+    spacing = rest[len(rest.rstrip()):]
+    return f"{prefix}{encoded}{spacing}{_line_newline(line, newline)}"
+
+
+def _upsert_toml_assignment_in_table(
+    text: str, table: str, key: str, value: str, *, newline: str | None = None,
+) -> str:
+    """Update one assignment in its exact TOML table, preserving comments/newlines."""
+    encoded = json.dumps(value, ensure_ascii=False)
+    nl = newline or ("\r\n" if "\r\n" in text else "\n")
+    lines = text.splitlines(keepends=True)
+    table_range = _table_line_range(lines, table)
+    if table_range is not None:
+        start, end = table_range
+        for index in range(start, end):
+            replaced = _replace_toml_assignment_line(lines[index], key, encoded, nl)
+            if replaced is not None:
+                lines[index] = replaced
+                return "".join(lines)
+        insertion = f"{key} = {encoded}{nl}"
+        if end > start and lines[end - 1] and not lines[end - 1].endswith(("\n", "\r")):
+            lines[end - 1] += nl
+        lines.insert(end, insertion)
+        return "".join(lines)
+
+    suffix = text
+    if suffix and not suffix.endswith(("\n", "\r")):
+        suffix += nl
+    if suffix and not suffix.endswith(nl + nl):
+        suffix += nl
+    return suffix + f"[{table}]{nl}{key} = {encoded}{nl}"
+
+
+def _toml_table_has_assignment(text: str, table: str, key: str) -> bool:
+    lines = text.splitlines(keepends=True)
+    table_range = _table_line_range(lines, table)
+    if table_range is None:
+        return False
+    return any(
+        re.match(rf"^\s*{re.escape(key)}\s*=", lines[index].rstrip("\r\n"))
+        for index in range(*table_range)
+    )
+
+
+def get_daily_note_override(cfg: Config, day) -> str | None:
+    """Return the explicit completed relative path for one day, if present."""
+    return (getattr(cfg, "daily_note_overrides", {}) or {}).get(day.isoformat())
+
+
+def write_daily_note_override(
+    config_path: Path,
+    day,
+    relative_path: str,
+    *,
+    expected_bytes: bytes,
+) -> None:
+    """Persist one explicit daily-note choice while preserving unrelated bytes."""
+    config_path = Path(config_path)
+    with locked_read_modify_write(config_path):
+        current = config_path.read_bytes()
+        if current != expected_bytes:
+            raise ValueError("設定ファイルが変更されているためoverrideを保存できません")
+        try:
+            data = tomllib.loads(current.decode("utf-8"))
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            raise ValueError("設定ファイルを読み取れません") from exc
+        general = data.get("general")
+        vault_value = general.get("vault_dir") if isinstance(general, dict) else None
+        if not isinstance(vault_value, str) or not Path(vault_value).expanduser().is_absolute():
+            raise ValueError("override保存には絶対パスのgeneral.vault_dirが必要です")
+        from .note_paths import validate_daily_notes_dir, validate_daily_override
+
+        daily_dir = str(general.get("daily_notes_dir", "01 Daily Notes"))
+        base = validate_daily_notes_dir(Path(vault_value).expanduser(), daily_dir)
+        validate_daily_override(base, relative_path)
+        newline = "\r\n" if b"\r\n" in current else "\n"
+        text = current.decode("utf-8")
+        key = json.dumps(day.isoformat())
+        text = _upsert_toml_assignment_in_table(
+            text,
+            "daily_notes.overrides",
+            key,
+            relative_path,
+            newline=newline,
+        )
+        # Recheck immediately before the atomic replacement while the shared
+        # config lock is still held.  A second writer with the old bytes must
+        # fail instead of replacing the first writer's update.
+        if config_path.read_bytes() != expected_bytes:
+            raise ValueError("設定ファイルが変更されているためoverrideを保存できません")
+        atomic_write_text(config_path, text, newline="")
 
 
 def write_config_file(
@@ -495,27 +680,57 @@ def write_config_file(
     backend: str,
     model: str,
     merge: bool = False,
+    daily_notes_dir: str | None = None,
+    daily_note_format: str | None = None,
+    expected_bytes: bytes | None | object = _EXPECTED_BYTES_UNSET,
 ) -> None:
     """設定ファイルを原子的に書き込む。
 
     merge=False またはファイル未作成時はフルテンプレートを書く。
-    merge=True かつ既存ファイルがあるときは vault_dir / backend / model だけ
+    merge=True かつ既存ファイルがあるときは vault_dir / backend / model と、
+    明示された daily_notes_dir だけ
     キー単位で upsert し、categories.rules 等の追記を残す。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     vault_s = _toml_path_str(vault_dir)
 
-    if merge and path.is_file():
-        text = path.read_text(encoding="utf-8")
-        text = _upsert_toml_assignment(text, "vault_dir", vault_s)
-        text = _upsert_toml_assignment(text, "backend", backend)
-        text = _upsert_toml_assignment(text, "model", model)
-        atomic_write_text(path, text)
-        return
+    with locked_read_modify_write(path):
+        current_bytes = path.read_bytes() if path.is_file() else None
+        if expected_bytes is not _EXPECTED_BYTES_UNSET and current_bytes != expected_bytes:
+            raise ValueError("設定ファイルがプレビュー後に変更されました")
+        if merge and path.is_file():
+            with open(path, "r", encoding="utf-8", newline="") as stream:
+                text = stream.read()
+            newline = "\r\n" if "\r\n" in text else "\n"
+            text = _upsert_toml_assignment_in_table(text, "general", "vault_dir", vault_s, newline=newline)
+            text = _upsert_toml_assignment_in_table(text, "llm", "backend", backend, newline=newline)
+            text = _upsert_toml_assignment_in_table(
+                text, "llm.openai_compatible", "model", model, newline=newline,
+            )
+            if daily_notes_dir is not None:
+                text = _upsert_toml_assignment_in_table(
+                    text, "general", "daily_notes_dir", daily_notes_dir, newline=newline,
+                )
+            if daily_note_format is not None:
+                text = _upsert_toml_assignment_in_table(
+                    text, "general", "daily_note_format", daily_note_format, newline=newline,
+                )
+                if _toml_table_has_assignment(text, "daily_notes", "format"):
+                    text = _upsert_toml_assignment_in_table(
+                        text, "daily_notes", "format", daily_note_format, newline=newline,
+                    )
+            atomic_write_text(path, text, newline="")
+            return
 
-    content = render_config_template(vault_dir=vault_dir, backend=backend, model=model)
-    atomic_write_text(path, content)
+        content = render_config_template(
+            vault_dir=vault_dir,
+            backend=backend,
+            model=model,
+            daily_notes_dir=daily_notes_dir if daily_notes_dir is not None else "01 Daily Notes",
+            daily_note_format=daily_note_format if daily_note_format is not None else "YYYY-MM-DD",
+        )
+        atomic_write_text(path, content, newline="")
 
 
 def load_config(path: str | None = None) -> Config:
@@ -541,6 +756,18 @@ def load_config(path: str | None = None) -> Config:
     if "vault_dir" in general:
         cfg.vault_dir = Path(general["vault_dir"])
     cfg.daily_notes_dir = general.get("daily_notes_dir", cfg.daily_notes_dir)
+    if "daily_note_format" in general:
+        cfg.daily_note_format = str(general.get("daily_note_format"))
+    daily_notes = data.get("daily_notes", {})
+    if isinstance(daily_notes, dict):
+        if "daily_note_format" not in general and "format" in daily_notes:
+            cfg.daily_note_format = str(daily_notes.get("format"))
+        overrides = daily_notes.get("overrides", {})
+        if isinstance(overrides, dict):
+            cfg.daily_note_overrides = {
+                str(key): str(value) for key, value in overrides.items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
     cfg.experiments_dir = general.get("experiments_dir", cfg.experiments_dir)
     cfg.stats_dir = general.get("stats_dir", cfg.stats_dir)
     cfg.logs_dir = general.get("logs_dir", cfg.logs_dir)
@@ -556,6 +783,9 @@ def load_config(path: str | None = None) -> Config:
 
     privacy = data.get("privacy", {})
     cfg.privacy.redact_patterns = _as_str_list(privacy.get("redact_patterns", []), "privacy.redact_patterns")
+    cfg.privacy.private_title_patterns = _as_regex_list(
+        privacy.get("private_title_patterns", []), "privacy.private_title_patterns"
+    )
     cfg.privacy.replacement = privacy.get("replacement", cfg.privacy.replacement)
     if "hide_private_titles" in privacy:
         cfg.privacy.hide_private_titles = bool(privacy.get("hide_private_titles"))
@@ -580,6 +810,12 @@ def load_config(path: str | None = None) -> Config:
     )
     cfg.aiwork.codex_sessions_dir = aiwork.get(
         "codex_sessions_dir", cfg.aiwork.codex_sessions_dir
+    )
+    cfg.aiwork.grok_sessions_dir = aiwork.get(
+        "grok_sessions_dir", cfg.aiwork.grok_sessions_dir
+    )
+    cfg.aiwork.cursor_sessions_dir = aiwork.get(
+        "cursor_sessions_dir", cfg.aiwork.cursor_sessions_dir
     )
     cfg.aiwork.browser_export_dir = aiwork.get(
         "browser_export_dir", cfg.aiwork.browser_export_dir

@@ -1,5 +1,6 @@
 """第36弾: verdict_stage のスキーマと2段階判定の回帰テスト。"""
 from __future__ import annotations
+from kaizenlog.config import Config
 
 import json
 from datetime import date, timedelta
@@ -360,7 +361,7 @@ def test_actions_resync_changes_only_existing_target_tag_and_preserves_bytes():
 
 def test_actions_resync_uses_measurement_day_and_does_not_create_other_notes(tmp_path):
     notes_dir = tmp_path / "notes"
-    store = DailyNoteStore(notes_dir)
+    store = DailyNoteStore(Config(vault_dir=notes_dir.parent, daily_notes_dir=notes_dir.name))
     measurement_day = date(2026, 7, 30)
     start = f"<!-- {ACTIONS_MARKER}:start -->"
     end = f"<!-- {ACTIONS_MARKER}:end -->"
@@ -389,7 +390,7 @@ def test_actions_resync_uses_measurement_day_and_does_not_create_other_notes(tmp
 
 def test_actions_resync_requires_existing_marker_and_recent_measurement_day(tmp_path):
     notes_dir = tmp_path / "notes"
-    store = DailyNoteStore(notes_dir)
+    store = DailyNoteStore(Config(vault_dir=notes_dir.parent, daily_notes_dir=notes_dir.name))
     store.path_for(date(2026, 7, 30)).parent.mkdir()
     no_marker = "before\nKZN-20260729-002: target\nafter\n"
     store.path_for(date(2026, 7, 30)).write_text(no_marker, encoding="utf-8", newline="")

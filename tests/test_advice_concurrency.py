@@ -1,3 +1,4 @@
+from kaizenlog.config import Config
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,7 @@ from tests.test_advise_integration import DAY, VALID_GENERATED, _config
 def _setup(tmp_path):
     cfg = _config(tmp_path)
     cfg.aiwork.enabled = False
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     store.write_section(DAY, ACTIVITY_MARKER, "## Activity Log\n**合計**: 10m")
     return cfg, store
 

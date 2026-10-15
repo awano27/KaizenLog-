@@ -15,10 +15,16 @@ from datetime import date, timedelta
 from pathlib import Path
 from statistics import median
 
-from .aiwork import AISession
+from .aiwork import AISession, measured_metric_total
+from .file_lock import file_lock, lock_path_for, locked_read_modify_write
 from .focus import InputStats
 from .report import DailySummary
-from .vault import atomic_write_text, extract_section, upsert_section
+from .vault import (
+    atomic_write_text,
+    extract_section,
+    read_text_preserve_newlines,
+    upsert_section,
+)
 
 MEASUREMENTS_MARKER = "kaizenlog:measurements"
 
@@ -176,20 +182,33 @@ def compute_metric(
             return None
         return float(retry_chains)
     if metric == "ai_tool_errors":
-        return float(sum(s.tool_errors for s in cc_sessions))
+        total = measured_metric_total(
+            cc_sessions, "tool_errors", "tool_metrics_measurable"
+        )
+        return float(total) if total is not None else None
     if metric == "ai_tool_errors_per_session":
         if not cc_sessions:
             return None
-        total_err = float(sum(s.tool_errors for s in cc_sessions))
+        total_err = measured_metric_total(
+            cc_sessions, "tool_errors", "tool_metrics_measurable"
+        )
+        if total_err is None:
+            return None
         return round(total_err / len(cc_sessions), 1)
     if metric == "ai_interruptions":
-        return float(sum(s.interruptions for s in cc_sessions))
+        total = measured_metric_total(
+            cc_sessions, "interruptions", "tool_metrics_measurable"
+        )
+        return float(total) if total is not None else None
     if metric == "ai_avg_turns":
         if not cc_sessions:
             return 0.0
         return round(sum(s.user_turns for s in cc_sessions) / len(cc_sessions), 1)
     if metric == "ai_output_tokens":
-        return float(sum(int(s.output_tokens or 0) for s in cc_sessions))
+        total = measured_metric_total(
+            cc_sessions, "output_tokens", "output_tokens_measurable"
+        )
+        return float(total) if total is not None else None
     if metric.startswith("category_minutes:"):
         category = metric.split(":", 1)[1].strip()
         # 未知カテゴリを 0.0 にすると PASS: cat <= N が恒久偽PASSになる
@@ -227,6 +246,13 @@ def metric_from_stats(
     ai = stats.get("ai") if isinstance(stats.get("ai"), dict) else {}
     inp = stats.get("input") if isinstance(stats.get("input"), dict) else {}
 
+    def ai_metric_measured(capability: str) -> bool:
+        measurement = ai.get("measurement")
+        if not isinstance(measurement, dict):
+            return True
+        state = measurement.get(capability)
+        return not isinstance(state, str) or state == "measured"
+
     if metric == "context_switches":
         v = stats.get("context_switches")
         return float(v) if isinstance(v, (int, float)) else None
@@ -254,9 +280,13 @@ def metric_from_stats(
         v = ai.get("retry_chains")
         return float(v) if isinstance(v, (int, float)) else None
     if metric == "ai_tool_errors":
+        if not ai_metric_measured("tool_errors"):
+            return None
         v = ai.get("tool_errors")
         return float(v) if isinstance(v, (int, float)) else None
     if metric == "ai_tool_errors_per_session":
+        if not ai_metric_measured("tool_errors"):
+            return None
         errs = ai.get("tool_errors")
         sessions = ai.get("sessions")
         if not isinstance(errs, (int, float)) or not isinstance(sessions, (int, float)):
@@ -272,6 +302,8 @@ def metric_from_stats(
         v = lt.get("episode_count")
         return float(v) if isinstance(v, (int, float)) else None
     if metric == "ai_interruptions":
+        if not ai_metric_measured("interruptions"):
+            return None
         v = ai.get("interruptions")
         return float(v) if isinstance(v, (int, float)) else None
     if metric == "ai_avg_turns":
@@ -302,6 +334,8 @@ def metric_from_stats(
             return round(tsum / float(sessions), 1)
         return None
     if metric == "ai_output_tokens":
+        if not ai_metric_measured("output_tokens"):
+            return None
         v = ai.get("output_tokens")
         return float(v) if isinstance(v, (int, float)) else None
     if metric.startswith("category_minutes:"):
@@ -465,6 +499,23 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, str], bool]:
     return {}, False
 
 
+def _line_ending(line: str, content: str) -> str:
+    if line.endswith("\r\n"):
+        return "\r\n"
+    if line.endswith("\n"):
+        return "\n"
+    if line.endswith("\r"):
+        return "\r"
+    for candidate in content.splitlines(keepends=True):
+        if candidate.endswith("\r\n"):
+            return "\r\n"
+        if candidate.endswith("\n"):
+            return "\n"
+        if candidate.endswith("\r"):
+            return "\r"
+    return ""
+
+
 def _set_frontmatter_field(content: str, key: str, value: str) -> str:
     """frontmatter内の既存フィールドを書き換える（無ければ何もしない）。"""
     lines = content.splitlines(keepends=True)
@@ -476,7 +527,7 @@ def _set_frontmatter_field(content: str, key: str, value: str) -> str:
                 continue
             break
         if in_fm and re.match(rf"^{re.escape(key)}\s*:", line):
-            lines[i] = f"{key}: {value}\n"
+            lines[i] = f"{key}: {value}{_line_ending(line, content)}"
             break
     return "".join(lines)
 
@@ -562,7 +613,7 @@ def load_experiments(experiments_dir: Path) -> list[Experiment]:
     return experiments
 
 
-def record_measurement(
+def _record_measurement_unlocked(
     exp: Experiment,
     day: date,
     value: float,
@@ -577,8 +628,43 @@ def record_measurement(
     テーブルは4列（日付|値|目標達成|同曜日基準）。旧3列ノートの読込は
     `_parse_measurements` が先頭2列だけ見るため互換。
     """
-    content = exp.path.read_text(encoding="utf-8")
+    content = read_text_preserve_newlines(exp.path)
 
+    fields, valid_frontmatter = _parse_frontmatter(content)
+    if not valid_frontmatter or "metric" not in fields or "target" not in fields:
+        raise ExperimentError("実験ノートの定義が読み取れないため測定を保存できません")
+    try:
+        current_target_op, current_target_value = parse_target(fields["target"])
+    except ExperimentError as error:
+        raise ExperimentError("実験ノートの目標定義が不正なため測定を保存できません") from error
+    if (
+        fields["metric"] != exp.metric
+        or current_target_op != exp.target_op
+        or not math.isclose(current_target_value, exp.target_value, rel_tol=1e-12, abs_tol=1e-12)
+    ):
+        raise ExperimentError("実験ノートの指標・目標定義が変わったため測定を保存できません")
+
+    current_baseline: float | None = None
+    baseline_text = fields.get("baseline", "").strip()
+    if baseline_text:
+        try:
+            current_baseline = float(baseline_text)
+        except ValueError as error:
+            raise ExperimentError("実験ノートのbaselineが不正なため測定を保存できません") from error
+        if not math.isfinite(current_baseline):
+            raise ExperimentError("実験ノートのbaselineが不正なため測定を保存できません")
+    current_status = fields.get("status", exp.status)
+    current_deadline = exp.deadline
+    if fields.get("deadline"):
+        try:
+            current_deadline = date.fromisoformat(fields["deadline"][:10])
+        except ValueError as error:
+            raise ExperimentError("実験ノートの期限が不正なため測定を保存できません") from error
+    exp.baseline = current_baseline
+    exp.status = current_status
+    exp.deadline = current_deadline
+
+    exp.measurements = _parse_measurements(content)
     exp.measurements[day] = value
     met = target_met(value, exp.target_op, exp.target_value)
     wb_map = weekday_baselines or {}
@@ -607,6 +693,20 @@ def record_measurement(
 
     atomic_write_text(exp.path, content)
     return met
+
+
+def record_measurement(
+    exp: Experiment,
+    day: date,
+    value: float,
+    *,
+    weekday_baselines: dict[date, float | None] | None = None,
+) -> bool:
+    """Upsert one measured value while holding the experiment note lock."""
+    with locked_read_modify_write(exp.path):
+        return _record_measurement_unlocked(
+            exp, day, value, weekday_baselines=weekday_baselines
+        )
 
 
 EXPERIMENT_TEMPLATE = """\
@@ -654,22 +754,23 @@ def create_experiment(
     experiments_dir.mkdir(parents=True, exist_ok=True)
     safe_title = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
     path = experiments_dir / f"EXP {today.isoformat()} {safe_title}.md"
-    if path.exists():
-        raise ExperimentError(f"同名の実験が既に存在します: {path}")
-    # 開始前 baseline を渡されたときだけ数値を書く（空欄は従来どおり後で埋める）
-    baseline_field = f"{baseline:g}" if baseline is not None else ""
-    atomic_write_text(
-        path,
-        EXPERIMENT_TEMPLATE.format(
-            title=title,
-            today=today.isoformat(),
-            metric=metric,
-            target=target,
-            baseline=baseline_field,
-            deadline=deadline.isoformat(),
-            hypothesis=hypothesis or "（なぜこの変更が効くと考えるか）",
-        ),
-    )
+    with file_lock(lock_path_for(path)):
+        if path.exists():
+            raise ExperimentError(f"同名の実験が既に存在します: {path}")
+        # 開始前 baseline を渡されたときだけ数値を書く（空欄は従来どおり後で埋める）
+        baseline_field = f"{baseline:g}" if baseline is not None else ""
+        atomic_write_text(
+            path,
+            EXPERIMENT_TEMPLATE.format(
+                title=title,
+                today=today.isoformat(),
+                metric=metric,
+                target=target,
+                baseline=baseline_field,
+                deadline=deadline.isoformat(),
+                hypothesis=hypothesis or "（なぜこの変更が効くと考えるか）",
+            ),
+        )
     return path
 
 
@@ -821,7 +922,7 @@ def is_ai_day(stats: dict) -> bool:
         return False
 
 
-def create_abtest(
+def _create_abtest_unlocked(
     experiments_dir: Path,
     *,
     today: date,
@@ -858,8 +959,27 @@ def create_abtest(
         "`kaizenlog abtest finish` で確定します。\n"
         "<!-- kaizenlog:measurements:end -->\n"
     )
-    atomic_write_text(path, content)
+    with file_lock(lock_path_for(path)):
+        if path.exists():
+            raise ExperimentError(f"同名のA/Bテストが既に存在します: {path}")
+        atomic_write_text(path, content)
     return path
+
+
+def create_abtest(
+    experiments_dir: Path,
+    *,
+    today: date,
+    predict_pct: float,
+    days: int = 28,
+) -> Path:
+    experiments_dir = Path(experiments_dir)
+    experiments_dir.mkdir(parents=True, exist_ok=True)
+    with file_lock(experiments_dir / ".experiments.lock"):
+        path = _create_abtest_unlocked(
+            experiments_dir, today=today, predict_pct=predict_pct, days=days
+        )
+        return path
 
 
 def load_abtests(experiments_dir: Path) -> list[AbtestExperiment]:
@@ -993,7 +1113,7 @@ def _upsert_fm(content: str, key: str, value: str) -> str:
     return _insert_frontmatter_field(content, key, value)
 
 
-def finish_abtest(
+def _finish_abtest_unlocked(
     exp: AbtestExperiment,
     *,
     felt_pct: float,
@@ -1005,7 +1125,7 @@ def finish_abtest(
     as_of: date,
 ) -> AbtestExperiment:
     """frontmatter を更新して finished/invalid にする。"""
-    content = exp.path.read_text(encoding="utf-8")
+    content = read_text_preserve_newlines(exp.path)
     status = "invalid" if invalid_reason else "finished"
     content = _upsert_fm(content, "status", status)
     content = _upsert_fm(content, "felt_pct", f"{felt_pct:g}")
@@ -1029,6 +1149,30 @@ def finish_abtest(
     return exp
 
 
+def finish_abtest(
+    exp: AbtestExperiment,
+    *,
+    felt_pct: float,
+    card_rel_path: str | None,
+    measured_pct: float | None,
+    invalid_reason: str | None,
+    sample_ai: int,
+    sample_non: int,
+    as_of: date,
+) -> AbtestExperiment:
+    with locked_read_modify_write(exp.path):
+        return _finish_abtest_unlocked(
+            exp,
+            felt_pct=felt_pct,
+            card_rel_path=card_rel_path,
+            measured_pct=measured_pct,
+            invalid_reason=invalid_reason,
+            sample_ai=sample_ai,
+            sample_non=sample_non,
+            as_of=as_of,
+        )
+
+
 def _insert_frontmatter_field(content: str, key: str, value: str) -> str:
     """frontmatter 終了直前にフィールドを挿入。"""
     lines = content.splitlines(keepends=True)
@@ -1036,7 +1180,7 @@ def _insert_frontmatter_field(content: str, key: str, value: str) -> str:
         return content
     for i in range(1, len(lines)):
         if lines[i].strip() == "---":
-            lines.insert(i, f"{key}: {value}\n")
+            lines.insert(i, f"{key}: {value}{_line_ending(lines[i], content)}")
             return "".join(lines)
     return content
 

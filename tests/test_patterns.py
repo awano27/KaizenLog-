@@ -227,4 +227,5 @@ def test_build_stats_aggregates_ai_projects():
     assert s["ai_activity_blocks"] == summary.ai_activity_blocks
     assert s["ai"]["projects"]["ai-news"] == {
         "sessions": 2, "turns": 6, "errors": 2, "fragmented": 1,
-        "retry_chains": 0, "interruptions": 0}
+        "retry_chains": 0, "interruptions": 0,
+        "measurement": {"tool_errors": "measured", "interruptions": "measured"}}

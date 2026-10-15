@@ -66,6 +66,19 @@
     }
   }
 
+  // Consent is read at capture time, rather than once when a tab is opened.
+  // A storage read failure is deliberately fail-closed for the body.
+  function readSaveBody(callback) {
+    try {
+      chrome.storage.local.get({ saveBody: false }, (o) => {
+        const lastError = chrome.runtime && chrome.runtime.lastError;
+        callback(!lastError && !!o && o.saveBody === true);
+      });
+    } catch (_e) {
+      callback(false);
+    }
+  }
+
   /**
    * Observe DOM. On zero matches for warnAfterMs, console.warn once.
    * Selectors are brittle — never throw into the host page.
@@ -113,7 +126,6 @@
     const roleIndex = opts.roleIndex;
     const site = opts.site;
     const convPatterns = opts.convPatterns;
-    const saveBody = opts.saveBody;
     const preferredAttrs = opts.preferredAttrs || [];
     const text = (el.innerText || el.textContent || "").trim();
     if (!text) return;
@@ -121,17 +133,19 @@
     const messageRef = Lib
       ? Lib.messageRefFromElement(el, roleIndex, preferredAttrs)
       : "ord:" + roleIndex;
-    enqueue(
-      buildRecord({
-        site: site,
-        conversationId: cid,
-        role: role,
-        messageRef: messageRef,
-        text: text,
-        charCount: text.length,
-        saveBody: saveBody,
-      })
-    );
+    readSaveBody((saveBody) => {
+      enqueue(
+        buildRecord({
+          site: site,
+          conversationId: cid,
+          role: role,
+          messageRef: messageRef,
+          text: text,
+          charCount: text.length,
+          saveBody: saveBody,
+        })
+      );
+    });
   }
 
   global.KaizenLogBrowserAI = {

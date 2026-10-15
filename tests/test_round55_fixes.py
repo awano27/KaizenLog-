@@ -337,7 +337,7 @@ def test_u4_settlement_append_once(tmp_path: Path):
         "- [x] 見送り｜理由: 一度だけ\n"
         "- [ ] 採用\n"
     )
-    store = DailyNoteStore(notes)
+    store = DailyNoteStore(Config(vault_dir=notes.parent, daily_notes_dir=notes.name))
     store.write_section(DAY, DECISION_MARKER, section)
     cfg = Config(vault_dir=tmp_path, timezone="Asia/Tokyo")
     stats = {"day": DAY.isoformat(), "ai": {"retry_chains": 1}}

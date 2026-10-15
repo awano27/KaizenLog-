@@ -62,9 +62,11 @@ def _tool_errors_text(stats_list: list[dict]) -> str:
     peak_day = ""
     peak_n = 0
     any_data = False
+    unknown_days = 0
     for s in stats_list:
         ai = s.get("ai") if isinstance(s.get("ai"), dict) else {}
-        if "tool_errors" not in ai:
+        if not isinstance(ai.get('tool_errors'), (int, float)) or isinstance(ai.get('tool_errors'), bool):
+            unknown_days += 1
             continue
         any_data = True
         n = int(ai.get("tool_errors") or 0)
@@ -76,6 +78,8 @@ def _tool_errors_text(stats_list: list[dict]) -> str:
     if not any_data:
         return "(計測なし)"
     peak_s = f"{peak_day} に {peak_n} 件" if peak_day else f"最大 {peak_n} 件/日"
+    if unknown_days:
+        return f'ツールエラー: 測定済み日だけの合計 {total} 件（未計測 {unknown_days}日。30日総計は不明）。'
     return f"ツールエラー: 30日合計 {total} 件（最多日: {peak_s}）。"
 
 

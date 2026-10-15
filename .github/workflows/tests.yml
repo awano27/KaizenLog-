@@ -5,6 +5,9 @@ on:
     branches: ["main"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:
@@ -14,17 +17,109 @@ jobs:
         python-version: ["3.11", "3.12"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          package-manager-cache: false
       - name: Install
         run: pip install -e ".[dev]"
       - name: Run tests
         run: pytest -q
+      - name: Browser extension contracts
+        run: node --test tests/browser_extension.test.mjs
       - name: CLI smoke (help)
         run: kaizenlog --help
       - name: CLI smoke (init-config)
         run: kaizenlog init-config --output "${{ runner.temp }}/kaizenlog-smoke.toml"
       - name: CLI smoke (skill show)
         run: kaizenlog --config "${{ runner.temp }}/kaizenlog-smoke.toml" skill show
+
+  distribution:
+    needs: test
+    runs-on: windows-latest
+    env:
+      KAIZENLOG_ARTIFACT_ROOT: ${{ runner.temp }}/kaizenlog-artifacts
+      KAIZENLOG_BUILD_ENV: ${{ runner.temp }}/kaizenlog-build-env
+      KAIZENLOG_INSPECTION_ENV: ${{ runner.temp }}/kaizenlog-inspection-env
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Create dedicated build environment
+        shell: pwsh
+        run: |
+          python -m venv "$env:KAIZENLOG_BUILD_ENV"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $buildPython = Join-Path $env:KAIZENLOG_BUILD_ENV "Scripts/python.exe"
+          & $buildPython -m pip install --upgrade build "setuptools>=68" wheel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build source ZIP with provenance
+        shell: pwsh
+        run: |
+          ./scripts/build-source-manifest.ps1 -OutputDir (Join-Path $env:KAIZENLOG_ARTIFACT_ROOT "source")
+      - name: Build wheel outside source checkout
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "kaizenlog-wheel-source"
+          New-Item -ItemType Directory -Path $stage -ErrorAction Stop | Out-Null
+          foreach ($member in @("src", "pyproject.toml", "README.md", "LICENSE")) {
+            Copy-Item -LiteralPath $member -Destination (Join-Path $stage $member) -Recurse -ErrorAction Stop
+          }
+          $buildPython = Join-Path $env:KAIZENLOG_BUILD_ENV "Scripts/python.exe"
+          & $buildPython -m build --wheel --no-isolation --outdir (Join-Path $env:KAIZENLOG_ARTIFACT_ROOT "wheelhouse") $stage
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Download runtime wheelhouse and install offline
+        shell: pwsh
+        run: |
+          $wheelhouse = Join-Path $env:KAIZENLOG_ARTIFACT_ROOT "wheelhouse"
+          $wheel = @(Get-ChildItem -LiteralPath $wheelhouse -Filter "kaizenlog-*.whl" -File)
+          if ($wheel.Count -ne 1) { throw "Expected exactly one local product wheel" }
+          $buildPython = Join-Path $env:KAIZENLOG_BUILD_ENV "Scripts/python.exe"
+          & $buildPython -m pip download --only-binary=:all: --dest $wheelhouse $wheel[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $buildPython -m venv "$env:KAIZENLOG_INSPECTION_ENV"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $inspectionPython = Join-Path $env:KAIZENLOG_INSPECTION_ENV "Scripts/python.exe"
+          & $inspectionPython -m pip install --no-index --find-links $wheelhouse $wheel[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Installed wheel fixture smoke
+        shell: pwsh
+        run: |
+          $inspectionPython = Join-Path $env:KAIZENLOG_INSPECTION_ENV "Scripts/python.exe"
+          $cli = Join-Path $env:KAIZENLOG_INSPECTION_ENV "Scripts/kaizenlog.exe"
+          $report = Join-Path $env:KAIZENLOG_ARTIFACT_ROOT "evidence/wheel-smoke.json"
+          python packaging/verify_install.py --cli $cli --package-python $inspectionPython --output $report
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build Windows portable CLI and GUI
+        shell: pwsh
+        run: |
+          $buildPython = Join-Path $env:KAIZENLOG_BUILD_ENV "Scripts/python.exe"
+          ./scripts/build-portable.ps1 -ExistingBuildPython $buildPython -OutputDir "${{ github.workspace }}/artifacts/portable" -PyInstallerVersion "6.22.3"
+      - name: Verify portable inventory and extracted CLI
+        shell: pwsh
+        run: |
+          ./scripts/verify-portable.ps1 -InputDir "${{ github.workspace }}/artifacts/portable"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $extracted = Join-Path $env:RUNNER_TEMP "kaizenlog-portable-extracted"
+          Expand-Archive -LiteralPath "${{ github.workspace }}/artifacts/portable/kaizenlog-portable-windows-x64.zip" -DestinationPath $extracted -ErrorAction Stop
+          $cli = Join-Path $extracted "cli/kaizenlog.exe"
+          $report = Join-Path $env:KAIZENLOG_ARTIFACT_ROOT "evidence/portable-smoke.json"
+          python packaging/verify_install.py --cli $cli --output $report
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & (Join-Path $extracted "gui/kaizenlog-home.exe") --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Save candidate artifacts and verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kaizenlog-windows-candidate
+          path: |
+            ${{ runner.temp }}/kaizenlog-artifacts
+            ${{ github.workspace }}/artifacts/portable
+          if-no-files-found: error
+          retention-days: 14

@@ -24,6 +24,7 @@ from kaizenlog.vault import (
 from kaizenlog.weekly_context import render_weekly_context
 from kaizenlog.report import DailySummary
 from kaizenlog.aiwork import AISession
+from kaizenlog.config import Config
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -73,9 +74,9 @@ def test_g1_goal_section_ownership_survives_advice_upsert(tmp_path: Path):
 
 def test_g1_write_goal_and_stats_fields(tmp_path: Path):
     day = date(2026, 7, 29)
-    notes = tmp_path / "notes"
+    cfg = Config(vault_dir=tmp_path, daily_notes_dir="notes")
     path, g = write_goal(
-        notes,
+        cfg,
         day,
         "リリースノートの下書き @執筆・ノート",
         known_categories=KNOWN,

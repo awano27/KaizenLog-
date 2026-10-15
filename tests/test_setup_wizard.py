@@ -54,12 +54,12 @@ def test_setup_yes_writes_appdata_config(tmp_path, monkeypatch):
     opts = SetupOptions(
         config_path=cfg_path,
         vault=vault,
-        yes=True,
+        yes=False,
         skip_aw=True,
         skip_task=True,
         skip_skills=True,
     )
-    code = run_setup(opts, ui=FakeUI([]))
+    code = run_setup(opts, ui=FakeUI([3]))
     assert code == 0
     assert cfg_path.is_file()
     text = cfg_path.read_text(encoding="utf-8")
@@ -160,7 +160,7 @@ def test_setup_installs_skills_when_not_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr("kaizenlog.setup.run_doctor", lambda cfg, p=None: ("ok", False))
 
     run_setup(
-        SetupOptions(config_path=cfg, vault=vault, yes=True, skip_aw=True, skip_task=True, skip_skills=False),
-        ui=FakeUI([]),
+        SetupOptions(config_path=cfg, vault=vault, yes=False, skip_aw=True, skip_task=True, skip_skills=False),
+        ui=FakeUI([0, True]),
     )
     assert installed == [str(vault.resolve())]

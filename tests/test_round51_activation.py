@@ -190,7 +190,7 @@ def test_a5_dirty_none_old_stats_ok():
 def test_a6_outside_bytes_preserved(tmp_path: Path):
     from kaizenlog.vault import DailyNoteStore
 
-    store = DailyNoteStore(tmp_path)
+    store = DailyNoteStore(Config(vault_dir=tmp_path, daily_notes_dir=""))
     handwriting = "手書きメモ keep-me\n"
     other = upsert_section("", GOAL_MARKER, "## 🎯 目標\n- 手書き目標\n")
     content = "---\ndate: 2026-08-03\n---\n\n" + handwriting + other
@@ -428,7 +428,7 @@ def test_d2_answers_preserved_byte_equal(tmp_path: Path):
     answered = body.replace("- A:", "- A: 手で直した", 1)
     assert has_reflect_answers(answered)
 
-    store = DailyNoteStore(tmp_path / "01 Daily Notes")
+    store = DailyNoteStore(Config(vault_dir=tmp_path, daily_notes_dir="01 Daily Notes"))
     # 手書き + GOAL を先に置き、reflect 再書き込みで区間外が不変であることを検証
     seed = (
         "---\ndate: 2026-08-02\n---\n\n"
@@ -546,7 +546,7 @@ def test_e_section_order_and_finalize_idempotent(tmp_path: Path):
         content, EFFORT_MARKER, "## 工数\n", position="top"
     )
 
-    store = DailyNoteStore(tmp_path)
+    store = DailyNoteStore(Config(vault_dir=tmp_path, daily_notes_dir=""))
     store.path_for(DAY).write_text(content, encoding="utf-8")
     _finalize_note_layout(store, DAY)
     once = store.read(DAY) or ""

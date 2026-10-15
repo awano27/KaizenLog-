@@ -1,3 +1,4 @@
+from kaizenlog.config import Config
 import json
 
 import pytest
@@ -21,7 +22,7 @@ def test_append_preserves_readable_final_record_and_existing_bytes(tmp_path, tai
 def test_advise_after_partial_tail_saves_readable_id_and_reuses_it(monkeypatch, tmp_path):
     cfg = _config(tmp_path)
     cfg.aiwork.enabled = False
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     store.write_section(DAY, ACTIVITY_MARKER, "## Activity Log\n\n**合計**: 10m")
     cfg.memory_path.mkdir(parents=True)
     path = cfg.memory_path / "suggestions.jsonl"

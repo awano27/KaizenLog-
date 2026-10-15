@@ -36,7 +36,7 @@ def _config(tmp_path) -> Config:
 
 
 def _note_with_checked_action(cfg: Config) -> DailyNoteStore:
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     store.write_section(DAY, ACTIVITY_MARKER, "## 📊 Activity Log\n\n**合計**: 10m")
     store.write_section(
         DAY,
@@ -113,7 +113,7 @@ def test_note_write_failure_persists_completion_but_not_new_actions(monkeypatch,
 def test_cmd_advise_passes_current_and_baseline_evidence(monkeypatch, tmp_path):
     cfg = _config(tmp_path)
     cfg.llm.lookback_days = 3
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     store.write_section(DAY, ACTIVITY_MARKER, "## 📊 Activity Log\n\n**合計**: 2h")
     cfg.stats_path.mkdir(parents=True)
 
@@ -160,7 +160,7 @@ def test_cmd_advise_passes_current_and_baseline_evidence(monkeypatch, tmp_path):
 
 def test_cmd_advise_downgrades_mismatched_stats(monkeypatch, tmp_path):
     cfg = _config(tmp_path)
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     store.write_section(DAY, ACTIVITY_MARKER, "## 📊 Activity Log\n\nnew activity")
     cfg.stats_path.mkdir(parents=True)
     payload = {
@@ -190,7 +190,7 @@ def test_cmd_advise_downgrades_mismatched_stats(monkeypatch, tmp_path):
 
 def test_dry_run_redacts_system_and_user_and_writes_nothing(capsys, tmp_path):
     cfg = _config(tmp_path)
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     store.write_section(DAY, ACTIVITY_MARKER, "## 📊 Activity Log\n\nSECRET user")
     custom_prompt = tmp_path / "system-prompt.md"
     custom_prompt.write_text("SECRET system", encoding="utf-8")

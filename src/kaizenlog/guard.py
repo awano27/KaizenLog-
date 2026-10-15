@@ -716,8 +716,17 @@ def build_hook_command(*, python_exe: str, config_path: str | None) -> str:
     return " ".join(parts)
 
 
-def build_hooks_snippet(command: str) -> dict:
-    """Claude Code settings.json 用 hooks 断片。"""
+def build_hooks_snippet(
+    command: str,
+    *,
+    preflight_command: str | None = None,
+) -> dict:
+    """Claude Code settings.json 用 hooks 断片。
+
+    ``preflight_command`` is optional so existing hook installs retain their
+    exact UserPromptSubmit/Stop behaviour until the CLI explicitly enables the
+    SessionStart integration.
+    """
     entry = {
         "matcher": "",
         "hooks": [
@@ -727,21 +736,41 @@ def build_hooks_snippet(command: str) -> dict:
             }
         ],
     }
-    return {
+    snippet = {
         "UserPromptSubmit": [entry],
         "Stop": [json.loads(json.dumps(entry))],  # copy
     }
+    if preflight_command:
+        snippet["SessionStart"] = [
+            {
+                "matcher": "",
+                "hooks": [{"type": "command", "command": preflight_command}],
+            }
+        ]
+    return snippet
 
 
 def _is_kaizenlog_guard_command(cmd: str) -> bool:
     c = (cmd or "").lower()
-    return "kaizenlog" in c and "guard" in c and "--hook" in c
+    return (
+        "kaizenlog" in c
+        and ("guard" in c or " preflight --hook" in c)
+        and ("--hook" in c or "--preflight-hook" in c)
+    )
 
 
 def merge_hooks_into_settings(
-    settings: dict, snippet: dict
+    settings: dict, snippet: dict, *, preflight_command: str | None = None
 ) -> dict:
     """settings に hooks を冪等マージ。他フック不可侵。kaizenlog guard のみ置換。"""
+    if preflight_command and "SessionStart" not in snippet:
+        snippet = dict(snippet)
+        snippet["SessionStart"] = [
+            {
+                "matcher": "",
+                "hooks": [{"type": "command", "command": preflight_command}],
+            }
+        ]
     out = json.loads(json.dumps(settings))  # deep copy
     hooks = out.setdefault("hooks", {})
     if not isinstance(hooks, dict):
@@ -799,6 +828,8 @@ def merge_hooks_into_settings(
 def install_hooks_write(
     settings_path: Path,
     command: str,
+    *,
+    preflight_command: str | None = None,
 ) -> Path:
     """settings.json にマージ書き込み。bak を返す。JSON不正なら例外。"""
     settings_path = Path(settings_path)
@@ -814,8 +845,10 @@ def install_hooks_write(
         data = {}
         settings_path.parent.mkdir(parents=True, exist_ok=True)
 
-    snippet = build_hooks_snippet(command)
-    merged = merge_hooks_into_settings(data, snippet)
+    snippet = build_hooks_snippet(command, preflight_command=preflight_command)
+    merged = merge_hooks_into_settings(
+        data, snippet, preflight_command=preflight_command
+    )
 
     # backup
     bak = settings_path

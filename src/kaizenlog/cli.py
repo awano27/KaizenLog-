@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from time import monotonic
 from pathlib import Path
+from typing import Sequence
 from zoneinfo import ZoneInfo
 
 from .advisor import (
@@ -126,6 +127,9 @@ from .focus import compute_input_stats
 from .reliability import FailureReason, QualityState
 from .intervention import detect_time_sinks, render_leechblock_options, render_plan, suggest_rules
 from .config import Config, ConfigError, find_config_file, load_config
+from .file_lock import locked_read_modify_write
+from .note_paths import DailyNoteResolutionError
+from .journal_service import execute_journal, preview_journal
 from .experiments import (
     METRIC_DESCRIPTIONS,
     ExperimentError,
@@ -156,6 +160,7 @@ from .vault import (
     atomic_write_text,
     extract_heading_section,
     extract_section,
+    read_text_preserve_newlines,
     upsert_section,
 )
 from .verdict import (
@@ -227,8 +232,8 @@ def _format_repeat_prompt_line(
     skill_id = top[0].id
     return (
         f"🔁 繰り返している依頼(台帳の最終観測): {body}\n"
-        f"     → `kaizenlog prompts skill {skill_id}` でスキル化できます"
-        f"(skilled にすると本行から消えます)"
+        f"     → `kaizenlog prompts --roi` で計測を確認できます。"
+        f"採用後に前後の減少を観測できれば `kaizenlog prompts export {skill_id}` で下書きを作れます"
     )
 
 
@@ -455,6 +460,7 @@ def cmd_generate(
     section = render_markdown(
         summary,
         tz,
+        private_title_patterns=getattr(cfg.privacy, 'private_title_patterns', ()),
         min_block_minutes=cfg.min_block_minutes,
         input_stats=input_stats,
         session_spans=session_spans,
@@ -597,7 +603,7 @@ def cmd_generate(
     if change_table:
         section = section.rstrip() + "\n\n" + change_table
 
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     path = store.write_section(day, ACTIVITY_MARKER, section)
     print(f"✅ Activity Log を書き込みました: {path}")
     print(f"   合計 {summary.total_minutes:.0f}分 / {len(summary.blocks)}ブロック"
@@ -816,7 +822,7 @@ def cmd_generate(
         if prev_note is not None:
             updated = apply_verdicts_to_advice_note(prev_note, judged)
             if updated is not None:
-                atomic_write_text(store.path_for(proposal_day), updated)
+                _write_daily_note_if_unchanged(store, proposal_day, prev_note, updated)
 
     # A1b: 遅延 PASS バックフィル（提案翌日に stats が無かった行を後追い）
     # 測定日 = done_date+1（行動効果）/ 無ければ提案日+1（提案妥当性）
@@ -866,7 +872,7 @@ def cmd_generate(
             if prev_note is not None:
                 updated = apply_verdicts_to_advice_note(prev_note, [entry])
                 if updated is not None:
-                    atomic_write_text(store.path_for(prop_day), updated)
+                    _write_daily_note_if_unchanged(store, prop_day, prev_note, updated)
 
     # C3: 判定結果が更新された測定日自身の ACTIONS を再同期する。
     # backfill の as_of（実行日）ではなく各 entry.verdict_date をキーにする。
@@ -959,11 +965,33 @@ def cmd_generate(
             file=sys.stderr,
         )
 
+    from .delight_views import write_daily_anniversaries
+    write_daily_anniversaries(cfg, day)
+
     # §A3/D2: 区間並び替え + 免責注釈の脚注集約
     _finalize_note_layout(store, day)
     # A1: finalize 後の ACTIVITY 本文で activity_sha256 を確定（advise 照合と一致させる）
     _resync_stats_activity_fingerprint(cfg, store, day)
     return path
+
+
+def cmd_generate_skip_catch_up(cfg: Config, day: date) -> int:
+    """Generate one journal through the typed preview/execute boundary.
+
+    This path is intentionally separate from the legacy ``generate`` body:
+    it must not run automatic backfill, retro-advice, or provider discovery.
+    The journal service owns the snapshot and persistence contract; the CLI
+    only translates its typed result into a process status.
+    """
+    preview = preview_journal(cfg, day)
+    result = execute_journal(cfg, preview)
+    status = getattr(result, "status", "failed")
+    if status in {"generated", "already_generated"}:
+        print(f"✅ 日誌を生成しました: {day.isoformat()}")
+        return 0
+    reason = getattr(result, "error", None) or getattr(preview, "reason", None) or status
+    print(f"⚠️ 日誌を生成できませんでした: {reason}", file=sys.stderr)
+    return 1
 
 
 def _resync_stats_activity_fingerprint(
@@ -981,22 +1009,34 @@ def _resync_stats_activity_fingerprint(
     path = cfg.stats_path / f"{day.isoformat()}.json"
     if not path.is_file():
         return
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return
-    if not isinstance(data, dict):
-        return
     new_fp = activity_fingerprint(activity_md)
-    if data.get("activity_sha256") == new_fp:
-        return
-    data["activity_sha256"] = new_fp
-    from .vault import atomic_write_text
+    with locked_read_modify_write(path):
+        try:
+            data = json.loads(read_text_preserve_newlines(path))
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict):
+            return
+        if data.get("activity_sha256") == new_fp:
+            return
+        data["activity_sha256"] = new_fp
+        from .vault import atomic_write_text
 
-    atomic_write_text(
-        path,
-        json.dumps(data, ensure_ascii=False, indent=1),
-    )
+        atomic_write_text(
+            path,
+            json.dumps(data, ensure_ascii=False, indent=1),
+        )
+
+
+def _write_daily_note_if_unchanged(
+    store: DailyNoteStore, day: date, expected: str, updated: str
+) -> Path:
+    """Apply a whole-note transform only when its read snapshot is still current."""
+    with store.locked_note(day) as (path, current):
+        if current != expected:
+            raise RuntimeError(f"日次ノートが変更されました。再実行してください: {path}")
+        atomic_write_text(path, updated)
+    return path
 
 
 def _log_digest_skipped(
@@ -1155,7 +1195,7 @@ def _write_digest_for_day(
                 after = after[2:]
             elif after.startswith("\n"):
                 after = after[1:]
-            atomic_write_text(store.path_for(day), before + after)
+            _write_daily_note_if_unchanged(store, day, content, before + after)
     return False
 
 
@@ -1173,7 +1213,7 @@ def _finalize_note_layout(store: DailyNoteStore, day: date) -> None:
     updated = reorder_sections(content)
     updated = consolidate_disclaimers(updated, max_inline=1)
     if updated != content:
-        atomic_write_text(store.path_for(day), updated)
+        _write_daily_note_if_unchanged(store, day, content, updated)
 
 
 def _resync_measurement_day_actions(
@@ -1219,7 +1259,7 @@ def _resync_measurement_day_actions(
         if updated is None:
             continue
         path = store.path_for(measurement_day)
-        atomic_write_text(path, updated)
+        _write_daily_note_if_unchanged(store, measurement_day, note, updated)
         print(f"📌 判定日 ACTIONS を再同期しました: {path}")
 
 
@@ -1403,7 +1443,7 @@ def catch_up_yesterday(cfg: Config, today: date) -> CatchUpResult:
         result.advise = "skipped"
         return result
     try:
-        store = DailyNoteStore(cfg.daily_notes_path)
+        store = DailyNoteStore(cfg)
         note = store.read(yesterday)
         if not note:
             return result
@@ -1513,7 +1553,7 @@ def cmd_morning(cfg: Config, day: date, *, skip_catch_up: bool = False) -> int:
             catch_up = CatchUpResult(generate="not-needed", advise="skipped")
         else:
             catch_up = catch_up_yesterday(cfg, day)
-        store = DailyNoteStore(cfg.daily_notes_path)
+        store = DailyNoteStore(cfg)
         entries = load_entries(cfg.memory_path)
 
         # §A4: 前日 digest を「昨日のふりかえり」として転記（再計算しない）
@@ -1526,7 +1566,7 @@ def cmd_morning(cfg: Config, day: date, *, skip_catch_up: bool = False) -> int:
         try:
             from .goal import ensure_goal_placeholder
 
-            ensure_goal_placeholder(cfg.daily_notes_path, day)
+            ensure_goal_placeholder(cfg, day)
         except Exception as e:
             print(f"⚠️  目標プレースホルダをスキップ: {type(e).__name__}", file=sys.stderr)
 
@@ -1615,7 +1655,7 @@ def _write_morning_yesterday_brief(store: DailyNoteStore, day: date) -> None:
     if "## 🌅 昨日のふりかえり" not in body:
         body = "## 🌅 昨日のふりかえり\n\n" + body.lstrip()
     link = f"- 前日の日報: [[{yesterday.isoformat()}#📝 日報ドラフト]]"
-    if link not in body:
+    if extract_section(prev, NIPPOU_MARKER) and link not in body:
         body = body.rstrip() + "\n" + link + "\n"
     store.write_section(day, DIGEST_MARKER, body, position="top")
     print(f"🌅 昨日のふりかえりを転記しました（{yesterday.isoformat()}）")
@@ -1719,6 +1759,8 @@ def _write_decision_settlement(
 
 def cmd_backfill(cfg: Config, days: int, end_day: date) -> int:
     """統計の無い過去日をまとめて生成する。生成できた日数を返す。"""
+    if days < 1:
+        raise ValueError('補完日数は1以上で指定してください。')
     targets = missing_days(cfg.stats_path, end_day, days)
     if not targets:
         print(f"✅ 過去{days}日に欠損はありません。")
@@ -1726,13 +1768,15 @@ def cmd_backfill(cfg: Config, days: int, end_day: date) -> int:
     print(f"🔄 欠損 {len(targets)}日分を補完します: "
           + ", ".join(d.isoformat() for d in targets))
     done = 0
-    for d in targets:
+    for index, d in enumerate(targets, 1):
+        print(f'[{index}/{len(targets)}] {d.isoformat()} を生成中…', flush=True)
         try:
             cmd_generate(cfg, d)
             done += 1
         except ActivityWatchError as e:
             print(f"⚠️  {d} の補完に失敗: {e}", file=sys.stderr)
             break  # ActivityWatch自体に繋がらないなら以降も無駄
+    print(f'補完結果: 完了 {done}/{len(targets)}日、未完了 {len(targets) - done}日。')
     return done
 
 
@@ -1853,7 +1897,12 @@ def _save_advice_with_entries_locked(
     append_payload = entries_payload(entries, original_ledger[-1:])
 
     try:
-        path = store.write_section(day, ADVICE_MARKER, advice_md)
+        path = store.write_section(
+            day,
+            ADVICE_MARKER,
+            advice_md,
+            expected_bytes=original_note,
+        )
         current_note = note_path.read_bytes()
         if written_note is None:
             written_note = current_note
@@ -1882,7 +1931,17 @@ def _save_advice_with_entries_locked(
                 elif current != written_note:
                     failed_restore.append(str(target))
                     continue
-                if original is None:
+                if target == note_path:
+                    with store.locked_note(day, expected_bytes=current) as (locked_path, _):
+                        actual_locked = locked_path.read_bytes() if locked_path.is_file() else None
+                        if actual_locked != current:
+                            failed_restore.append(str(target))
+                            continue
+                        if original is None:
+                            locked_path.unlink(missing_ok=True)
+                        else:
+                            atomic_write_bytes(locked_path, original)
+                elif original is None:
                     target.unlink(missing_ok=True)
                 else:
                     atomic_write_bytes(target, original)
@@ -1946,7 +2005,7 @@ def _prepare_advice_memory(cfg: Config, store: DailyNoteStore, day: date, dry_ru
 
 
 def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     content = store.read(day)
     # SystemExitはBaseException派生でmain()のexcept Exceptionを素通りし、
     # 実行ログ・失敗通知なしに死ぬ（夜間実行では発覚経路が消える）。AdvisorErrorで投げる
@@ -2105,8 +2164,14 @@ def cmd_advise(cfg: Config, day: date, dry_run: bool = False) -> Path | None:
     except AdviceContractError as e:
         # 契約違反でも確定事実サマリーだけは残す（静かな失敗を防ぐ）。例外は再送出。
         try:
+            from .advice_fallback import archive_evidence, safe_text
+
+            try:
+                archive_evidence(cfg, day, evidence_ctx)
+            except OSError:
+                print("⚠️  縮退診断の保存に失敗しました", file=sys.stderr)
             with memory_lock(cfg.memory_path):
-                store.write_section(day, ADVICE_MARKER, _degraded_advice_section(evidence_ctx))
+                store.write_section(day, ADVICE_MARKER, safe_text(_degraded_advice_section(evidence_ctx), cfg))
         except Exception:
             _safe_log_advise_health(
                 cfg, day=day, outcome="failed",
@@ -2249,7 +2314,7 @@ def _sync_checkbox_statuses(cfg: Config, day: date) -> tuple[list, int]:
     cmd_advise と同じ走査幅（当日 + 転記窓 + 未完了提案日）。
     戻り値: (統合後 entries, 更新件数)
     """
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     entries = load_entries(cfg.memory_path)
     status_updates = _checkbox_status_updates(store, day, entries)
     if status_updates:
@@ -2270,7 +2335,7 @@ def cmd_goal(
     from .goal import read_goal, write_goal, write_goal_achieved
 
     known = known_category_names(cfg.rules)
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
 
     if achieved is not None:
         if not (0 <= int(achieved) <= 100):
@@ -2296,7 +2361,7 @@ def cmd_goal(
     try:
         if has_text:
             path, g = write_goal(
-                cfg.daily_notes_path,
+                cfg,
                 day,
                 goal_arg,
                 known_categories=known,
@@ -2304,7 +2369,7 @@ def cmd_goal(
             )
         else:
             path, g = write_goal_achieved(
-                cfg.daily_notes_path,
+                cfg,
                 day,
                 int(achieved),  # type: ignore[arg-type]
                 known_categories=known,
@@ -2372,7 +2437,7 @@ def cmd_today(
     from .goal import read_goal
 
     known = known_category_names(cfg.rules)
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     g = read_goal(store.read(day), known)
     if g is None:
         print("🎯 目標: 未設定（`kaizenlog goal \"...\"` で設定）")
@@ -2510,7 +2575,7 @@ def cmd_done(cfg: Config, action_id: str, day: date) -> int:
     done = mark_entry_done(entry, day)
     append_entries(cfg.memory_path, [done])
     # 当日ノートの 📌 を再描画（無ければ Memory のみ）
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     note = store.read(day)
     if note is None:
         print(f"⚠️  当日ノートが無いためノート同期をスキップしました: {store.path_for(day)}")
@@ -2544,12 +2609,24 @@ def _degraded_advice_section(evidence_ctx) -> str:
         "## 🚀 Kaizen（AIからの改善提案）",
         "",
         "⚠️ 本日は提案の生成が出力契約を満たさず、保存できませんでした"
-        "（詳細は `kaizenlog status`）。",
-        "以下は当日の確定事実サマリーです。",
+        "。",
+        "原因と復旧状況は `kaizenlog status` で確認できます。",
+        "📌 採用済みのアクションは引き続き有効です。",
     ]
-    md = getattr(evidence_ctx, "markdown", None) if evidence_ctx is not None else None
-    if md:
-        lines.extend(["", md])
+    summary = getattr(evidence_ctx, "reader_summary", None)
+    if isinstance(summary, str) and summary.strip():
+        lines.extend(["", summary.strip()])
+    notes = getattr(evidence_ctx, "reader_notes", ())
+    if isinstance(notes, (tuple, list)):
+        lines.extend(str(note) for note in notes if isinstance(note, str) and note.strip())
+    candidates = getattr(evidence_ctx, "insight_candidates", ())
+    if isinstance(candidates, (tuple, list)) and candidates:
+        first = candidates[0]
+        if isinstance(first, (tuple, list)) and len(first) == 2 and isinstance(first[1], str):
+            # Display only: no action checkbox, KZN ID or ledger mutation.
+            candidate = re.sub(r"KZN-[\w-]+|\[[ xX]\]", "", first[1])
+            candidate = " ".join(candidate.split())[:300]
+            lines.extend(["", "参考（LLM提案未生成のため過去候補から機械選出）: " + candidate])
     return "\n".join(lines)
 
 
@@ -2650,11 +2727,26 @@ def cmd_monthly(
     stats_list = load_month_stats(cfg.stats_path, year, mon)
     entries = load_entries(cfg.memory_path)
     rep = aggregate_monthly(stats_list, entries, year=year, month=mon)
-    body = render_monthly_markdown(rep)
+    from .delight_views import load_monthly_human_overlays
+
+    human_overlays = load_monthly_human_overlays(cfg, year, mon)
+    source_stats_by_day = {
+        str(stat.get("day")): stat
+        for stat in stats_list
+        if isinstance(stat, dict) and isinstance(stat.get("day"), str)
+    }
+    body = render_monthly_markdown(
+        rep,
+        human_overlays=human_overlays,
+        source_stats_by_day=source_stats_by_day,
+    )
+    from .delight_views import preview_monthly_album, write_monthly_album
     print(body)
+    print(preview_monthly_album(cfg, year, mon))
     if not write:
         return 0
     path = write_monthly(cfg.monthly_path, year, mon, body)
+    write_monthly_album(cfg, year, mon)
     print(f"\n✅ 月次レポートを書き込みました: {path}")
     return 0
 
@@ -2766,7 +2858,7 @@ def cmd_rehumanize(
         n = max(1, int(days))
         targets = [today - timedelta(days=i) for i in range(n)]
 
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     backup_root: Path | None = None
     if write:
         stamp = datetime.now(tz).strftime("%Y%m%d-%H%M%S")
@@ -2902,7 +2994,7 @@ def cmd_rehumanize(
                 updated = upsert_section(updated, ADVICE_MARKER, new_advice)
             if actions_changed and new_actions is not None:
                 updated = upsert_section(updated, ACTIONS_MARKER, new_actions)
-            atomic_write_text(path, updated)
+            _write_daily_note_if_unchanged(store, day, content, updated)
         except OSError as e:
             print(f"  ⚠️  書き込み失敗 {day.isoformat()}: {e} → スキップ")
             counts.skip("書き込み失敗")
@@ -2932,8 +3024,10 @@ def cmd_rehumanize(
 
 def _auto_write_nippou(cfg: Config, day: date) -> bool:
     """決定論 nippou をノートへ書く。成功 True。stats 欠落などは False（例外にしない）。"""
+    from .human_input import load_human_day
+
     tz = ZoneInfo(cfg.timezone)
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     content = store.read(day) or ""
     intent = _extract_intent(content)
     open_kzn = _open_kzn_for_nippou(cfg, day, content)
@@ -2946,9 +3040,11 @@ def _auto_write_nippou(cfg: Config, day: date) -> bool:
         stats_list[0],
         tz,
         intent,
+        private_title_patterns=getattr(cfg.privacy, 'private_title_patterns', ()),
         min_block_minutes=cfg.min_block_minutes,
         open_kzn_actions=open_kzn,
         activity_md=activity_md,
+        human_day=load_human_day(cfg, day),
     )
     path = store.write_section(day, NIPPOU_MARKER, section)
     print(f"✅ 日報ドラフトを自動書き込みしました: {path}")
@@ -2956,8 +3052,10 @@ def _auto_write_nippou(cfg: Config, day: date) -> bool:
 
 
 def cmd_report(cfg: Config, day: date, use_llm: bool, write: bool) -> None:
+    from .human_input import load_human_day
+
     tz = ZoneInfo(cfg.timezone)
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     content = store.read(day) or ""
     intent = _extract_intent(content)
     open_kzn = _open_kzn_for_nippou(cfg, day, content)
@@ -2986,9 +3084,11 @@ def cmd_report(cfg: Config, day: date, use_llm: bool, write: bool) -> None:
             stats_list[0],
             tz,
             intent,
+            private_title_patterns=getattr(cfg.privacy, 'private_title_patterns', ()),
             min_block_minutes=cfg.min_block_minutes,
             open_kzn_actions=open_kzn,
             activity_md=activity_md,
+            human_day=load_human_day(cfg, day),
         )
 
     print(section)
@@ -3108,7 +3208,8 @@ def cmd_guard(cfg: Config, args: argparse.Namespace) -> int:
         except Exception:
             pass
         cmd = build_hook_command(python_exe=py, config_path=cfg_path)
-        snippet = build_hooks_snippet(cmd)
+        preflight_cmd = cmd.removesuffix('guard --hook') + 'preflight --hook' if getattr(args, 'preflight', False) else None
+        snippet = build_hooks_snippet(cmd, preflight_command=preflight_cmd)
         if not getattr(args, "write", False):
             print("# 以下を .claude/settings.json の hooks にマージしてください")
             print("# PostToolUse には登録しないでください（レイテンシ税）")
@@ -3122,7 +3223,7 @@ def cmd_guard(cfg: Config, args: argparse.Namespace) -> int:
         else:
             target = Path.cwd() / ".claude" / "settings.json"
         try:
-            bak = install_hooks_write(target, cmd)
+            bak = install_hooks_write(target, cmd, preflight_command=preflight_cmd)
             print(f"✅ hooks を書き込みました: {target}")
             if bak != target and Path(bak).is_file():
                 print(f"   バックアップ: {bak}")
@@ -3674,7 +3775,7 @@ def cmd_abtest(cfg: Config, args: argparse.Namespace) -> int:
         # 終了日の ADVICE/Kaizen 区間へ必ず1行（note 無しでも作成。Activity へは書かない）
         from .vault import ADVICE_MARKER
 
-        store = DailyNoteStore(cfg.daily_notes_path)
+        store = DailyNoteStore(cfg)
         note = store.read(today)
         if note is None:
             store.write_section(today, ADVICE_MARKER, line + "\n")
@@ -3812,7 +3913,7 @@ def cmd_eval_record(cfg: Config, day: date, out_dir: Path | None = None) -> int:
         save_case,
     )
 
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     content = store.read(day)
     if content is None:
         print(f"❌ デイリーノートがありません: {store.path_for(day)}", file=sys.stderr)
@@ -4007,14 +4108,28 @@ def _harden_console_encoding() -> None:
                 pass
 
 
-def main(argv: list[str] | None = None) -> int:
-    _harden_console_encoding()
+def build_parser(*, all_commands: bool = True) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="kaizenlog", description=__doc__)
     parser.add_argument("--config", help="設定ファイル（TOML）のパス")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser('now', help='今日0時から現在までを表示（書き込みなし）')
+    home = sub.add_parser("home", help="日誌と毎日の振り返り画面を起動")
+    home.add_argument("--date", help="対象日 YYYY-MM-DD（省略時は今日）")
+    # Keep the global --config form intact while accepting the natural
+    # ``kaizenlog home --config PATH`` form as well.  The launcher receives a
+    # canonical ordered argv below, so it never needs to inspect CLI output.
+    home.add_argument("--config", dest="home_config", help="設定ファイル（TOML）のパス")
+    from .delight_cli import add_parsers
+    add_parsers(sub)
     for name in ("generate", "advise", "run"):
         p = sub.add_parser(name)
         p.add_argument("--date", help="対象日 YYYY-MM-DD（省略時は今日）")
+        if name == "generate":
+            p.add_argument(
+                "--skip-catch-up",
+                action="store_true",
+                help="追いつき・retro-adviseを行わず、指定日のtyped journalだけを実行",
+            )
         if name in ("advise", "run"):
             p.add_argument("--dry-run", action="store_true",
                            help="LLMに送る内容を表示するだけで送信・書き込みしない")
@@ -4092,6 +4207,17 @@ def main(argv: list[str] | None = None) -> int:
     rep.add_argument("--write", action="store_true", help="デイリーノートにも書き込む")
     pr = sub.add_parser("prompts", help="Claude Codeへの繰り返し依頼の発掘（台帳 upsert）")
     pr_sub = pr.add_subparsers(dest="prompts_command")
+    export = pr_sub.add_parser('export', help='効果を観測したPRMを編集用下書きへ出力')
+    export.add_argument('id')
+    export.add_argument('--project', default='.')
+    export.add_argument('--name')
+    export.add_argument('--write', action='store_true')
+    export.add_argument('--force', action='store_true')
+    draft = pr_sub.add_parser("draft", help="未検証の依頼文草案をプレビュー／保存")
+    draft.add_argument("id", help="PRM-ID")
+    draft.add_argument("--project", help="保存先プロジェクト（--write時に必須）")
+    draft.add_argument("--write", action="store_true", help="草案を保存")
+    draft.add_argument("--force", action="store_true", help="既存草案をバックアップして上書き")
     pr.add_argument("--days", type=int, default=14, help="遡る日数（デフォルト14）")
     pr.add_argument("--date", help="基準日 YYYY-MM-DD（省略時は今日）")
     pr.add_argument("--min-count", type=int, default=3, help="レポートする最低反復回数（デフォルト3）")
@@ -4145,7 +4271,14 @@ def main(argv: list[str] | None = None) -> int:
     init = sub.add_parser("init-config", help="設定ファイルの雛形を出力する")
     init.add_argument("--output", help="出力先パス（省略時は AppData/XDG の config.toml）")
     su = sub.add_parser("setup", help="対話式セットアップウィザード")
-    su.add_argument("--config", help="読み書きする設定パス（省略時は AppData/XDG）")
+    # Preserve a global ``--config`` when setup does not provide its own.
+    # argparse otherwise applies the subparser's implicit None default and
+    # silently discards ``kaizenlog --config A.toml setup``.
+    su.add_argument(
+        "--config",
+        default=argparse.SUPPRESS,
+        help="読み書きする設定パス（省略時は AppData/XDG）",
+    )
     su.add_argument("--vault", help="Obsidian ボールトのパス")
     su.add_argument("--yes", action="store_true", help="安全な既定提案を確認なしで採用")
     su.add_argument("--force", action="store_true", help="OK 済みフェーズも再確認")
@@ -4156,6 +4289,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="非対話でも winget で ActivityWatch 導入を許可")
     su.add_argument("--register-task", action="store_true",
                     help="非対話でも日次タスク登録を許可")
+    su.add_argument(
+        "--generate-today",
+        action="store_true",
+        help="設定後に今日の日誌をtyped journal経路で明示生成",
+    )
     su.add_argument("--time", default="21:30", help="日次タスク時刻（既定 21:30）")
     su.add_argument("--morning-time", default="08:30",
                     help="朝タスク時刻（空文字で登録しない、既定 08:30）")
@@ -4322,7 +4460,7 @@ def main(argv: list[str] | None = None) -> int:
     gd.add_argument(
         "guard_command",
         nargs="?",
-        choices=("install", "status"),
+        choices=("install", "status", "watch"),
         default=None,
         help="install: フック登録 / status: 状態表示",
     )
@@ -4331,6 +4469,8 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="install 時に settings.json へ書き込む（要バックアップ）",
     )
+    gd.add_argument('--once', action='store_true', help='watch を一巡だけ実行')
+    gd.add_argument('--preflight', action='store_true', help='SessionStart の事前文脈も登録')
     gd.add_argument(
         "--project",
         action="store_true",
@@ -4342,7 +4482,93 @@ def main(argv: list[str] | None = None) -> int:
         help="install 先: ~/.claude/settings.json",
     )
 
-    args = parser.parse_args(argv)
+    if not all_commands:
+        daily = {"run", "today", "done", "goal", "status"}
+        parser.description = "今日の記録と改善を確認します。引数なしで today を表示します。"
+        parser.epilog = "全コマンド: kaizenlog --help --all"
+        sub.metavar = "{run,today,done,goal,status}"
+        sub._choices_actions = [action for action in sub._choices_actions if action.dest in daily]
+    return parser
+
+
+def _is_path_like_prompt_id(value: object) -> bool:
+    """Reject path syntax before a draft route reaches its writer."""
+
+    if not isinstance(value, str):
+        return True
+    return "/" in value or "\\" in value or value in {".", ".."}
+
+
+def cmd_prompts_draft(cfg: Config, args: argparse.Namespace) -> int:
+    """Run the typed, unverified prompt-draft API without export/ROI side effects."""
+
+    write = bool(getattr(args, "write", False))
+    force = bool(getattr(args, "force", False))
+    project = getattr(args, "project", None)
+    prm_id = getattr(args, "id", None)
+    if force and not write:
+        print("❌ --force は --write と一緒に指定してください。", file=sys.stderr)
+        return 2
+    if write and not project:
+        print("❌ --write には --project PATH が必要です。", file=sys.stderr)
+        return 2
+    if _is_path_like_prompt_id(prm_id):
+        print("❌ PRM-ID にパスを指定できません。", file=sys.stderr)
+        return 2
+
+    from .prompt_draft import draft_prompt
+
+    try:
+        result = draft_prompt(
+            cfg,
+            prm_id,
+            project=Path(project).expanduser() if project else None,
+            write=write,
+            force=force,
+        )
+    except Exception as exc:
+        print(f"❌ 依頼文草案を処理できません: {exc}", file=sys.stderr)
+        return 1
+
+    if result.content:
+        print(result.content)
+    print(result.status)
+    if result.reason:
+        print(f"理由: {result.reason}", file=sys.stderr)
+    if result.status in {"preview", "written", "unchanged"}:
+        return 0
+    if result.status in {"invalid", "missing", "conflict", "stale"}:
+        return 2
+    print(f"❌ 未知の草案ステータス: {result.status}", file=sys.stderr)
+    return 1
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    _harden_console_encoding()
+    raw = list(sys.argv[1:] if argv is None else argv)
+    extended_help = "--all" in raw and ("--help" in raw or "-h" in raw)
+    if extended_help:
+        raw.remove("--all")
+    parser = build_parser(all_commands=extended_help)
+    args = parser.parse_args(raw)
+    if args.command is None:
+        args.command = "today"
+        args.date = None
+
+    # The GUI launcher is intentionally a separate adapter.  Route before
+    # find_config_file/load_config so config-less bootstrap can own setup and
+    # decide when a Config is safe to load.
+    if args.command == "home":
+        home_config = getattr(args, "home_config", None)
+        config_value = home_config if home_config is not None else getattr(args, "config", None)
+        home_argv: list[str] = []
+        if config_value is not None:
+            home_argv.extend(("--config", str(config_value)))
+        if getattr(args, "date", None) is not None:
+            home_argv.extend(("--date", str(args.date)))
+        from .home_gui import main as home_main
+
+        return int(home_main(home_argv))
 
     # 古いWindowsコンソール（cp932）での絵文字・日本語の文字化けを防ぐ
     if sys.platform == "win32":
@@ -4354,6 +4580,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init-config":
         return cmd_init_config(getattr(args, "output", None))
+
+    if args.command == 'preflight' and args.hook:
+        from .delight_cli import dispatch
+        try:
+            return dispatch(load_config(args.config), args) or 0
+        except Exception:
+            return 0
 
     # guard --hook は設定欠落でも沈黙 exit 0（セッションを壊さない）
     if args.command == "guard" and bool(getattr(args, "hook", False)):
@@ -4389,6 +4622,7 @@ def main(argv: list[str] | None = None) -> int:
             register_task=args.register_task,
             time=task_time,
             morning_time=morning,
+            generate_today=args.generate_today,
         ))
 
     # §X2: 設定未作成の通常コマンドは fail-closed（CWD をボールトにしない）
@@ -4444,6 +4678,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"❌ {e}", file=sys.stderr)
         return 2
 
+    if args.command == "prompts" and getattr(args, "prompts_command", None) == "draft":
+        return cmd_prompts_draft(cfg, args)
+
+    from .delight_cli import dispatch
+    result = dispatch(cfg, args)
+    if result is not None:
+        return result
+
+    if args.command == "generate" and bool(getattr(args, "skip_catch_up", False)):
+        tz = ZoneInfo(cfg.timezone)
+        day = _parse_date(args.date, tz)
+        return cmd_generate_skip_catch_up(cfg, day)
+
     if args.command == "guard":
         return cmd_guard(cfg, args)
 
@@ -4453,6 +4700,16 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_morning(
             cfg, day, skip_catch_up=bool(getattr(args, "skip_catch_up", False))
         )
+
+    if args.command == 'now':
+        from .now import render_now
+
+        try:
+            print(render_now(cfg))
+        except ActivityWatchError:
+            print('ActivityWatchに接続できないため現在の記録は未判定です。`kaizenlog doctor` で確認してください。', file=sys.stderr)
+            return 1
+        return 0
 
     if args.command == "today":
         tz = ZoneInfo(cfg.timezone)
@@ -4613,6 +4870,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "backfill":
         tz = ZoneInfo(cfg.timezone)
         end_day = _parse_date(args.date, tz)
+        if args.days < 1:
+            print('補完日数は1以上で指定してください。', file=sys.stderr)
+            return 1
         cmd_backfill(cfg, args.days, end_day)
         # 補完対象が残ったまま中断した場合（ActivityWatch停止等）は
         # スクリプト/スケジューラから検知できるよう非ゼロで返す
@@ -4707,12 +4967,19 @@ def main(argv: list[str] | None = None) -> int:
             week_start,
             roi_rows=roi_rows,
         )
+        from .delight_cli import rule_suggestions
+        from .delight_views import render_weekly_story, write_weekly_story
+        suggestions = rule_suggestions(cfg, week_start + timedelta(days=6))
+        if suggestions:
+            body += '\n\n' + suggestions
         print(body)
+        print(render_weekly_story(cfg, week_start))
         if getattr(args, "write", False):
             try:
                 path = write_weekly_context(
                     cfg.daily_notes_path, body, week_start
                 )
+                write_weekly_story(cfg, week_start)
                 print(f"✅ 週次コンテキストを書き込みました: {path}")
                 log_run(
                     cfg.logs_path,
@@ -4804,6 +5071,14 @@ def main(argv: list[str] | None = None) -> int:
                     f"⚠️  日報自動書き込みをスキップ: {type(nip_err).__name__}",
                     file=sys.stderr,
                 )
+    except DailyNoteResolutionError as e:
+        resolution = e.resolution
+        print(f"❌ 日次ノートを解決できません: {resolution.reason or resolution.status}", file=sys.stderr)
+        for candidate in resolution.candidates:
+            state = "存在" if candidate.exists else "未作成"
+            print(f"   - {candidate.path} ({candidate.format_name}, {state})", file=sys.stderr)
+        print("   設定の daily_note_format または [daily_notes.overrides] を確認してください。", file=sys.stderr)
+        return 1
     except (ActivityWatchError, AdvisorError, PrivacyError) as e:
         print(f"❌ {e}", file=sys.stderr)
         if not dry_run:

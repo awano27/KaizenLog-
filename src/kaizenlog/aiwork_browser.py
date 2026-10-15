@@ -241,6 +241,7 @@ class BrowserAIAdapter:
                         project=_site_label(site),
                         text=text.strip(),
                         source=_site_source(site),
+                        session_id=f"{site}:{str(rec.get('conversation_id') or rec.get('conversationId') or 'unknown')}",
                     )
                 )
         out.sort(key=lambda p: p.timestamp)

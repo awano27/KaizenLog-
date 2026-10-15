@@ -1,3 +1,4 @@
+from kaizenlog.config import Config
 from datetime import date, datetime, timedelta, timezone
 
 from kaizenlog.classifier import Classifier
@@ -124,7 +125,7 @@ def test_extract_section_roundtrip():
 
 
 def test_daily_note_store_creates_and_updates(tmp_path):
-    store = DailyNoteStore(tmp_path / "01 Daily Notes")
+    store = DailyNoteStore(Config(vault_dir=tmp_path, daily_notes_dir="01 Daily Notes"))
     day = date(2026, 7, 5)
     p = store.write_section(day, ACTIVITY_MARKER, "## 📊 Activity Log\n\nfirst")
     assert p.is_file()

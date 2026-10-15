@@ -1023,7 +1023,7 @@ def test_r6_cmd_generate_breaker_line(tmp_path: Path):
     ):
         Cls.return_value.classify_all.return_value = []
         cmd_generate(cfg, day)
-    note = DailyNoteStore(cfg.daily_notes_path).read(day)
+    note = DailyNoteStore(cfg).read(day)
     assert note is not None
     sec = extract_section(note, ACTIVITY_MARKER) or note
     assert "⚡ ブレーカー発動: 3回" in sec
@@ -1062,5 +1062,5 @@ def test_r6_cmd_generate_breaker_line(tmp_path: Path):
     ):
         Cls2.return_value.classify_all.return_value = []
         cmd_generate(cfg, day2)
-    note2 = DailyNoteStore(cfg.daily_notes_path).read(day2)
+    note2 = DailyNoteStore(cfg).read(day2)
     assert "ブレーカー" not in (note2 or "")

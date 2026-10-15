@@ -1,5 +1,6 @@
 """第40弾: 第38弾レビュー残件修正の受け入れ + 変異生存9箇所。"""
 from __future__ import annotations
+from kaizenlog.config import Config
 
 import shutil
 import subprocess
@@ -256,7 +257,7 @@ def test_b3_digest_delete_no_blank_growth(tmp_path):
 
     notes = tmp_path / "notes"
     notes.mkdir()
-    store = DailyNoteStore(notes)
+    store = DailyNoteStore(Config(vault_dir=notes.parent, daily_notes_dir=notes.name))
     day = date(2026, 8, 1)
     base = (
         "---\ndate: 2026-08-01\n---\n"
@@ -713,6 +714,6 @@ def test_c1_prm_line_in_generate_section(tmp_path, monkeypatch):
     cli_mod.cmd_generate(cfg, day)
     section = captured.get("activity_md") or ""
     # activity_md may be set from write_stats; also check note
-    note = DailyNoteStore(cfg.daily_notes_path).read(day) or ""
+    note = DailyNoteStore(cfg).read(day) or ""
     blob = section + note
     assert "台帳の最終観測" in blob or "繰り返している依頼" in blob

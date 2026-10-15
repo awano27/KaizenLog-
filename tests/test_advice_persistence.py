@@ -41,7 +41,7 @@ def _config(tmp_path: Path) -> Config:
 
 
 def _seed_note(cfg: Config, *, checked_action: bool) -> DailyNoteStore:
-    store = DailyNoteStore(cfg.daily_notes_path)
+    store = DailyNoteStore(cfg)
     store.write_section(DAY, ACTIVITY_MARKER, "## 📊 Activity Log\n\n**合計**: 10m")
     if checked_action:
         store.write_section(

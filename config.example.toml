@@ -5,12 +5,15 @@
 #                 $XDG_CONFIG_HOME/kaizenlog/config.toml または ~/.config/kaizenlog/config.toml
 # 手動: `kaizenlog init-config`（省略時は上記 AppData/XDG）/ `init-config --output PATH`
 # 上書きパス: 環境変数 KAIZENLOG_CONFIG または CLI の --config
-# setup は実在する LLM モデル id を書いてくれる（例の qwen3:8b が無い環境でも安全）。
+# setup の既定は LLM なし（backend = "none"）。検出した AI は候補として表示しますが、
+# 利用者が選んだときだけ backend/model を設定します。既存の明示設定は保持します。
 
 [general]
 timezone = "Asia/Tokyo"
 vault_dir = 'C:/develop/obsidian/2026'   # Obsidianボールトのルート
 daily_notes_dir = "01 Daily Notes"
+# 日次ノートの形式（対応値: YYYY-MM-DD / YYYYMMDD / YYYY/MM/DD）
+daily_note_format = "YYYY-MM-DD"
 experiments_dir = "03 Areas/Kaizen Experiments"   # カイゼン実験ノートの置き場所
 stats_dir = ".kaizenlog/stats"   # パターン検出用の日次統計JSON（ドットフォルダ=Obsidian非表示）
 logs_dir = ".kaizenlog/logs"     # 実行ログ（kaizenlog status で確認）
@@ -21,6 +24,10 @@ log_retention_days = 90     # 実行ログの保持日数
 min_block_minutes = 3.0     # タイムラインに載せる最小ブロック長（分）
 session_gap_minutes = 5.0   # この分数以上空いたら別画面ブロック扱い
 
+[daily_notes.overrides]
+# 日次フォルダを基点にした、拡張子を含む完成相対パス。絶対パスや .. は不可。
+# "2026-10-15" = "2026/10/15.md"
+
 [notifications]
 on_failure = true   # 夜間実行が失敗したときWindows通知を出す
 
@@ -28,6 +35,9 @@ on_failure = true   # 夜間実行が失敗したときWindows通知を出す
 # LLMへ送信する前にマスクする正規表現（ボールト内の日誌は原文のまま保持される）
 # 例: redact_patterns = ["(株)〇〇商事", "案件[A-Z]-\d+", "\S+@\S+\.co\.jp"]
 redact_patterns = []
+# 日誌タイムラインで私的扱いにするタイトルの正規表現（文字列の配列）
+# 例: private_title_patterns = ["個人カレンダー", "秘密プロジェクト"]
+private_title_patterns = []
 replacement = "[REDACTED]"
 # hide_private_titles = true   # タイムラインで私的タイトルを伏せる
 
@@ -58,6 +68,11 @@ base_url = "http://localhost:5600"
 # 往復数・細切れセッション・ツールエラー・中断を検出し、改善提案の材料にする
 enabled = true
 claude_projects_dir = "~/.claude/projects"
+# Grok CLI セッション（無ければ無効）
+grok_sessions_dir = "~/.grok/sessions"
+# Cursor: timestamp_ms を含む raw stream-json キャプチャの保存先を明示する
+# ネイティブ履歴の自動検出は行わない。既定は空文字（無効）
+# cursor_sessions_dir = "C:/captures/cursor-stream-json"
 # session_details = true   # 往復上位セッションの依頼・ファイル・コマンド詳細
 
 [nippou]
@@ -87,8 +102,10 @@ auto_write = true
 # 注: 指定バックエンドが利用できない場合、[llm.openai_compatible] の設定
 #     （既定: Ollama http://localhost:11434/v1）に自動フォールバックします。
 #     無効にするには fallback_to_local = false。
-backend = "copilot-cli"
-fallback_to_local = true
+# 日誌の生成と `report --no-llm` は backend の設定に関係なく LLM を使いません。
+# backend = "none" のとき `advise` はエラーになります（暗黙の fallback はしません）。
+backend = "none"
+fallback_to_local = false
 # システムプロンプト: 同梱テンプレート名（daily_advisor / privacy_safe /
 # weekly_review / ai_work_deep_review）または自作プロンプトのファイルパス
 system_prompt = "daily_advisor"
@@ -106,6 +123,7 @@ extra_args = []   # 例: ["--model", "claude-sonnet-4"]
 
 [llm.openai_compatible]
 # --- Ollama（完全ローカル・GPU不要、8Bモデルは16GB RAM推奨）---
+# backend = "openai-compatible" を利用者が選んだときだけ、この endpoint/model を使います。
 base_url = "http://localhost:11434/v1"
 model = "qwen3:8b"
 # thinkingモデルが本文生成前にcontextを使い切らないよう、通常の改善提案では無効化
@@ -121,4 +139,4 @@ timeout_seconds = 600
 # [[categories.rules]]
 # name = "AI作業"
 # ai = true
-# patterns = ["自社のAIツール名"]
+# patterns = ["自社のAIツール名", "grok"]  # Grok は既定でも AI作業に分類される

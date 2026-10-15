@@ -12,6 +12,12 @@ _thread_locks: dict[str, threading.RLock] = {}
 _held = threading.local()
 
 
+def lock_path_for(target: Path) -> Path:
+    """Return the single persistent sidecar path for a completed target."""
+    target = Path(target)
+    return target.with_name(target.name + ".lock")
+
+
 @contextmanager
 def file_lock(path: Path, *, timeout: float = 10.0):
     """Lock one persistent sidecar; never unlink it (other processes may hold it)."""
@@ -64,3 +70,11 @@ def file_lock(path: Path, *, timeout: float = 10.0):
                     fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
     finally:
         guard.release()
+
+
+@contextmanager
+def locked_read_modify_write(target: Path, *, timeout: float = 10.0):
+    """Hold the target's common lock across a complete read-modify-write."""
+    target = Path(target)
+    with file_lock(lock_path_for(target), timeout=timeout):
+        yield target

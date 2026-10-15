@@ -1,5 +1,6 @@
 """第38弾: 提案寿命管理・digest・git突合 + Phase0 残件。"""
 from __future__ import annotations
+from kaizenlog.config import Config
 
 import shutil
 import subprocess
@@ -406,7 +407,7 @@ def test_b2_digest_write_preserves_outside_bytes(tmp_path):
 
     notes = tmp_path / "notes"
     notes.mkdir()
-    store = DailyNoteStore(notes)
+    store = DailyNoteStore(Config(vault_dir=notes.parent, daily_notes_dir=notes.name))
     day = date(2026, 8, 1)
     handwritten = "手書き行 keep me\n"
     content = (

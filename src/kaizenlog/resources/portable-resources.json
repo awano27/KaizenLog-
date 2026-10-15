@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "package_data": [
+    "prompts/*.md",
+    "skills/*/SKILL.md",
+    "scripts/*.ps1",
+    "eval_samples/*.json",
+    "resources/*.json"
+  ],
+  "portable_runtime": {
+    "python": "PyInstaller embedded runtime",
+    "tk": "Tcl/Tk collected by the GUI build",
+    "third_party": ["requests", "tzdata"]
+  },
+  "embedded_module_inventory": {
+    "format": "PyInstaller.Analysis.pure",
+    "paths": ["cli/embedded-modules.json", "gui/embedded-modules.json"],
+    "required_modules": ["requests", "tzdata"]
+  },
+  "entrypoints": {
+    "cli": "kaizenlog.cli:main",
+    "gui": "kaizenlog.home_gui:main"
+  },
+  "task_resource": "kaizenlog/scripts/register-task.ps1"
+}

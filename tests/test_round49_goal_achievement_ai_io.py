@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from kaizenlog.config import Config
 from kaizenlog.advice_evidence import build_advice_evidence
 from kaizenlog.aiwork import (
     AISession,
@@ -157,7 +158,7 @@ def test_a3_resync_stats_fingerprint_after_finalize(tmp_path: Path):
     stats_dir = vault / "stats"
     stats_dir.mkdir()
     cfg = Config(vault_dir=vault, daily_notes_dir="notes", stats_dir="stats")
-    store = DailyNoteStore(notes)
+    store = DailyNoteStore(Config(vault_dir=notes.parent, daily_notes_dir=notes.name))
     day = DAY
     pre = (
         "## Activity\n"
@@ -193,8 +194,9 @@ def test_a3_resync_stats_fingerprint_after_finalize(tmp_path: Path):
 
 def test_c1_goal_achieved_cli_and_stats_fields(tmp_path: Path):
     notes = tmp_path / "notes"
+    cfg = Config(vault_dir=tmp_path, daily_notes_dir="notes")
     path, g = write_goal(
-        notes,
+        cfg,
         DAY,
         "リリースノート @執筆・ノート",
         known_categories=KNOWN,
@@ -216,8 +218,9 @@ def test_c1_goal_achieved_cli_and_stats_fields(tmp_path: Path):
 
 def test_c1_write_goal_achieved_only(tmp_path: Path):
     notes = tmp_path / "notes"
-    write_goal(notes, DAY, "仕上げる", known_categories=KNOWN)
-    path, g = write_goal_achieved(notes, DAY, 40, known_categories=KNOWN)
+    cfg = Config(vault_dir=tmp_path, daily_notes_dir="notes")
+    write_goal(cfg, DAY, "仕上げる", known_categories=KNOWN)
+    path, g = write_goal_achieved(cfg, DAY, 40, known_categories=KNOWN)
     assert g.achieved == 40
     assert "達成度: 40%" in path.read_text(encoding="utf-8")
     # 再読
@@ -320,15 +323,16 @@ def test_c5_prompts_allow_self_reported_achievement():
 
 def test_c6_morning_placeholder(tmp_path: Path):
     notes = tmp_path / "notes"
-    path = ensure_goal_placeholder(notes, DAY)
+    cfg = Config(vault_dir=tmp_path, daily_notes_dir="notes")
+    path = ensure_goal_placeholder(cfg, DAY)
     assert path is not None
     body = path.read_text(encoding="utf-8")
     assert "未設定" in body
     assert "kaizenlog goal" in body
     # 既存があれば触らない
-    assert ensure_goal_placeholder(notes, DAY) is None
+    assert ensure_goal_placeholder(cfg, DAY) is None
     # 実 goal で上書き後はプレースホルダではない
-    write_goal(notes, DAY, "本番目標", known_categories=KNOWN)
+    write_goal(cfg, DAY, "本番目標", known_categories=KNOWN)
     g = read_goal(path.read_text(encoding="utf-8"), KNOWN)
     assert g is not None and g.text == "本番目標"
 
@@ -526,7 +530,7 @@ def test_e1_auto_write_nippou(tmp_path: Path):
         goal_text="完了させる",
         goal_achieved=50,
     )
-    store = DailyNoteStore(notes)
+    store = DailyNoteStore(Config(vault_dir=notes.parent, daily_notes_dir=notes.name))
     store.path_for(day).write_text(
         f"---\ndate: {day.isoformat()}\n---\n\n# day\n",
         encoding="utf-8",
@@ -669,7 +673,7 @@ def test_r4_digest_note_achieved_beats_stale_stats(tmp_path: Path):
     )
     day = DAY
     # ノートは新目標 B・達成度なし。stats は旧 80%
-    write_goal(notes, day, "目標B", known_categories=KNOWN)
+    write_goal(cfg, day, "目標B", known_categories=KNOWN)
     write_stats(
         stats_dir,
         day,
@@ -679,7 +683,7 @@ def test_r4_digest_note_achieved_beats_stale_stats(tmp_path: Path):
         goal_text="目標A",
         goal_achieved=80,
     )
-    store = DailyNoteStore(notes)
+    store = DailyNoteStore(Config(vault_dir=notes.parent, daily_notes_dir=notes.name))
     dig_stats = json.loads(
         (stats_dir / f"{day.isoformat()}.json").read_text(encoding="utf-8")
     )
@@ -733,7 +737,7 @@ def test_r4_digest_stats_fallback_without_goal_section(tmp_path: Path):
         goal_text="目標A",
         goal_achieved=80,
     )
-    store = DailyNoteStore(notes)
+    store = DailyNoteStore(Config(vault_dir=notes.parent, daily_notes_dir=notes.name))
     dig_stats = json.loads(
         (stats_dir / f"{day.isoformat()}.json").read_text(encoding="utf-8")
     )
@@ -846,7 +850,7 @@ def test_t1_cmd_generate_resync_and_goal_achieved(tmp_path: Path, monkeypatch):
     )
     day = DAY
     write_goal(
-        vault / "notes",
+        cfg,
         day,
         "今日の目標テキスト @開発",
         known_categories=KNOWN,
@@ -883,7 +887,7 @@ def test_t1_cmd_generate_resync_and_goal_achieved(tmp_path: Path, monkeypatch):
         Cls.return_value.classify_all.return_value = []
         cmd_generate(cfg, day)
 
-    store = DailyNoteStore(vault / "notes")
+    store = DailyNoteStore(Config(vault_dir=vault, daily_notes_dir="notes"))
     note = store.read(day) or ""
     act = extract_section(note, AM) or ""
     stats_path = vault / "stats" / f"{day.isoformat()}.json"
@@ -913,7 +917,7 @@ def test_t2_main_run_auto_nippou_gate(tmp_path: Path, monkeypatch):
             [],
             goal_text="x",
         )
-        store = DailyNoteStore(vault / "notes")
+        store = DailyNoteStore(Config(vault_dir=vault, daily_notes_dir="notes"))
         store.path_for(day).write_text(
             f"---\ndate: {day.isoformat()}\n---\n\n# d\n",
             encoding="utf-8",
@@ -966,7 +970,7 @@ def test_t2_main_run_auto_nippou_gate(tmp_path: Path, monkeypatch):
             ]
         )
     assert rc == 0
-    store = DailyNoteStore(vault / "notes")
+    store = DailyNoteStore(Config(vault_dir=vault, daily_notes_dir="notes"))
     assert extract_section(store.read(day) or "", NIPPOU_MARKER) is not None
 
     # auto_write=false → 書かない
@@ -982,7 +986,7 @@ def test_t2_main_run_auto_nippou_gate(tmp_path: Path, monkeypatch):
         cu2.return_value = CatchUpResult(generate="not-needed", advise="skipped")
         rc2 = main(["--config", str(cfg2), "run", "--date", day2.isoformat()])
     assert rc2 == 0
-    store2 = DailyNoteStore(vault2 / "notes")
+    store2 = DailyNoteStore(Config(vault_dir=vault2, daily_notes_dir="notes"))
     assert extract_section(store2.read(day2) or "", NIPPOU_MARKER) is None
 
     # advise 単独では書かない
@@ -990,6 +994,6 @@ def test_t2_main_run_auto_nippou_gate(tmp_path: Path, monkeypatch):
     with patch("kaizenlog.cli.cmd_advise", return_value=None):
         rc3 = main(["--config", str(cfg3), "advise", "--date", day3.isoformat()])
     assert rc3 == 0
-    store3 = DailyNoteStore(vault3 / "notes")
+    store3 = DailyNoteStore(Config(vault_dir=vault3, daily_notes_dir="notes"))
     assert extract_section(store3.read(day3) or "", NIPPOU_MARKER) is None
 

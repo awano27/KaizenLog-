@@ -12,6 +12,7 @@ import statistics
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from .file_lock import locked_read_modify_write
 from .vault import atomic_write_text
 from .ops_ledger import (
     OpsLedger,
@@ -67,22 +68,24 @@ def _append_run_entry(
     now = now or datetime.now(timezone.utc)
     if "ts" not in entry:
         entry = {**entry, "ts": now.isoformat()}
-    cutoff = now - timedelta(days=retention_days)
-    kept = []
-    for run in load_runs(logs_dir):
-        try:
-            ts = datetime.fromisoformat(run["ts"])
-        except (KeyError, ValueError):
-            continue
-        if ts >= cutoff:
-            kept.append(run)
-    kept.append(entry)
     logs_dir = Path(logs_dir)
     logs_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(
-        _runs_path(logs_dir),
-        "\n".join(json.dumps(r, ensure_ascii=False) for r in kept) + "\n",
-    )
+    path = _runs_path(logs_dir)
+    with locked_read_modify_write(path):
+        cutoff = now - timedelta(days=retention_days)
+        kept = []
+        for run in load_runs(logs_dir):
+            try:
+                ts = datetime.fromisoformat(run["ts"])
+            except (KeyError, ValueError):
+                continue
+            if ts >= cutoff:
+                kept.append(run)
+        kept.append(entry)
+        atomic_write_text(
+            path,
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in kept) + "\n",
+        )
 
 
 def _safe_error_summary(error: object) -> str:

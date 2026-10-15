@@ -14,6 +14,7 @@ from .experiments import (
     load_experiments,
     target_met,
 )
+from .file_lock import locked_read_modify_write
 from .memory import load_entries
 from .promptledger import format_ledger_line, ledger_status_counts, load_prompt_ledger
 from .promptroi import PromptROIRow, format_weekly_roi_section
@@ -159,7 +160,7 @@ def render_weekly_context(
         src_s = ", ".join(f"{n}:{b.get('sessions', 0)}" for n, b in sources.items()) or "-"
         ai_rows.append(
             f"| {d.isoformat()} | {ai.get('sessions', 0)} | {ai.get('fragmented', 0)} | "
-            f"{ai.get('tool_errors', 0)} | {ai.get('interruptions', 0)} | "
+            f"{ai.get('tool_errors') if ai.get('tool_errors') is not None else '-'} | {ai.get('interruptions') if ai.get('interruptions') is not None else '-'} | "
             f"{ai.get('retry_chains', 0)} | {cost_s} | {src_s} |"
         )
 
@@ -224,9 +225,12 @@ def render_weekly_context(
             ended = " / 末尾エラー" if d.get("ended_in_error") else ""
             tests = " / テスト実行あり" if d.get("tests_run") else ""
             edits = int(d.get("edits") or 0)
+            metrics_text = (f'エラー{err}・中断{inter}・変更{edits}{tests}{ended}'
+                            if d.get('tool_metrics_measurable', True)
+                            else 'ツールエラー・中断・変更は未計測')
             lines.append(
                 f"{i}. {day} 「{proj}」 score={score} "
-                f"（エラー{err}・中断{inter}・変更{edits}{tests}{ended}）: {title}"
+                f"（{metrics_text}）: {title}"
             )
     lines.append("")
 
@@ -568,10 +572,12 @@ def write_weekly_context(
     """Weekly Reviews ノートの weekly-context マーカー区間へ upsert（マーカー外は不変）。"""
     path = weekly_review_path(daily_notes_dir, week_start)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.is_file():
-        content = path.read_text(encoding="utf-8")
-    else:
-        content = _default_weekly_frontmatter(week_start) + "\n"
-    updated = upsert_section(content, WEEKLY_CONTEXT_MARKER, body_md, position="top")
-    atomic_write_text(path, updated)
+    with locked_read_modify_write(path):
+        if path.is_file():
+            from .vault import read_text_preserve_newlines
+            content = read_text_preserve_newlines(path)
+        else:
+            content = _default_weekly_frontmatter(week_start) + "\n"
+        updated = upsert_section(content, WEEKLY_CONTEXT_MARKER, body_md, position="top")
+        atomic_write_text(path, updated)
     return path

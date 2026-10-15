@@ -21,11 +21,13 @@ from .aiwork import (
     RetryChain,
     estimate_sessions_cost,
     loop_tax_to_stats_dict,
+    metric_measurement_state,
     _normalize_screen_tool_minutes,
     prompt_length_observation,
     session_digests_for_stats,
 )
 from .focus import InputStats
+from .file_lock import locked_read_modify_write
 from .report import DailySummary
 from .vault import atomic_write_text
 
@@ -93,6 +95,12 @@ def build_stats(
     effort: Mapping[str, Any] | None = None,
     input_quality: Mapping[str, Any] | None = None,
 ) -> dict:
+    tool_metrics_state = metric_measurement_state(
+        cc_sessions, "tool_metrics_measurable"
+    )
+    output_tokens_state = metric_measurement_state(
+        cc_sessions, "output_tokens_measurable"
+    )
     projects: dict[str, dict] = {}
     for s in cc_sessions:
         p = projects.setdefault(
@@ -108,9 +116,11 @@ def build_stats(
         )
         p["sessions"] += 1
         p["turns"] += s.user_turns
-        p["errors"] += s.tool_errors
+        if s.tools_measurable:
+            p["errors"] += s.tool_errors
         p["fragmented"] += 1 if s.is_fragmented else 0
-        p["interruptions"] = p.get("interruptions", 0) + s.interruptions
+        if s.tools_measurable:
+            p["interruptions"] = p.get("interruptions", 0) + s.interruptions
 
     chains = retry_chains or []
     for chain in chains:
@@ -143,8 +153,9 @@ def build_stats(
         )
         bucket["sessions"] += 1
         bucket["fragmented"] += 1 if s.is_fragmented else 0
-        bucket["tool_errors"] += s.tool_errors
-        bucket["interruptions"] += s.interruptions
+        if s.tools_measurable:
+            bucket["tool_errors"] += s.tool_errors
+            bucket["interruptions"] += s.interruptions
     est_cost, uncosted, cost_by_src = estimate_sessions_cost(cc_sessions, pricing)
     for src, cbucket in cost_by_src.items():
         bucket = sources.setdefault(
@@ -157,8 +168,20 @@ def build_stats(
                 "retry_chains": 0,
             },
         )
-        bucket["est_cost_usd"] = round(float(cbucket.get("est_cost_usd", 0.0)), 4)
-        bucket["uncosted_tokens"] = int(cbucket.get("uncosted_tokens", 0))
+        source_sessions = [s for s in cc_sessions if _source_name(s.source) == src]
+        source_token_state = metric_measurement_state(
+            source_sessions, "output_tokens_measurable"
+        )
+        bucket["est_cost_usd"] = (
+            round(float(cbucket.get("est_cost_usd", 0.0)), 4)
+            if source_token_state == "measured"
+            else None
+        )
+        bucket["uncosted_tokens"] = (
+            int(cbucket.get("uncosted_tokens", 0))
+            if source_token_state == "measured"
+            else None
+        )
     # リトライ連鎖はプロンプト側の source が無い場合があるため、
     # チェーン先頭プロンプトの source があれば割当、無ければ合算のみ
     for chain in chains:
@@ -178,8 +201,12 @@ def build_stats(
     # v2: セッション横断のテレメトリ集約（週次・実験・baseline 用）
     n_sess = len(cc_sessions)
     turns_total = sum(int(s.user_turns or 0) for s in cc_sessions)
-    output_tokens = sum(int(s.output_tokens or 0) for s in cc_sessions)
-    api_calls = sum(int(s.api_calls or 0) for s in cc_sessions)
+    output_tokens = (
+        sum(int(s.output_tokens or 0) for s in cc_sessions)
+        if output_tokens_state == "measured"
+        else None
+    )
+    api_calls = sum(int(s.api_calls or 0) for s in cc_sessions) if tool_metrics_state == 'measured' else None
     tool_total: Counter[str] = Counter()
     models_set: set[str] = set()
     for s in cc_sessions:
@@ -190,6 +217,43 @@ def build_stats(
     avg_turns = round(turns_total / n_sess, 1) if n_sess else None
     # 上位5ツール（合算回数）
     tool_counts = {name: int(cnt) for name, cnt in tool_total.most_common(5)}
+
+    # Source/project aggregates use None when any included session did not
+    # expose the metric. The state distinguishes partial from wholly unknown.
+    for source, bucket in sources.items():
+        source_sessions = [s for s in cc_sessions if _source_name(s.source) == source]
+        tool_state = metric_measurement_state(
+            source_sessions, "tool_metrics_measurable"
+        )
+        token_state = metric_measurement_state(
+            source_sessions, "output_tokens_measurable"
+        )
+        chars_state = metric_measurement_state(
+            source_sessions, "assistant_chars_measurable"
+        )
+        bucket["measurement"] = {
+            "tool_errors": tool_state,
+            "interruptions": tool_state,
+            "output_tokens": token_state,
+            "assistant_chars": chars_state,
+        }
+        if tool_state != "measured":
+            bucket["tool_errors"] = None
+            bucket["interruptions"] = None
+        bucket["output_tokens"] = (
+            sum(int(s.output_tokens or 0) for s in source_sessions)
+            if token_state == "measured"
+            else None
+        )
+    for project, bucket in projects.items():
+        project_sessions = [s for s in cc_sessions if s.project == project]
+        project_tool_state = metric_measurement_state(
+            project_sessions, "tool_metrics_measurable"
+        )
+        bucket["measurement"] = {"tool_errors": project_tool_state, "interruptions": project_tool_state}
+        if project_tool_state != "measured":
+            bucket["errors"] = None
+            bucket["interruptions"] = None
 
     stats = {
         # v2: ai に turns/tokens/tools/models を追加。読込側はキー欠損を許容（分岐しない）
@@ -222,16 +286,31 @@ def build_stats(
             "sessions": n_sess,
             "internal_ai_sessions": int(internal_ai_sessions or 0),
             "fragmented": sum(1 for s in cc_sessions if s.is_fragmented),
-            "tool_errors": sum(s.tool_errors for s in cc_sessions),
-            "interruptions": sum(s.interruptions for s in cc_sessions),
+            "tool_errors": (
+                sum(s.tool_errors for s in cc_sessions)
+                if tool_metrics_state == "measured"
+                else None
+            ),
+            "interruptions": (
+                sum(s.interruptions for s in cc_sessions)
+                if tool_metrics_state == "measured"
+                else None
+            ),
             # リトライ連鎖（摩擦の一次指標）。旧 stats には無い → 読み手は 0/欠落を許容
             "retry_chains": len(chains),
             "retry_prompts": sum(c.length for c in chains),
             "projects": projects,
             "sources": sources,
             # output tokens ベースの概算（input/cache 未計上）。旧 stats は欠落可
-            "est_cost_usd": est_cost,
-            "uncosted_tokens": uncosted,
+            "est_cost_usd": est_cost if output_tokens_state == "measured" else None,
+            "uncosted_tokens": uncosted if output_tokens_state == "measured" else None,
+            "measurement": {
+                "tool_errors": tool_metrics_state,
+                "interruptions": tool_metrics_state,
+                "output_tokens": output_tokens_state,
+                "est_cost_usd": output_tokens_state,
+                "api_calls": tool_metrics_state,
+            },
             # v2 テレメトリ（キー欠損時は v1 と同様に無視）
             "turns_total": turns_total,
             "avg_turns": avg_turns,
@@ -339,10 +418,8 @@ def write_stats(
 ) -> Path:
     stats_dir.mkdir(parents=True, exist_ok=True)
     path = stats_dir / f"{day.isoformat()}.json"
-    atomic_write_text(
-        path,
-        json.dumps(
-            build_stats(
+    payload = json.dumps(
+        build_stats(
                 day,
                 summary,
                 cc_sessions,
@@ -362,10 +439,11 @@ def write_stats(
                 effort=effort,
                 input_quality=input_quality,
             ),
-            ensure_ascii=False,
-            indent=1,
-        ),
+        ensure_ascii=False,
+        indent=1,
     )
+    with locked_read_modify_write(path):
+        atomic_write_text(path, payload)
     return path
 
 

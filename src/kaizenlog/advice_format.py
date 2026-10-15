@@ -25,6 +25,10 @@ _FACT_TOKEN_RE = re.compile(r"^\[?F(\d+)\]?$")
 _NEWLINE_RE = re.compile(r"[\r\n]")
 _KZN_RE = re.compile(r"KZN-\d{8}")
 _DIGIT_RE = re.compile(r"\d")
+_NONEXISTENT_STATS_CLI_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])kaizenlog(?:\.exe)?[ \t]+stats?(?![A-Za-z0-9_-])",
+    re.IGNORECASE,
+)
 
 # 読者向けには内部F-IDや生のEvidence本文を出さず、非機密の証拠種別だけを示す。
 _READER_FACT_LABELS = {
@@ -284,6 +288,13 @@ def _check_no_kzn_or_marker(text: str, field: str) -> None:
         raise _contract_error(f"{field} にモデル生成のKZN IDを含めないでください")
     if "<!--" in text:
         raise _contract_error(f"{field} にマーカー文字列を含めないでください")
+    # 実日誌で発生した架空コマンドを、保存前の修復対象にする。
+    # status（実行履歴）は別コマンドなので統計確認の代替へ自動置換しない。
+    if _NONEXISTENT_STATS_CLI_RE.search(text):
+        raise _contract_error(
+            f"{field} に存在しない kaizenlog stat / stats を含めないでください。"
+            "測定値の確認は、再生成された日誌の該当指標を読む手順にしてください"
+        )
 
 
 def _is_measurable(value: str) -> bool:

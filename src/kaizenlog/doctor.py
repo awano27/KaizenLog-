@@ -361,6 +361,13 @@ def _check_aiwork(c: Check, cfg: Config) -> None:
         c.warn(f"➖ codex: {codex} が見つかりません（未使用なら問題なし）")
 
 
+    for name, configured in (('grok', cfg.aiwork.grok_sessions_dir), ('cursor', cfg.aiwork.cursor_sessions_dir)):
+        if configured and Path(configured).expanduser().is_dir():
+            c.ok(f'{name}: 収集先を検出（対応形式・時刻の検証は集計時。トークン未取得）')
+        else:
+            c.ok(f'{name}: 未設定または収集先なし（任意。未観測をゼロに換算しません）')
+
+
 def _check_history(c: Check, cfg: Config) -> None:
     stats_files = sorted(cfg.stats_path.glob("*.json")) if cfg.stats_path.is_dir() else []
     if stats_files:
@@ -403,6 +410,11 @@ def _check_advise_health(c: Check, cfg: Config) -> None:
         )
     else:
         c.ok("提案ヘルス: 縮退の連続なし")
+    from .advice_fallback import repair_guidance
+
+    guidance = repair_guidance(runs)
+    if guidance:
+        c.warn(guidance)
 
 
 # タスクスケジューラ名（scripts/register-task.ps1 / setup と一致）
@@ -436,7 +448,7 @@ def _check_schedule(c: Check) -> None:
             "朝の追いつき・通知が自動で走りません: `kaizenlog setup --register-task`"
         )
     else:
-        c.warn(f'朝タスク: 検出できませんでした — 手動確認: schtasks /Query /TN "{TASK_MORNING}"')
+          c.warn(f'朝タスク: 検出できませんでした — 手動確認: schtasks /Query /TN "{TASK_MORNING}"')
 
 
 def _count_jsonl_entries(path: Path) -> tuple[int, int]:
@@ -638,5 +650,16 @@ def run_doctor(
         _check_advise_health(c, cfg)
         _check_artifacts(c, cfg)
         _check_guard(c, cfg)
+    if not (config_absent or missing_config_message):
+        weekly = query_task_registered('KaizenLog Weekly')
+        if weekly is True:
+            c.ok('週次タスク登録済み: KaizenLog Weekly')
+        else:
+            c.ok('週次タスク: 任意。登録・変更は `kaizenlog task install --weekly --write`（日次も登録）')
+        from .delight_cli import rule_suggestions
+        from zoneinfo import ZoneInfo
+        suggestions = rule_suggestions(cfg, datetime.now(ZoneInfo(cfg.timezone)).date())
+        if suggestions:
+            c.lines.append(suggestions)
     verdict = "\n❌ 修正が必要な項目があります。" if c.has_error else "\n✅ すべて正常です。"
     return "\n".join(c.lines) + verdict, c.has_error
