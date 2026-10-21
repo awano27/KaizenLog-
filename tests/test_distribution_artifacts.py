@@ -40,6 +40,20 @@ def _powershell() -> str:
     return executable
 
 
+def _ps_env() -> dict[str, str]:
+    """Child environment for PowerShell subprocesses, without PSModulePath.
+
+    pwsh 7 prepends its Core-only $PSHOME\\Modules to PSModulePath and scrubs
+    it only when launching powershell.exe itself.  Through a python
+    intermediary the poisoned value is inherited verbatim and Windows
+    PowerShell 5.1 can no longer autoload built-in modules (Get-FileHash).
+    Unset, each PowerShell host rebuilds its own stock default.
+    """
+    env = {k: v for k, v in os.environ.items() if k.lower() != "psmodulepath"}
+    env["PYTHONNOUSERSITE"] = "1"
+    return env
+
+
 def _run_ps(script: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -55,7 +69,7 @@ def _run_ps(script: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
         cwd=ROOT,
         text=True,
         capture_output=True,
-        env={**os.environ, "PYTHONNOUSERSITE": "1"},
+        env=_ps_env(),
     )
 
 

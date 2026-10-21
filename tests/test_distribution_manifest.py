@@ -7,13 +7,14 @@ replaced by recording functions.  No real Windows scheduled task is touched.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 
 import pytest
+
+from tests.test_distribution_artifacts import _ps_env
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,7 +94,7 @@ function Unregister-ScheduledTask {{ param([string]$TaskName, [switch]$Confirm) 
             cwd=ROOT,
             text=True,
             capture_output=True,
-            env={**os.environ, "PYTHONNOUSERSITE": "1"},
+            env=_ps_env(),
         )
         calls = []
         if capture.exists():
