@@ -3106,11 +3106,39 @@ def cmd_prompts(
     unhandled_only: bool = False,
     roi: bool = False,
 ) -> None:
-    """繰り返し依頼を発掘し、クラスタ台帳へ upsert して表示する。"""
+    """繰り返し依頼を発掘し、クラスタ台帳へ upsert して表示する。
+
+    --roi は表示専用: Kaizen/Memory 配下を読むだけで、発掘・upsert・mkdir・
+    ロック取得を一切行わない（第32弾 doctor と同じ「表示は状態を変えない」方針）。
+    クラスタ永続化は既定表示（PRM 採番→ prompts mark の前提）と日次パイプライン
+    （_format_repeat_prompt_line）が担う。
+    """
     tz = ZoneInfo(cfg.timezone)
     end = datetime.combine(end_day, time.min, tzinfo=tz) + timedelta(days=1)
-    start = end - timedelta(days=days)
     adapters = available_adapters(cfg) if cfg.aiwork.enabled else []
+    if roi:
+        from .promptroi import (
+            format_roi_table,
+            load_roi_for_paths,
+            prompt_roi_scan_start,
+        )
+
+        ledger_ents = load_prompt_ledger(cfg.memory_path)
+        scan_day = prompt_roi_scan_start(ledger_ents, end_day, window_days=30)
+        roi_start = datetime.combine(scan_day, time.min, tzinfo=tz)
+        if cfg.aiwork.enabled:
+            roi_sessions, roi_prompts, _ = collect_ai_telemetry(
+                adapters, roi_start, end
+            )
+        else:
+            roi_sessions, roi_prompts = [], []
+        rows = load_roi_for_paths(
+            cfg.memory_path, roi_prompts, roi_sessions, as_of=end_day
+        )
+        print(format_roi_table(rows))
+        return
+
+    start = end - timedelta(days=days)
     sessions, prompts, _ = collect_ai_telemetry(adapters, start, end)
     tracking: list[tuple[str, str]] = []
     for exp in load_experiments(cfg.experiments_path):
@@ -3149,29 +3177,6 @@ def cmd_prompts(
                 break
         if hit:
             ledger_by_rep[c.representative] = (hit.id, hit.status)
-    if roi:
-        from .promptroi import (
-            format_roi_table,
-            load_roi_for_paths,
-            prompt_roi_scan_start,
-        )
-        from .promptledger import load_prompt_ledger as _load_pl
-
-        ledger_ents = _load_pl(cfg.memory_path)
-        scan_day = prompt_roi_scan_start(ledger_ents, end_day, window_days=30)
-        roi_start = datetime.combine(scan_day, time.min, tzinfo=tz)
-        if cfg.aiwork.enabled:
-            roi_sessions, roi_prompts, _ = collect_ai_telemetry(
-                adapters, roi_start, end
-            )
-        else:
-            roi_sessions, roi_prompts = [], []
-        rows = load_roi_for_paths(
-            cfg.memory_path, roi_prompts, roi_sessions, as_of=end_day
-        )
-        print(format_roi_table(rows))
-        return
-
     print(
         render_prompt_report(
             prompts,
